@@ -8,6 +8,8 @@ import { encrypt, decrypt } from '../utils/encryption';
 chromium.use(stealthPlugin());
 
 const prisma = new PrismaClient();
+// Default headless=true (no desktop popup). Set ROCKBASE_BROWSER_HEADLESS=false to force visible window.
+const BROWSER_HEADLESS = process.env.ROCKBASE_BROWSER_HEADLESS !== 'false';
 
 export class BrowserManager {
   private browser: Browser | null = null;
@@ -23,10 +25,12 @@ export class BrowserManager {
     if (!this.browser) {
       console.log('Launching Playwright browser...');
       this.browser = await chromium.launch({
-        headless: true, // Use false for debugging
+        headless: BROWSER_HEADLESS,
         args: [
           '--disable-blink-features=AutomationControlled',
           '--disable-features=IsolateOrigins,site-per-process',
+          '--autoplay-policy=no-user-gesture-required',
+          '--use-fake-ui-for-media-stream',
         ]
       });
     }
@@ -40,7 +44,12 @@ export class BrowserManager {
     if (!this.browser) await this.initBrowser();
     
     if (this.activeContexts.has(accountId)) {
-      return this.activeContexts.get(accountId)!;
+      const existing = this.activeContexts.get(accountId)!;
+      if (this.isContextUsable(existing)) {
+        return existing;
+      }
+      console.warn(`[BrowserManager] Removing stale closed context for ${accountId}`);
+      this.activeContexts.delete(accountId);
     }
 
     const account = await prisma.socialAccount.findUnique({
@@ -81,6 +90,13 @@ export class BrowserManager {
     }
 
     this.activeContexts.set(accountId, context);
+    context.on('close', () => {
+      if (this.activeContexts.get(accountId) === context) {
+        this.activeContexts.delete(accountId);
+        console.log(`[BrowserManager] Context closed and removed for ${accountId}. Active contexts: ${this.getActiveCount()}`);
+      }
+    });
+    console.log(`[BrowserManager] Context opened for ${accountId}. Active contexts: ${this.getActiveCount()}, active pages: ${this.getActivePageCount()}`);
     return context;
   }
 
@@ -90,8 +106,9 @@ export class BrowserManager {
   public async saveCookies(accountId: string): Promise<void> {
     console.log(`[BrowserManager] Attempting to save cookies for account: ${accountId}`);
     const context = this.activeContexts.get(accountId);
-    if (!context) {
+    if (!context || !this.isContextUsable(context)) {
       console.error(`[BrowserManager] No active context found for account: ${accountId}. Available: ${Array.from(this.activeContexts.keys()).join(', ')}`);
+      if (context) this.activeContexts.delete(accountId);
       throw new Error(`No active context for account ${accountId}`);
     }
 
@@ -116,12 +133,29 @@ export class BrowserManager {
   /**
    * Closes a specific account context.
    */
-  public async closeContext(accountId: string): Promise<void> {
+  public async closeContext(accountId: string, options: { saveCookies?: boolean } = {}): Promise<void> {
     const context = this.activeContexts.get(accountId);
-    if (context) {
-      await this.saveCookies(accountId);
-      await context.close();
+    if (!context) return;
+
+    try {
+      if (options.saveCookies !== false && this.isContextUsable(context)) {
+        await this.saveCookies(accountId);
+      }
+    } catch (err) {
+      console.error(`[BrowserManager] Failed to save cookies before closing ${accountId}:`, err);
+    } finally {
       this.activeContexts.delete(accountId);
+    }
+
+    try {
+      if (this.isContextUsable(context)) {
+        await context.close();
+      }
+    } catch {
+      // Context may already be closed.
+    } finally {
+      this.activeContexts.delete(accountId);
+      console.log(`[BrowserManager] Closed context for ${accountId}. Active contexts: ${this.getActiveCount()}, active pages: ${this.getActivePageCount()}`);
     }
   }
 
@@ -166,6 +200,67 @@ export class BrowserManager {
     }
 
     return status;
+  }
+
+  /**
+   * Get count of currently active browser contexts.
+   */
+  public getActiveCount(): number {
+    return this.activeContexts.size;
+  }
+
+  public getActivePageCount(): number {
+    let count = 0;
+    for (const [accountId, context] of this.activeContexts) {
+      if (!this.isContextUsable(context)) {
+        this.activeContexts.delete(accountId);
+        continue;
+      }
+      count += context.pages().length;
+    }
+    return count;
+  }
+
+  /**
+   * Check if an account already has an active browser context.
+   */
+  public hasContext(accountId: string): boolean {
+    return this.activeContexts.has(accountId);
+  }
+
+  /**
+   * Get all active account IDs.
+   */
+  public getActiveAccountIds(): string[] {
+    return [...this.activeContexts.keys()];
+  }
+
+  public getMetrics(): { activeContexts: number; activePages: number } {
+    return {
+      activeContexts: this.getActiveCount(),
+      activePages: this.getActivePageCount(),
+    };
+  }
+
+  public getContextPageCount(accountId: string): number | null {
+    const context = this.activeContexts.get(accountId);
+    if (!context) return null;
+
+    if (!this.isContextUsable(context)) {
+      this.activeContexts.delete(accountId);
+      return null;
+    }
+
+    return context.pages().length;
+  }
+
+  private isContextUsable(context: BrowserContext): boolean {
+    try {
+      context.pages();
+      return !!context.browser()?.isConnected();
+    } catch {
+      return false;
+    }
   }
 }
 

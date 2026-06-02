@@ -1,4 +1,4 @@
-# SocialCommand Dashboard
+# ROCK BASE Dashboard
 
 A powerful web-based dashboard for managing multiple social media "satellite" accounts with real-time phone farm mirroring and AI-powered mass posting.
 
@@ -32,7 +32,7 @@ npm run dev
 ## 🔑 Default Credentials
 
 - **URL:** http://localhost:5173
-- **Email:** `admin@socialcommand.com`
+- **Email:** `admin@rockbase.com`
 - **Password:** `Admin@123`
 
 ---
@@ -58,3 +58,15 @@ npm run dev
 - **Automation:** Playwright + Stealth Plugin
 - **Task Queue:** BullMQ + Redis
 - **AI:** Google Gemini (Generative AI)
+
+---
+
+## ⚠️ Developer Notes
+
+**CRITICAL: Do not delete these files/folders during development, as they contain your work:**
+
+- `backend/dev.db` - The main database containing all accounts, posts, and **encrypted sessions**.
+- `backend/uploads/` - Contains all media uploaded for posts.
+- `backend/backups/` - Contains all backups. If you have an issue, you may need this.
+
+Losing these files will result in the loss of all your accounts and their logged-in sessions.

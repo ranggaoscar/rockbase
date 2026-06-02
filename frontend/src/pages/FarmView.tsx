@@ -11,6 +11,7 @@ import PhoneFrame, { type ScreenshotData } from '@/components/farm/PhoneFrame'
 import ControlModal from '@/components/farm/ControlModal'
 import AddAccountModal from '@/components/farm/AddAccountModal'
 import api from '@/lib/api'
+import { toast } from '@/components/ui/use-toast'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 type FilterKey = 'all' | 'instagram' | 'tiktok' | 'active' | 'warming_up' | 'idle' | 'error'
@@ -35,10 +36,11 @@ const FILTERS: { key: FilterKey; label: string }[] = [
 ]
 
 const GRID_OPTIONS: { key: GridKey; icon: typeof LayoutGrid; label: string }[] = [
-  { key: '2', icon: Grid2x2,   label: '2×3' },
+  { key: '2', icon: Grid2x2,   label: '2×2' },
   { key: '3', icon: LayoutGrid, label: '3×4' },
   { key: '4', icon: Grid3x3,   label: '4×6' },
 ]
+const MAX_VISIBLE_SCREENSHOTS = 4
 
 const gridColsClass: Record<GridKey, string> = {
   '2': 'grid-cols-2 sm:grid-cols-2',
@@ -48,7 +50,8 @@ const gridColsClass: Record<GridKey, string> = {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-function matchesFilter(account: Account, filter: FilterKey): boolean {
+function matchesFilter(account: Account, filter: FilterKey, search: string): boolean {
+  if (search && !account.username.toLowerCase().includes(search.toLowerCase())) return false;
   switch (filter) {
     case 'all': return true
     case 'instagram': return account.platform.toLowerCase() === 'instagram'
@@ -74,19 +77,41 @@ export default function FarmView() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [screenshots, setScreenshots] = useState<Map<string, ScreenshotData>>(new Map())
   const [filter, setFilter] = useState<FilterKey>('all')
-  const [gridCols, setGridCols] = useState<GridKey>('3')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [gridCols, setGridCols] = useState<GridKey>('2')
   const [connected, setConnected] = useState(false)
   const [loading, setLoading] = useState(true)
   const [controlAccount, setControlAccount] = useState<ScreenshotData | null>(null)
   const [showAddModal, setShowAddModal] = useState(false)
+  const [isSelecting, setIsSelecting] = useState(false)
+  const [monitoredAccountIds, setMonitoredAccountIds] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('sc_monitored_accounts') || '[]') }
+    catch { return [] }
+  })
+  const [removedStaleCount, setRemovedStaleCount] = useState(0)
+
+  // Persist monitored slots to localStorage
+  useEffect(() => {
+    localStorage.setItem('sc_monitored_accounts', JSON.stringify(monitoredAccountIds))
+  }, [monitoredAccountIds])
 
   const socketRef = useRef<Socket | null>(null)
+  const gridScrollRef = useRef<HTMLDivElement | null>(null)
 
   // ── Load accounts from REST API ─────────────────────────────────────────
   const fetchAccounts = useCallback(async () => {
     try {
       const { data } = await api.get<{ accounts: Account[] }>('/accounts')
       setAccounts(data.accounts)
+      
+      setMonitoredAccountIds((prev) => {
+        const existingIds = new Set(data.accounts.map(a => a.id))
+        const cleaned = prev.filter(id => existingIds.has(id))
+        if (cleaned.length < prev.length) {
+          setRemovedStaleCount(prev.length - cleaned.length)
+        }
+        return cleaned
+      })
     } catch (err) {
       console.error('Failed to fetch accounts:', err)
     } finally {
@@ -127,8 +152,16 @@ export default function FarmView() {
     }
   }, [fetchAccounts])
 
-  // ── Derived filtered list ───────────────────────────────────────────────
-  const filtered = accounts.filter((a) => matchesFilter(a, filter))
+  // ── Derived lists ────────────────────────────────────────────────────────
+  const filteredForSelection = accounts.filter((a) => matchesFilter(a, filter, searchQuery))
+  const monitoredAccounts = monitoredAccountIds
+    .map((id) => accounts.find((a) => a.id === id))
+    .filter((a): a is Account => Boolean(a))
+
+  useEffect(() => {
+    if (!socketRef.current || !connected) return
+    socketRef.current.emit('farm_visible_accounts', { accountIds: monitoredAccountIds })
+  }, [connected, monitoredAccountIds.join(',')])
 
   // ── Status bar counts ───────────────────────────────────────────────────
   const counts = {
@@ -189,50 +222,92 @@ export default function FarmView() {
             ))}
           </div>
 
+          <Button size="sm" variant="outline" onClick={() => { setMonitoredAccountIds([]); setRemovedStaleCount(0); }}>
+            Reset Slots
+          </Button>
+
           <Button size="sm" variant="ghost" onClick={fetchAccounts} title="Refresh accounts">
             <RefreshCw className="h-4 w-4" />
           </Button>
 
-          <Button size="sm" variant="purple" onClick={() => setShowAddModal(true)}>
+          <Button size="sm" variant={isSelecting ? "secondary" : "purple"} onClick={() => setIsSelecting(!isSelecting)}>
+            {isSelecting ? 'Done Selecting' : 'Select Monitored Accounts'}
+          </Button>
+
+          <Button size="sm" variant="outline" onClick={() => setShowAddModal(true)}>
             <Plus className="h-4 w-4" />
             Add Account
           </Button>
         </div>
       </div>
 
-      {/* ── Filter bar ───────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-1.5 flex-wrap">
-        <Filter className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-        {FILTERS.map(({ key, label }) => {
-          const count = key === 'all'
-            ? accounts.length
-            : accounts.filter((a) => matchesFilter(a, key)).length
+      {/* ── Filter bar (Only in Selection Mode) ──────────────────────────── */}
+      {isSelecting && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <Filter className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          {FILTERS.map(({ key, label }) => {
+            const count = key === 'all'
+              ? accounts.filter((a) => matchesFilter(a, 'all', searchQuery)).length
+              : accounts.filter((a) => matchesFilter(a, key, searchQuery)).length
 
-          return (
-            <button
-              key={key}
-              onClick={() => setFilter(key)}
-              className={cn(
-                'flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors',
-                filter === key
-                  ? 'bg-purple-600 text-white'
-                  : 'bg-secondary text-muted-foreground hover:text-foreground'
-              )}
-            >
-              {label}
-              <span className={cn(
-                'rounded-full px-1.5 py-0.5 text-[10px] font-semibold',
-                filter === key ? 'bg-white/20 text-white' : 'bg-background text-muted-foreground'
-              )}>
-                {count}
-              </span>
-            </button>
-          )
-        })}
-      </div>
+            return (
+              <button
+                key={key}
+                onClick={() => setFilter(key)}
+                className={cn(
+                  'flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors',
+                  filter === key
+                    ? 'bg-purple-600 text-white'
+                    : 'bg-secondary text-muted-foreground hover:text-foreground'
+                )}
+              >
+                {label}
+                <span className={cn(
+                  'rounded-full px-1.5 py-0.5 text-[10px] font-semibold',
+                  filter === key ? 'bg-white/20 text-white' : 'bg-background text-muted-foreground'
+                )}>
+                  {count}
+                </span>
+              </button>
+            )
+          })}
+          <div className="ml-auto w-full sm:w-64">
+            <input
+              type="text"
+              placeholder="Search username..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+          </div>
+        </div>
+      )}
 
-      {/* ── Grid ─────────────────────────────────────────────────────────── */}
-      <div className="flex-1 overflow-y-auto">
+      {/* ── Info Notice ──────────────────────────────────────────────────── */}
+      {!isSelecting && (
+        <div className="flex flex-col gap-2">
+          {removedStaleCount > 0 && (
+            <div className="flex items-center gap-2 rounded-lg border border-yellow-500/20 bg-yellow-500/10 p-3 text-xs text-yellow-600 dark:text-yellow-400">
+              <p>Beberapa akun monitoring sudah tidak tersedia dan otomatis dilepas.</p>
+              <button onClick={() => setRemovedStaleCount(0)} className="ml-auto underline font-medium">Tutup</button>
+            </div>
+          )}
+          <div className="flex items-start gap-3 rounded-lg border border-blue-500/20 bg-blue-500/10 p-4 text-xs text-blue-400">
+            <div className="flex-1 space-y-1.5">
+              <p className="font-semibold text-sm">Monitoring {monitoredAccounts.length} of {accounts.length} accounts</p>
+              <ul className="list-disc list-inside opacity-90 space-y-0.5">
+                <li>Farm View does not keep all accounts active.</li>
+                <li>Visible cards do not mean browser/session is open.</li>
+                <li>Login remains manual.</li>
+                <li>Session health should be checked from Accounts or per selected account.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Main Content Area ────────────────────────────────────────────── */}
+      <div ref={gridScrollRef} className="flex-1 overflow-y-auto">
         {loading ? (
           <div className="flex h-64 items-center justify-center">
             <div className="flex flex-col items-center gap-3 text-muted-foreground">
@@ -240,33 +315,54 @@ export default function FarmView() {
               <p className="text-sm">Loading accounts…</p>
             </div>
           </div>
-        ) : filtered.length === 0 ? (
-          <div className="flex h-64 items-center justify-center">
-            <div className="text-center">
-              <p className="text-sm text-muted-foreground">No accounts match this filter.</p>
-              {accounts.length === 0 && (
-                <Button
-                  size="sm"
-                  variant="purple"
-                  className="mt-3"
-                  onClick={() => setShowAddModal(true)}
-                >
-                  <Plus className="h-4 w-4" />
-                  Add your first account
-                </Button>
-              )}
-            </div>
+        ) : isSelecting ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {filteredForSelection.map(account => (
+              <label key={account.id} className={cn("flex items-center gap-3 p-3 border rounded-lg cursor-pointer transition-colors hover:bg-secondary/50", monitoredAccountIds.includes(account.id) && "border-purple-500 bg-purple-500/5")}>
+                <input 
+                  type="checkbox" 
+                  className="w-4 h-4 rounded border-gray-300 text-purple-600 focus:ring-purple-600"
+                  checked={monitoredAccountIds.includes(account.id)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        if (monitoredAccountIds.length >= MAX_VISIBLE_SCREENSHOTS) {
+                          toast({ title: `Maksimal ${MAX_VISIBLE_SCREENSHOTS} akun untuk dimonitor.`, variant: 'destructive' })
+                          return
+                        }
+                        setMonitoredAccountIds([...monitoredAccountIds, account.id])
+                      } else {
+                        setMonitoredAccountIds(monitoredAccountIds.filter(id => id !== account.id))
+                      }
+                    }}
+                />
+                <div>
+                  <p className="font-semibold text-sm">{account.username}</p>
+                  <p className="text-xs text-muted-foreground capitalize">{account.platform} • {account.status}</p>
+                </div>
+              </label>
+            ))}
+            {filteredForSelection.length === 0 && (
+              <div className="col-span-full py-8 text-center text-muted-foreground text-sm">
+                No accounts match this filter.
+              </div>
+            )}
+          </div>
+        ) : monitoredAccounts.length === 0 ? (
+          <div className="flex flex-col h-64 items-center justify-center text-center p-6 border border-dashed rounded-lg border-border">
+            <p className="text-muted-foreground mb-4 text-sm">Pilih maksimal 4 akun untuk dimonitor. Akun lain tetap tersimpan di Accounts.</p>
+            <Button variant="outline" onClick={() => setIsSelecting(true)}>Select Accounts</Button>
           </div>
         ) : (
           <div className={cn('grid gap-3', gridColsClass[gridCols])}>
-            {filtered.map((account) => {
+            {monitoredAccounts.map((account) => {
               const data = mergeWithScreenshot(account, screenshots)
               return (
-                <PhoneFrame
-                  key={account.id}
-                  data={data}
-                  onClick={() => setControlAccount(data)}
-                />
+                <div key={account.id}>
+                  <PhoneFrame
+                    data={data}
+                    onClick={() => setControlAccount(data)}
+                  />
+                </div>
               )
             })}
           </div>

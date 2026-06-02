@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Users,
@@ -12,78 +13,95 @@ import {
   XCircle,
   Clock,
   Leaf,
+  Target,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { useAppStore } from '@/store/useAppStore'
 import { cn, timeAgo, statusColor, statusLabel } from '@/lib/utils'
+import api from '@/lib/api'
 
-// ── Mock data (replaced with real API calls in Step 3+) ──────────────
-const SUMMARY_CARDS = [
-  {
-    label: 'Total Accounts',
-    value: '30',
-    sub: '15 Instagram · 15 TikTok',
-    icon: Users,
-    color: 'text-blue-400',
-    bg: 'bg-blue-500/10',
-  },
-  {
-    label: 'Active Sessions',
-    value: '18',
-    sub: '12 active · 6 warming up',
-    icon: MonitorPlay,
-    color: 'text-green-400',
-    bg: 'bg-green-500/10',
-  },
-  {
-    label: 'Posts Today',
-    value: '24',
-    sub: '20 success · 4 failed',
-    icon: SendHorizontal,
-    color: 'text-purple-400',
-    bg: 'bg-purple-500/10',
-  },
-  {
-    label: 'Scheduled Posts',
-    value: '7',
-    sub: 'Next: 18:00 WIB',
-    icon: CalendarDays,
-    color: 'text-yellow-400',
-    bg: 'bg-yellow-500/10',
-  },
-]
-
-const ACCOUNT_HEALTH = [
-  { username: 'marmer_jakarta_1', platform: 'Instagram', status: 'active' },
-  { username: 'granit_indo_1',    platform: 'TikTok',    status: 'active' },
-  { username: 'marmer_premium',   platform: 'Instagram', status: 'warming_up' },
-  { username: 'batu_alam_id',     platform: 'TikTok',    status: 'warming_up' },
-  { username: 'granit_tiles_ig',  platform: 'Instagram', status: 'idle' },
-  { username: 'marmer_mewah',     platform: 'Instagram', status: 'error' },
-]
-
-const RECENT_ACTIVITY = [
-  { id: 1, text: 'Posted to @marmer_jakarta_1 on Instagram', status: 'success', time: new Date(Date.now() - 120000) },
-  { id: 2, text: 'Warming task Day 7 completed for @marmer_premium', status: 'success', time: new Date(Date.now() - 300000) },
-  { id: 3, text: 'Post failed for @marmer_mewah — account flagged', status: 'error', time: new Date(Date.now() - 600000) },
-  { id: 4, text: 'Scheduled 7 posts for tomorrow 09:00 WIB', status: 'info', time: new Date(Date.now() - 900000) },
-  { id: 5, text: 'Proxy rotated for @granit_indo_1', status: 'info', time: new Date(Date.now() - 1800000) },
-  { id: 6, text: 'AI generated 7 captions for brand_marmer', status: 'success', time: new Date(Date.now() - 3600000) },
-]
-
-const statusDotClass: Record<string, string> = {
-  active:     'bg-green-400',
-  warming_up: 'bg-purple-400 animate-pulse',
-  idle:       'bg-yellow-400',
-  error:      'bg-red-400',
-  flagged:    'bg-red-500',
+interface Account { id: string; username: string; platform: string; status: string }
+interface Stats { 
+  total: number; 
+  active: number; 
+  warming_up: number; 
+  idle: number;
+  error: number;
+  instagram: number;
+  tiktok: number;
 }
 
 export default function Dashboard() {
   const navigate = useNavigate()
   const user = useAppStore((s) => s.user)
+  const [accounts, setAccounts] = useState<Account[]>([])
+  const [stats, setStats] = useState<Stats>({ 
+    total: 0, 
+    active: 0, 
+    warming_up: 0, 
+    idle: 0,
+    error: 0,
+    instagram: 0,
+    tiktok: 0 
+  })
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    Promise.all([
+      api.get<{ accounts: Account[] }>('/accounts'),
+      api.get('/accounts/stats')
+    ]).then(([{ data: accData }, { data: statsData }]) => {
+      setAccounts(accData.accounts || [])
+      setStats(statsData)
+    }).catch((err) => {
+      console.error('Dashboard fetch error:', err)
+    }).finally(() => setLoading(false))
+  }, [])
+
+  const SUMMARY_CARDS = [
+    {
+      label: 'Total Accounts',
+      value: stats.total.toString(),
+      sub: `${stats.instagram || 0} Instagram · ${stats.tiktok || 0} TikTok`,
+      icon: Users,
+      color: 'text-blue-400',
+      bg: 'bg-blue-500/10',
+    },
+    {
+      label: 'Active Sessions',
+      value: stats.active.toString(),
+      sub: `${stats.active} active · ${stats.warming_up} warming up`,
+      icon: MonitorPlay,
+      color: 'text-green-400',
+      bg: 'bg-green-500/10',
+    },
+    {
+      label: 'Engagement Activity',
+      value: 'Live',
+      sub: 'Monitor in Engagement Center',
+      icon: SendHorizontal,
+      color: 'text-purple-400',
+      bg: 'bg-purple-500/10',
+    },
+    {
+      label: 'Scheduled Posts',
+      value: '—',
+      sub: 'Check Scheduler for details',
+      icon: CalendarDays,
+      color: 'text-yellow-400',
+      bg: 'bg-yellow-500/10',
+    },
+  ]
+
+  const statusDotClass: Record<string, string> = {
+    active:     'bg-green-400',
+    warming_up: 'bg-purple-400 animate-pulse',
+    idle:       'bg-yellow-400',
+    error:      'bg-red-400',
+    flagged:    'bg-red-500',
+  }
 
   return (
     <div className="space-y-6">
@@ -135,24 +153,14 @@ export default function Dashboard() {
           <CardHeader className="flex-row items-center justify-between pb-3">
             <CardTitle className="flex items-center gap-2">
               <Activity className="h-4 w-4 text-purple-400" />
-              Recent Activity
+              System Status
             </CardTitle>
-            <span className="text-xs text-muted-foreground">Last 10 events</span>
+            <Badge variant="outline" className="text-[10px] bg-green-500/10 text-green-400 border-green-500/20">Operational</Badge>
           </CardHeader>
-          <CardContent className="divide-y divide-border">
-            {RECENT_ACTIVITY.map((item) => (
-              <div key={item.id} className="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
-                <div className="mt-0.5 shrink-0">
-                  {item.status === 'success' && <CheckCircle2 className="h-4 w-4 text-green-400" />}
-                  {item.status === 'error' && <XCircle className="h-4 w-4 text-red-400" />}
-                  {item.status === 'info' && <Clock className="h-4 w-4 text-blue-400" />}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-foreground leading-snug">{item.text}</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">{timeAgo(item.time)}</p>
-                </div>
-              </div>
-            ))}
+          <CardContent className="py-10 text-center">
+            <Activity className="h-10 w-10 mx-auto text-muted-foreground/20 mb-3" />
+            <p className="text-sm text-muted-foreground">Detailed activity logs are available in Engagement Center.</p>
+            <Button variant="link" onClick={() => navigate('/engagement')} className="text-purple-400 mt-2">Go to Engagement Center →</Button>
           </CardContent>
         </Card>
 
@@ -165,9 +173,11 @@ export default function Dashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {ACCOUNT_HEALTH.map((acc) => (
+            {accounts.length === 0 ? (
+              <div className="py-8 text-center text-xs text-muted-foreground">No accounts found.</div>
+            ) : accounts.slice(0, 6).map((acc) => (
               <div
-                key={acc.username}
+                key={acc.id}
                 className="flex items-center justify-between rounded-lg bg-secondary/50 px-3 py-2.5"
               >
                 <div className="flex items-center gap-2.5 min-w-0">
@@ -211,9 +221,9 @@ export default function Dashboard() {
           <div className="flex flex-wrap gap-2">
             {[
               { label: 'New Post',          icon: SendHorizontal, path: '/compose',    variant: 'purple' as const },
-              { label: 'View Farm',         icon: Tv2,            path: '/farm',       variant: 'outline' as const },
-              { label: 'Schedule Content',  icon: CalendarDays,   path: '/scheduler',  variant: 'outline' as const },
-              { label: 'AI Generate',       icon: Activity,       path: '/ai-writer',  variant: 'outline' as const },
+              { label: 'Engagement Center', icon: Activity,       path: '/engagement', variant: 'outline' as const },
+              { label: 'Campaign Manager',  icon: Target,         path: '/campaigns',  variant: 'outline' as const },
+              { label: 'Farm View',         icon: Tv2,            path: '/farm',       variant: 'outline' as const },
               { label: 'Warming Manager',   icon: Leaf,           path: '/warming',    variant: 'outline' as const },
             ].map(({ label, icon: Icon, path, variant }) => (
               <Button key={path} size="sm" variant={variant} onClick={() => navigate(path)}>

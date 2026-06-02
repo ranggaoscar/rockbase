@@ -4,7 +4,16 @@ datasource db {
 }
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x", "windows"]
+}
+
+enum CampaignSchedulerStatus {
+  PENDING
+  READY
+  EXECUTED
+  FAILED
+  CANCELLED
 }
 
 model User {
@@ -27,6 +36,8 @@ model Workspace {
 
   users    WorkspaceUser[]
   accounts SocialAccount[]
+  accountGroups AccountGroup[]
+  activityLogs ActivityLog[]
   posts    Post[]
   drafts   Draft[]
 }
@@ -47,6 +58,9 @@ model SocialAccount {
   accountPassword String?   // Encrypted platform password
   email           String?   // Email used to register the platform account
   status          String    @default("warming_up") // active, warming_up, idle, error, flagged, logged_out
+  sessionHealth   String    @default("UNKNOWN") // HEALTHY, NEEDS_RELOGIN, CHECKPOINT, EXPIRED, PAUSED, UNKNOWN
+  sessionHealthReason String?
+  sessionHealthCheckedAt DateTime?
   cookies         String?   // Encrypted JSON session cookies
   proxyId         String?
   brandTag        String?   // e.g. "brand_marmer_1"
@@ -68,6 +82,40 @@ model SocialAccount {
   proxy       Proxy?       @relation(fields: [proxyId], references: [id])
   analytics   Analytics[]
   warmingLogs WarmingLog[]
+  groupMemberships AccountGroupMember[]
+
+  @@unique([username, platform])
+}
+
+model AccountGroup {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  description String?
+  color       String?
+  isArchived  Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  members   AccountGroupMember[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId, isArchived, name])
+}
+
+model AccountGroupMember {
+  id        String   @id @default(uuid())
+  groupId   String
+  accountId String
+  createdAt DateTime @default(now())
+
+  group   AccountGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  account SocialAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, accountId])
+  @@index([accountId])
+  @@index([groupId])
 }
 
 model Proxy {
@@ -94,6 +142,7 @@ model Post {
   results     String?   // Serialized JSON object
   scheduleAt  DateTime?
   postedAt    DateTime?
+  idempotencyKey String? @unique
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -157,4 +206,95 @@ model ScheduledPost {
   status             String    @default("pending")
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
+}
+
+model Campaign {
+  id                 String    @id @default(uuid())
+  workspaceId        String    @default("workspace-default")
+  name               String
+  type               String    // "follow", "like", "comment", "mixed", "bulk_post"
+  targetType         String    // "hashtag", "username", "post_url"
+  targetValue        String    // e.g. "#marmer" or "@username" or post URL
+  accountIds         String    // Serialized JSON array of assigned account IDs
+  groupIds           String    @default("[]") // Serialized JSON array of selected account group IDs
+  planningSummary    String?   // Serialized JSON campaign planning snapshot
+  status             String    @default("pending") // pending, running, paused, completed, stopped
+
+  // Limits per account per day
+  dailyFollowLimit   Int       @default(25)
+  dailyLikeLimit     Int       @default(65)
+  dailyCommentLimit  Int       @default(12)
+
+  // Progress tracking
+  totalActions       Int       @default(0)
+  completedActions   Int       @default(0)
+  failedActions      Int       @default(0)
+
+  // Scheduling
+  activeHoursStart   String    @default("08:00")
+  activeHoursEnd     String    @default("22:00")
+  timezone           String    @default("Asia/Jakarta")
+  scheduledAt        DateTime?
+  schedulerStatus    CampaignSchedulerStatus @default(PENDING)
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  completedAt        DateTime?
+
+  isArchived         Boolean   @default(false)
+  archivedAt         DateTime?
+
+  actions            CampaignAction[]
+
+  @@index([schedulerStatus, scheduledAt])
+  @@index([workspaceId, isArchived, createdAt])
+}
+
+model CampaignAction {
+  id           String    @id @default(uuid())
+  campaignId   String
+  accountId    String
+  actionType   String    // "follow", "like", "comment", "post"
+  targetUrl    String?   // specific URL targeted
+  status       String    @default("pending") // pending, queued, running, completed, failed, skipped
+  result       String?   // JSON result details
+  scheduledAt  DateTime?
+  executedAt   DateTime?
+
+  campaign     Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+}
+
+model EngagementLog {
+  id           String    @id @default(uuid())
+  accountId    String
+  actionType   String    // "follow", "like", "comment", "browse", "scroll"
+  target       String?   // URL or username targeted
+  status       String    @default("completed") // completed, failed, skipped
+  details      String?
+  executedAt   DateTime  @default(now())
+}
+
+model ActivityLog {
+  id          String   @id @default(uuid())
+  workspaceId String
+  type        String
+  entityType  String
+  entityId    String
+  accountId   String?
+  groupId     String?
+  campaignId  String?
+  action      String
+  status      String
+  message     String
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, type, createdAt])
+  @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, accountId, createdAt])
+  @@index([workspaceId, groupId, createdAt])
+  @@index([workspaceId, campaignId, createdAt])
 }

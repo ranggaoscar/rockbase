@@ -1,6 +1,7 @@
 import { Worker, Job } from 'bullmq';
 import { PrismaClient } from '@prisma/client';
 import { browserManager } from '../services/BrowserManager';
+import { Page } from 'playwright';
 
 const prisma = new PrismaClient();
 const connection = {
@@ -14,12 +15,13 @@ export const analyticsWorker = new Worker(
     const { accountId } = job.data;
     console.log(`Starting analytics scrape for account ${accountId}`);
 
+    let page: Page | null = null;
     try {
       const account = await prisma.socialAccount.findUnique({ where: { id: accountId } });
       if (!account) throw new Error(`Account ${accountId} not found`);
 
       const context = await browserManager.getContext(accountId);
-      const page = await context.newPage();
+      page = await context.newPage();
 
       let followers = 0;
       let following = 0;
@@ -54,8 +56,6 @@ export const analyticsWorker = new Worker(
         impressions = Math.floor(Math.random() * 12000);
       }
 
-      await page.close();
-
       // Save to database
       await prisma.analytics.create({
         data: {
@@ -75,6 +75,8 @@ export const analyticsWorker = new Worker(
     } catch (error) {
       console.error(`Analytics scrape failed for ${accountId}:`, error);
       throw error;
+    } finally {
+      await page?.close().catch(() => {});
     }
   },
   { connection }

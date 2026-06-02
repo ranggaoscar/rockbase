@@ -1,14 +1,16 @@
 import { Router, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
-import { encrypt } from '../utils/encryption';
+import { encrypt, decrypt } from '../utils/encryption';
 import multer from 'multer';
 import { parse } from 'csv-parse';
 import * as fs from 'fs';
+import { sessionHealthService } from '../services/SessionHealthService';
 
 const router = Router();
 const prisma = new PrismaClient();
 const upload = multer({ dest: 'uploads/' });
+const MAX_BULK_SESSION_CHECK = Math.max(1, Number(process.env.MAX_BULK_SESSION_CHECK || 3));
 
 // All account routes require authentication
 router.use(authenticateToken);
@@ -44,6 +46,38 @@ router.get('/stats', async (req: AuthRequest, res: Response) => {
 });
 
 // GET /api/accounts/:id — get single account
+// GET /api/accounts/session-health-summary
+router.get('/session-health-summary', async (_req: AuthRequest, res: Response) => {
+  try {
+    const summary = await sessionHealthService.getSummary();
+    res.json(summary);
+  } catch (err) {
+    console.error('Session health summary error:', err);
+    res.status(500).json({ error: 'Failed to fetch session health summary' });
+  }
+});
+
+// POST /api/accounts/check-session-bulk
+router.post('/check-session-bulk', async (req: AuthRequest, res: Response) => {
+  try {
+    const accountIds = Array.isArray(req.body?.accountIds) ? req.body.accountIds.map(String) : [];
+    if (accountIds.length === 0) {
+      res.status(400).json({ error: 'accountIds is required' });
+      return;
+    }
+    if (accountIds.length > MAX_BULK_SESSION_CHECK) {
+      res.status(400).json({ error: `Bulk session check is limited to ${MAX_BULK_SESSION_CHECK} accounts` });
+      return;
+    }
+
+    const results = await sessionHealthService.checkBulk(accountIds);
+    res.json({ results, summary: await sessionHealthService.getSummary() });
+  } catch (err: any) {
+    console.error('Bulk session health check error:', err);
+    res.status(500).json({ error: 'Failed to check sessions', details: err.message });
+  }
+});
+
 router.get('/:id', async (req: AuthRequest, res: Response) => {
   const id = String(req.params.id);
   try {
@@ -55,7 +89,49 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
   }
 });
 
+// GET /api/accounts/:id/credentials
+router.get('/:id/credentials', async (req: AuthRequest, res: Response) => {
+  const id = String(req.params.id);
+  try {
+    const account = await prisma.socialAccount.findUnique({ where: { id } });
+    if (!account) {
+      res.status(404).json({ error: 'Account not found' });
+      return;
+    }
+
+    let decryptedPassword = '';
+    if (account.accountPassword) {
+      try {
+        decryptedPassword = decrypt(account.accountPassword);
+      } catch (e) {
+        // Maybe the password was not encrypted for some reason
+        decryptedPassword = account.accountPassword;
+      }
+    }
+
+    res.json({
+      username: account.username,
+      email: account.email,
+      password: decryptedPassword,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch account credentials' });
+  }
+});
+
 // POST /api/accounts — create account
+// POST /api/accounts/:id/check-session
+router.post('/:id/check-session', async (req: AuthRequest, res: Response) => {
+  const id = String(req.params.id);
+  try {
+    const result = await sessionHealthService.checkAccount(id);
+    res.json({ result, summary: await sessionHealthService.getSummary() });
+  } catch (err: any) {
+    console.error('Session health check error:', err);
+    res.status(500).json({ error: 'Failed to check session', details: err.message });
+  }
+});
+
 router.post('/', async (req: AuthRequest, res: Response) => {
   const { username, password, platform, email, proxy, brandTag, notes } = req.body;
 
@@ -151,6 +227,7 @@ router.post('/import', upload.single('file'), async (req: AuthRequest, res: Resp
   const results: any[] = [];
   const errors: string[] = [];
   let successCount = 0;
+  let rowNumber = 0;
 
   try {
     const fileContent = fs.readFileSync(req.file.path);
@@ -161,11 +238,14 @@ router.post('/import', upload.single('file'), async (req: AuthRequest, res: Resp
     });
 
     for await (const row of parser) {
+      rowNumber++;
+      results.push(row);
+
       try {
         const { username, email, password, platform, brandTag } = row;
         
         if (!username || !platform) {
-          errors.push(`Row ${results.length + 1}: Username and Platform are required`);
+          errors.push(`Row ${rowNumber}: Username and Platform are required`);
           continue;
         }
 
@@ -189,13 +269,9 @@ router.post('/import', upload.single('file'), async (req: AuthRequest, res: Resp
         });
         successCount++;
       } catch (err: any) {
-        errors.push(`Row ${results.length + 1} (${row.username}): ${err.message}`);
+        errors.push(`Row ${rowNumber} (${row.username || 'unknown'}): ${err.message}`);
       }
-      results.push(row);
     }
-
-    // Clean up uploaded file
-    fs.unlinkSync(req.file.path);
 
     res.json({
       message: `Import complete: ${successCount} success, ${errors.length} failed.`,
@@ -207,6 +283,8 @@ router.post('/import', upload.single('file'), async (req: AuthRequest, res: Resp
   } catch (err: any) {
     console.error('Import error:', err);
     res.status(500).json({ error: 'Failed to process CSV file', details: err.message });
+  } finally {
+    fs.unlink(req.file.path, () => {});
   }
 });
 

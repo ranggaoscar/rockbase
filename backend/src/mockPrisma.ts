@@ -15,7 +15,7 @@ export class PrismaClient {
     if (this.inMemoryUsers.length === 0) {
       const hash = bcrypt.hashSync('Admin@123', 10);
       this.inMemoryUsers = [
-        { id: 'user-1', email: 'admin@socialcommand.com', password: hash, name: 'Admin', role: 'Admin', createdAt: new Date(), updatedAt: new Date() },
+        { id: 'user-1', email: 'admin@rockbase.com', password: hash, name: 'Admin', role: 'Admin', createdAt: new Date(), updatedAt: new Date() },
       ];
     }
 

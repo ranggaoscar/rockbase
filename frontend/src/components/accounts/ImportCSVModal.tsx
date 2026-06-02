@@ -10,6 +10,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { FileUp, Download, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 import { toast } from '@/components/ui/use-toast'
+import { Badge } from '@/components/ui/badge'
 import api from '@/lib/api'
 
 interface ImportCSVModalProps {

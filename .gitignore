@@ -16,16 +16,39 @@ build/
 .next/
 .vite/
 
-# Databases
+# Databases (DO NOT COMMIT, but also DO NOT DELETE LOCALLY)
 *.db
 *.sqlite
 backend/dev.db
 
+# Session/Cookie files (if ever stored on disk)
+/sessions/
+/cookies/
+
+# Backups (DO NOT COMMIT)
+/backups/
+backend/backups/
+
+# Uploads (DO NOT COMMIT)
+/uploads/
+backend/uploads/
+
 # Logs
 *.log
+logs/
+backend/logs/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Runtime/debug screenshots
+backend/instagram_*.png
+backend/*.png
+backend/*.jpg
+backend/*.jpeg
+
+# Accidental command-output files
+tatus --short
 
 # IDE / OS
 .vscode/

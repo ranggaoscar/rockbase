@@ -5,11 +5,12 @@
  * Falls back to lightweight local text transformations if no API key is set.
  */
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { getGeminiApiKey, getGeminiModel } from './GeminiConfig';
 
 function getModel() {
-  const key = process.env.GEMINI_API_KEY || '';
-  if (!key || key === 'dummy_key') return null;
-  return new GoogleGenerativeAI(key).getGenerativeModel({ model: 'gemini-1.5-flash' });
+  const key = getGeminiApiKey();
+  if (!key) return null;
+  return new GoogleGenerativeAI(key).getGenerativeModel({ model: getGeminiModel() });
 }
 
 // ── Local fallback transformations ────────────────────────────────────────
@@ -48,7 +49,7 @@ const OPENING_VARIATIONS = [
   '',
 ];
 
-function localSpin(caption: string, index: number): string {
+export function localSpin(caption: string, index: number): string {
   let spun = caption;
 
   // Replace some synonyms

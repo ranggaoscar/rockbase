@@ -17,6 +17,11 @@ const routeLabels: Record<string, string> = {
   '/':          'Dashboard',
   '/farm':      'Farm View',
   '/accounts':  'Accounts',
+  '/engagement': 'Engagement',
+  '/campaigns': 'Campaigns',
+  '/campaign-engine': 'Campaign Engine',
+  '/activity':  'Activity',
+  '/validation': 'Validation',
   '/compose':   'Compose & Post',
   '/scheduler': 'Scheduler',
   '/ai-writer': 'AI Writer',
@@ -31,7 +36,7 @@ export default function Topbar() {
   const location = useLocation()
   const navigate = useNavigate()
 
-  const pageLabel = routeLabels[location.pathname] ?? 'SocialCommand'
+  const pageLabel = routeLabels[location.pathname] ?? 'ROCK BASE'
 
   const initials = user?.name
     ? user.name.split(' ').map((w) => w[0]).join('').toUpperCase().slice(0, 2)
@@ -51,7 +56,7 @@ export default function Topbar() {
     >
       {/* Breadcrumb */}
       <div className="flex items-center gap-1.5 text-sm">
-        <span className="text-muted-foreground">SocialCommand</span>
+        <span className="text-muted-foreground">ROCK BASE</span>
         <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
         <span className="font-medium text-foreground">{pageLabel}</span>
       </div>

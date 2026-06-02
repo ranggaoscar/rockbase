@@ -61,7 +61,7 @@ export default function Login() {
               <Zap className="h-7 w-7 text-white" />
             </div>
             <h1 className="text-2xl font-bold tracking-tight text-white">
-              SocialCommand
+              ROCK BASE
             </h1>
             <p className="mt-1 text-sm text-white/40">
               Farm Management Platform
@@ -83,7 +83,7 @@ export default function Login() {
               <Input
                 id="email"
                 type="email"
-                placeholder="admin@socialcommand.com"
+                placeholder="admin@rockbase.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 leftIcon={<Mail />}

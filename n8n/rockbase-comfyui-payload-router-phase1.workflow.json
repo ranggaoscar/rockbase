@@ -1,0 +1,217 @@
+{
+  "name": "ROCK BASE ComfyUI Payload Router Phase 1",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rockbase-simulation",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "8df7755a-2d2f-45d4-b718-df2bde3e7c01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "rockbase-simulation"
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $json.body ?? $json;\n\nconst core = payload.core ?? {};\nconst production = payload.production ?? {};\nconst ai = payload.ai ?? {};\nconst distribution = payload.distribution ?? {};\nconst pipeline = payload.pipeline ?? {};\n\nconst asArray = (value) => Array.isArray(value) ? value : value ? [value] : [];\n\nreturn [{\n  json: {\n    rawPayload: payload,\n    normalized: {\n      campaign_name: core.campaignName ?? '',\n      destination_brand: core.destinationBrand ?? '',\n      content_type: production.contentType ?? '',\n      format: production.format ?? '',\n      resolution: production.resolution ?? '',\n      aspect_ratio: production.aspectRatio ?? '',\n      visual_style: production.visualStyle ?? '',\n      visual_mood: production.visualMood ?? '',\n      render_complexity: production.renderComplexity ?? '',\n      hashtags: asArray(ai.hashtagSet),\n      posting_windows: asArray(distribution.postingWindow),\n      target_account_types: asArray(distribution.accountTypeTargets),\n      pipeline_targets: asArray(pipeline.destinationPipeline),\n      orchestration_stage: pipeline.automationStage ?? '',\n      orchestration_status: pipeline.orchestrationStatus ?? ''\n    },\n    sections: {\n      core,\n      production,\n      ai,\n      distribution,\n      pipeline\n    }\n  }\n}];"
+      },
+      "id": "0954ed38-5817-4ee6-81c9-db50cb5fb3f3",
+      "name": "Normalize Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $json;\nconst { core, production, ai, distribution, pipeline } = item.sections;\nconst errors = [];\nconst warnings = [];\n\nif (!core || Object.keys(core).length === 0) errors.push('missing core section');\nif (!production || Object.keys(production).length === 0) errors.push('missing production section');\nif (!ai || Object.keys(ai).length === 0) warnings.push('missing ai section');\nif (!distribution || Object.keys(distribution).length === 0) warnings.push('missing distribution section');\nif (!pipeline || Object.keys(pipeline).length === 0) errors.push('missing pipeline section');\n\nif (!core.requestId) errors.push('missing core.requestId');\nif (!core.campaignId) errors.push('missing core.campaignId');\nif (!core.campaignName) warnings.push('missing core.campaignName');\nif (!core.orchestrationVersion) warnings.push('missing core.orchestrationVersion');\nif (!production.contentType) errors.push('missing production.contentType');\nif (!production.format) warnings.push('missing production.format');\nif (!production.resolution) warnings.push('missing production.resolution');\nif (!production.visualStyle) warnings.push('missing production.visualStyle');\nif (!pipeline.automationStage) warnings.push('missing pipeline.automationStage');\nif (!Array.isArray(pipeline.destinationPipeline) || pipeline.destinationPipeline.length === 0) errors.push('missing pipeline.destinationPipeline');\n\nconst allowedPipelines = ['n8n', 'ComfyUI', 'AI Writer'];\nconst unsupportedPipelines = Array.isArray(pipeline.destinationPipeline)\n  ? pipeline.destinationPipeline.filter((target) => !allowedPipelines.includes(target))\n  : [];\nif (unsupportedPipelines.length > 0) warnings.push(`unsupported pipeline targets: ${unsupportedPipelines.join(', ')}`);\n\nconst validated = errors.length === 0;\nconst validationStatus = validated ? (warnings.length ? 'warning' : 'valid') : 'failed';\n\nreturn [{\n  json: {\n    ...item,\n    validation: {\n      validated,\n      validationStatus,\n      errors,\n      warnings\n    }\n  }\n}];"
+      },
+      "id": "8f84f97d-bdda-4fe9-8126-28b3a6fb251f",
+      "name": "Validate Schema",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $json;\nconst production = item.sections.production;\nconst pipeline = item.sections.pipeline;\nconst contentType = String(production.contentType ?? '');\nconst format = String(production.format ?? '');\nconst visualStyle = String(production.visualStyle ?? '');\nconst pipelineTargets = Array.isArray(pipeline.destinationPipeline) ? pipeline.destinationPipeline : [];\nconst text = `${contentType} ${format} ${visualStyle}`.toLowerCase();\n\nlet route = 'manual_review_only_sim';\nlet routeReason = 'No ComfyUI route matched. Keep this payload in manual review.';\nlet requiresComfyUI = false;\nlet outputIntent = 'manual orchestration review';\n\nif (contentType === 'Generate Hero Reel' || (text.includes('reel') && text.includes('9:16'))) {\n  route = 'comfyui_video_vertical_sim';\n  routeReason = 'Hero reel or vertical reels format detected.';\n  requiresComfyUI = true;\n  outputIntent = 'vertical hero reel render specification';\n} else if (contentType === 'Generate Carousel' || (text.includes('carousel') && text.includes('4:5'))) {\n  route = 'comfyui_carousel_sim';\n  routeReason = 'Carousel format detected.';\n  requiresComfyUI = true;\n  outputIntent = 'carousel visual render specification';\n} else if (contentType === 'Generate Before-After' || text.includes('before-after') || text.includes('before after')) {\n  route = 'comfyui_before_after_sim';\n  routeReason = 'Before-after transformation content detected.';\n  requiresComfyUI = true;\n  outputIntent = 'before-after comparison render specification';\n} else if (contentType === 'Generate Story Pack' || text.includes('story') || text.includes('stories')) {\n  route = 'comfyui_story_pack_sim';\n  routeReason = 'Story pack or stories format detected.';\n  requiresComfyUI = true;\n  outputIntent = 'vertical story pack render specification';\n} else if (contentType === 'Generate AI Caption Batch' || text.includes('caption')) {\n  route = 'ai_writer_only_sim';\n  routeReason = 'Caption-only payload detected; no visual render required.';\n  requiresComfyUI = false;\n  outputIntent = 'caption batch orchestration specification';\n}\n\nif (!pipelineTargets.includes('ComfyUI')) {\n  requiresComfyUI = false;\n  if (route.startsWith('comfyui_')) routeReason += ' Pipeline does not include ComfyUI, so render remains disabled.';\n}\n\nreturn [{\n  json: {\n    ...item,\n    routing: {\n      route,\n      routeReason,\n      requiresComfyUI,\n      outputIntent,\n      contentType,\n      format,\n      visualStyle,\n      pipelineTargets,\n      simulationOnly: true\n    }\n  }\n}];"
+      },
+      "id": "ea58a78e-2af6-4a90-8ea3-15552a5ec4d3",
+      "name": "Route Content Type",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $json;\nconst { core, production, ai, distribution, pipeline } = item.sections;\nconst routing = item.routing;\nconst contentType = production.contentType ?? 'Unknown';\nconst batchText = String(distribution.estimatedBatch ?? '1');\nconst numericMatch = batchText.match(/\\d+/);\nconst batchSize = numericMatch ? Number(numericMatch[0]) : Number(ai.variationCount ?? 1) || 1;\nconst promptParts = [\n  ai.promptDirection,\n  production.visualStyle ? `Visual style: ${production.visualStyle}` : '',\n  production.visualMood ? `Mood: ${production.visualMood}` : '',\n  core.materialTopic ? `Material/topic: ${core.materialTopic}` : '',\n  core.destinationBrand ? `Destination brand: ${core.destinationBrand}` : ''\n].filter(Boolean);\n\nconst renderSpec = {\n  renderSpecId: `render-spec-${core.requestId || Date.now()}`,\n  requestId: core.requestId ?? null,\n  route: routing.route,\n  contentType,\n  format: production.format ?? null,\n  resolution: production.resolution ?? null,\n  aspectRatio: production.aspectRatio ?? null,\n  visualStyle: production.visualStyle ?? null,\n  visualMood: production.visualMood ?? null,\n  renderComplexity: production.renderComplexity ?? null,\n  promptDirection: promptParts.join(' | '),\n  negativePrompt: 'no watermark, no distorted text, no broken architecture, no warped stone texture, no low quality render',\n  batchSize,\n  outputIntent: routing.outputIntent,\n  targetPlatforms: Array.isArray(distribution.targetPlatforms) ? distribution.targetPlatforms : [],\n  destinationPipeline: Array.isArray(pipeline.destinationPipeline) ? pipeline.destinationPipeline : [],\n  requiresComfyUI: routing.requiresComfyUI,\n  simulationOnly: true\n};\n\nconst renderSpecPreview = {\n  route: renderSpec.route,\n  requiresComfyUI: renderSpec.requiresComfyUI,\n  outputIntent: renderSpec.outputIntent,\n  format: `${renderSpec.format || 'unknown'} / ${renderSpec.resolution || 'unknown'} / ${renderSpec.aspectRatio || 'unknown'}`,\n  batchSize: renderSpec.batchSize,\n  promptPreview: renderSpec.promptDirection.slice(0, 240)\n};\n\nreturn [{\n  json: {\n    ...item,\n    renderSpec,\n    renderSpecPreview\n  }\n}];"
+      },
+      "id": "43bc1156-aec6-4e66-906d-df0bf42726fd",
+      "name": "Build Render Spec",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $json;\nconst { core, production } = item.sections;\nconst renderSpec = item.renderSpec;\nconst isCaptionOnly = !renderSpec.requiresComfyUI || String(renderSpec.contentType ?? '').toLowerCase() === 'generate ai caption batch';\nconst batchCount = Math.max(1, Math.min(Number(renderSpec.batchSize || 1), isCaptionOnly ? 1 : 6));\n\nconst assets = Array.from({ length: batchCount }, (_, index) => {\n  const sequence = String(index + 1).padStart(2, '0');\n  const assetType = isCaptionOnly ? 'mock_caption_output' : 'mock_render_asset';\n  const filenameBase = isCaptionOnly\n    ? 'caption'\n    : `${String(renderSpec.format || 'render').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-${String(renderSpec.aspectRatio || 'n-a').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`;\n\n  return {\n    assetId: `mock-asset-${core.requestId || 'request'}-${sequence}`,\n    type: assetType,\n    format: isCaptionOnly ? 'caption' : (renderSpec.format ?? null),\n    resolution: isCaptionOnly ? 'text-only' : (renderSpec.resolution ?? null),\n    aspectRatio: isCaptionOnly ? 'n/a' : (renderSpec.aspectRatio ?? null),\n    filename: `${core.requestId || 'request'}-${filenameBase}-${sequence}.json`,\n    mockUrl: null,\n    storagePath: null,\n    readyForPosting: false\n  };\n});\n\nreturn [{\n  json: {\n    ...item,\n    mockAssetResult: {\n      status: 'mock_ready',\n      simulationOnly: true,\n      source: 'comfyui_connector_mock_phase1',\n      renderSpecId: renderSpec.renderSpecId,\n      requestId: core.requestId ?? null,\n      assetBatchId: `mock-batch-${core.requestId || Date.now()}`,\n      assets\n    }\n  }\n}];"
+      },
+      "id": "b0a5b8f1-cc7f-447f-8ac4-c5c1b7c4d6c1",
+      "name": "Build Mock Asset Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $json;\nconst { core, production, ai, distribution, pipeline } = item.sections;\nconst pipelineTargets = Array.isArray(pipeline.destinationPipeline) ? pipeline.destinationPipeline : [];\nconst parsedSections = {\n  core: {\n    requestId: core.requestId ?? null,\n    campaignId: core.campaignId ?? null,\n    campaignName: core.campaignName ?? null,\n    objective: core.objective ?? null,\n    materialTopic: core.materialTopic ?? null,\n    destinationBrand: core.destinationBrand ?? null,\n    orchestrationVersion: core.orchestrationVersion ?? null\n  },\n  production: {\n    contentType: production.contentType ?? null,\n    format: production.format ?? null,\n    resolution: production.resolution ?? null,\n    aspectRatio: production.aspectRatio ?? null,\n    visualStyle: production.visualStyle ?? null,\n    visualMood: production.visualMood ?? null,\n    renderComplexity: production.renderComplexity ?? null\n  },\n  ai: {\n    captionSeed: ai.captionSeed ?? null,\n    hookSeed: ai.hookSeed ?? null,\n    CTA: ai.CTA ?? null,\n    hashtagSet: Array.isArray(ai.hashtagSet) ? ai.hashtagSet : [],\n    variationCount: Number(ai.variationCount ?? 0),\n    promptDirection: ai.promptDirection ?? null\n  },\n  distribution: {\n    accountTypeTargets: Array.isArray(distribution.accountTypeTargets) ? distribution.accountTypeTargets : [],\n    estimatedBatch: distribution.estimatedBatch ?? null,\n    postingWindow: Array.isArray(distribution.postingWindow) ? distribution.postingWindow : [],\n    distributionPriority: distribution.distributionPriority ?? null,\n    targetPlatforms: Array.isArray(distribution.targetPlatforms) ? distribution.targetPlatforms : []\n  },\n  pipeline: {\n    destinationPipeline: pipelineTargets,\n    automationStage: pipeline.automationStage ?? null,\n    orchestrationStatus: pipeline.orchestrationStatus ?? null\n  }\n};\n\nconst estimatedWorkload = {\n  route: item.routing.route,\n  batchSize: item.renderSpec.batchSize,\n  renderRequired: item.renderSpec.requiresComfyUI,\n  complexity: production.renderComplexity ?? 'unknown',\n  workloadLabel: item.renderSpec.requiresComfyUI\n    ? `${item.renderSpec.batchSize} render spec unit(s), simulation only`\n    : `${item.renderSpec.batchSize} non-render orchestration unit(s)`\n};\n\nreturn [{\n  json: {\n    ok: true,\n    validated: item.validation.validated,\n    requestId: parsedSections.core.requestId,\n    executionSummary: {\n      requestId: parsedSections.core.requestId,\n      orchestrationStage: parsedSections.pipeline.automationStage,\n      detectedPipelineCount: pipelineTargets.length,\n      estimatedWorkload,\n      validationStatus: item.validation.validationStatus,\n      validationErrors: item.validation.errors,\n      validationWarnings: item.validation.warnings\n    },\n    parsedSections,\n    routing: item.routing,\n    renderSpec: item.renderSpec,\n    renderSpecPreview: item.renderSpecPreview,\n    mockAssetResult: item.mockAssetResult,\n    blockedActions: [\n      'real_comfyui_execution',\n      'real_asset_generation',\n      'auto_posting',\n      'database_persistence'\n    ],\n    simulationOnly: true\n  }\n}];"
+      },
+      "id": "a779954d-f47b-4a79-a31d-aa25d62c90b1",
+      "name": "Build Execution Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "392a7d93-e05c-49b3-ae3d-430533249fbf",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1560,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Payload": {
+      "main": [
+        [
+          {
+            "node": "Validate Schema",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Schema": {
+      "main": [
+        [
+          {
+            "node": "Route Content Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Content Type": {
+      "main": [
+        [
+          {
+            "node": "Build Render Spec",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Render Spec": {
+      "main": [
+        [
+          {
+            "node": "Build Mock Asset Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Mock Asset Result": {
+      "main": [
+        [
+          {
+            "node": "Build Execution Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Execution Summary": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "0ad55f71-0089-4a47-a0df-776a87751a8d",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "id": "rockbase-comfyui-payload-router-phase1",
+  "tags": [
+    {
+      "name": "ROCK BASE"
+    },
+    {
+      "name": "simulation-safe"
+    },
+    {
+      "name": "comfyui-router"
+    }
+  ]
+}

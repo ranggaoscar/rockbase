@@ -153,7 +153,7 @@ export default function Settings() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `socialcommand-backup-${new Date().toISOString().slice(0, 10)}.json`
+    a.download = `rockbase-backup-${new Date().toISOString().slice(0, 10)}.json`
     a.click()
     URL.revokeObjectURL(url)
     toast.success('Backup exported')
@@ -409,7 +409,7 @@ export default function Settings() {
       </Section>
 
       {/* ── About ──────────────────────────────────────────────────────── */}
-      <Section icon={Shield} title="About SocialCommand" iconColor="text-muted-foreground">
+      <Section icon={Shield} title="About ROCK BASE" iconColor="text-muted-foreground">
         <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
           {[
             { label: 'Version',   value: '1.0.0' },

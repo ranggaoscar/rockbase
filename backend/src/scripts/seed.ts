@@ -7,10 +7,10 @@ dotenv.config();
 const prisma = new PrismaClient();
 
 async function main() {
-  const email = process.env.SEED_ADMIN_EMAIL || 'admin@socialcommand.com';
+  const email = process.env.SEED_ADMIN_EMAIL || 'admin@rockbase.com';
   const password = process.env.SEED_ADMIN_PASSWORD || 'Admin@123';
 
-  console.log('=== SocialCommand Seed ===');
+  console.log('=== ROCK BASE Seed ===');
 
   // 1. Ensure a default workspace exists (required FK for SocialAccount)
   let workspace = await (prisma as any).workspace.findUnique({ where: { id: 'workspace-default' } });

@@ -113,7 +113,7 @@ router.post('/:accountId/run', async (req: AuthRequest, res: Response) => {
 // ── POST /api/warming/:accountId/run-task — run a single specific task ───
 router.post('/:accountId/run-task', async (req: AuthRequest, res: Response) => {
   const accountId = String(req.params.accountId);
-  const { task, count } = req.body as { task: 'follow' | 'like' | 'watch_reel' | 'explore'; count?: number };
+  const { task, count } = req.body as { task: 'follow' | 'like' | 'watch_reel' | 'explore' | 'comment' | 'view_story' | 'save_post'; count?: number };
 
   try {
     const account = await prisma.socialAccount.findUnique({ where: { id: accountId } });
@@ -127,18 +127,21 @@ router.post('/:accountId/run-task', async (req: AuthRequest, res: Response) => {
       res.status(409).json({ error: 'Session already running' });
       return;
     }
-    if (!['follow', 'like', 'watch_reel', 'explore'].includes(task)) {
-      res.status(400).json({ error: 'Invalid task. Use: follow, like, watch_reel, explore' });
+    if (!['follow', 'like', 'watch_reel', 'explore', 'comment', 'view_story', 'save_post'].includes(task)) {
+      res.status(400).json({ error: 'Invalid task. Use: follow, like, watch_reel, explore, comment, view_story, save_post' });
       return;
     }
 
     res.json({ success: true, message: `Running task: ${task} for @${account.username}` });
 
     runningSessions.add(accountId);
-    const run = task === 'follow'     ? () => instagramWarmingService.autoFollow(accountId, count ?? 5)
-              : task === 'like'       ? () => instagramWarmingService.autoLike(accountId, count ?? 10)
-              : task === 'watch_reel' ? () => instagramWarmingService.autoWatchReels(accountId, count ?? 10)
-              :                        () => instagramWarmingService.browseExplore(accountId, (count ?? 5) * 60_000);
+    const run = task === 'follow'      ? () => instagramWarmingService.autoFollow(accountId, count ?? 5)
+              : task === 'like'        ? () => instagramWarmingService.autoLike(accountId, count ?? 10)
+              : task === 'watch_reel'  ? () => instagramWarmingService.autoWatchReels(accountId, count ?? 10)
+              : task === 'comment'     ? () => instagramWarmingService.autoComment(accountId, count ?? 3)
+              : task === 'view_story'  ? () => instagramWarmingService.autoViewStory(accountId, count ?? 10)
+              : task === 'save_post'   ? () => instagramWarmingService.autoSavePost(accountId, count ?? 5)
+              :                          () => instagramWarmingService.browseExplore(accountId, (count ?? 5) * 60_000);
 
     run()
       .then((r) => console.log(`[Warming] Task ${task} done:`, r))

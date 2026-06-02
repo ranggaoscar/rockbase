@@ -1,6 +1,7 @@
 import { browserManager } from './BrowserManager';
 import { aiService } from './AiService';
 import { PrismaClient } from '@prisma/client';
+import { Page } from 'playwright';
 
 const prisma = new PrismaClient();
 
@@ -21,9 +22,10 @@ export class EngagementService {
 
     console.log(`Starting auto-reply job for account ${account.username} on ${account.platform}`);
     
+    let page: Page | null = null;
     try {
       const context = await browserManager.getContext(accountId);
-      const page = await context.newPage();
+      page = await context.newPage();
 
       await page.goto(postUrl, { waitUntil: 'networkidle' });
       await randomDelay(); // Human delay after load
@@ -63,11 +65,12 @@ export class EngagementService {
       }
 
       console.log(`Finished auto-reply job for ${postUrl}`);
-      await page.close();
       return { status: 'success', message: `Processed comments for ${account.username}` };
     } catch (error) {
       console.error(`Auto-reply failed for ${accountId}:`, error);
       throw error;
+    } finally {
+      await page?.close().catch(() => {});
     }
   }
 
@@ -83,9 +86,10 @@ export class EngagementService {
 
     console.log(`Starting auto-DM job for account ${account.username} -> targeting ${targetUsername}`);
     
+    let page: Page | null = null;
     try {
       const context = await browserManager.getContext(accountId);
-      const page = await context.newPage();
+      page = await context.newPage();
 
       let dmText = account.dmTemplate || `Hi @${targetUsername}, thanks for connecting!`;
 
@@ -109,11 +113,12 @@ export class EngagementService {
       }
 
       await randomDelay();
-      await page.close();
       return { status: 'success', message: 'Sent Auto-DM' };
     } catch (error) {
       console.error(`Auto-DM failed for ${accountId}:`, error);
       throw error;
+    } finally {
+      await page?.close().catch(() => {});
     }
   }
 

@@ -5,6 +5,15 @@ import multer from 'multer';
 import * as path from 'path';
 import * as fs from 'fs';
 import { spinCaptions } from '../services/CaptionSpinnerService';
+import { sessionHealthService } from '../services/SessionHealthService';
+import { resolveAccountSelection } from '../services/AccountSelectionResolver';
+import { logActivity } from '../services/ActivityLogService';
+import {
+  generateIdempotencyKey,
+  generateRequestPayloadHash,
+  acquireRequestLock,
+  releaseRequestLock,
+} from '../utils/idempotency';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -33,6 +42,91 @@ const storage = multer.diskStorage({
   },
 });
 
+const DEFAULT_DELAY_MINUTES = 15;
+const DEFAULT_DELAY_MAX_MINUTES = 45;
+const MAX_DELAY_MINUTES = 24 * 60;
+
+function parseDelayMinutes(value: unknown, fallback: number) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : NaN;
+}
+
+function randomDelayMs(minMinutes: number, maxMinutes: number) {
+  const minMs = Math.round(minMinutes * 60 * 1000);
+  const maxMs = Math.round(maxMinutes * 60 * 1000);
+  if (maxMs <= minMs) return minMs;
+  return Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
+}
+
+function minutesFromMs(ms: number) {
+  return Math.round((ms / 60 / 1000) * 100) / 100;
+}
+
+function parseBoolean(value: unknown): boolean {
+  return value === true || value === 'true' || value === '1';
+}
+
+async function filterPostableAccounts(accountIds: string[], allowUnhealthy: boolean) {
+  const uniqueIds = [...new Set(accountIds.filter(Boolean))];
+  if (allowUnhealthy) {
+    return { postableAccountIds: uniqueIds, skippedAccounts: [] as any[] };
+  }
+
+  const accounts = await prisma.socialAccount.findMany({
+    where: { id: { in: uniqueIds } },
+    select: {
+      id: true,
+      username: true,
+      sessionHealth: true,
+      sessionHealthReason: true,
+      sessionHealthCheckedAt: true,
+    },
+  });
+  const byId = new Map(accounts.map((account) => [account.id, account]));
+  const skippedAccounts: any[] = [];
+  const postableAccountIds: string[] = [];
+
+  for (const accountId of uniqueIds) {
+    const account = byId.get(accountId);
+    const health = account?.sessionHealth || 'UNKNOWN';
+    if (account && sessionHealthService.isPostableHealth(health)) {
+      postableAccountIds.push(accountId);
+    } else {
+      skippedAccounts.push({
+        accountId,
+        username: account?.username || accountId,
+        health,
+        reason: account?.sessionHealthReason || 'Session has not been checked or is not healthy',
+        checkedAt: account?.sessionHealthCheckedAt,
+      });
+    }
+  }
+
+  return { postableAccountIds, skippedAccounts };
+}
+
+function logSkippedUnhealthyAccounts(workspaceId: string, skippedAccounts: any[], source: string) {
+  for (const account of skippedAccounts) {
+    logActivity({
+      workspaceId,
+      type: 'posting',
+      entityType: 'account',
+      entityId: account.accountId,
+      accountId: account.accountId,
+      action: 'skipped_unhealthy_account',
+      status: 'skipped',
+      message: `Skipped @${account.username} because session is ${account.health}`,
+      metadata: {
+        source,
+        health: account.health,
+        reason: account.reason,
+        checkedAt: account.checkedAt,
+      },
+    });
+  }
+}
+
 const upload = multer({
   storage,
   limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
@@ -45,6 +139,7 @@ const upload = multer({
 // ── POST /api/posts/bulk — Bulk post with AI caption spinning ─────────────
 // multipart/form-data: image file + JSON fields
 router.post('/bulk', upload.single('media'), async (req: Request, res: Response) => {
+  let payloadHash = '';
   try {
     const {
       baseCaption,
@@ -52,15 +147,52 @@ router.post('/bulk', upload.single('media'), async (req: Request, res: Response)
       accountIds,   // JSON string of string[]
       scheduleAt,
       spinCaptions: shouldSpin = 'true',
+      allowUnhealthy,
       workspaceId = 'workspace-default',
+      campaignId = null,
     } = req.body;
 
-    const parsedAccountIds: string[] = JSON.parse(accountIds || '[]');
+    const parsedAccountIdsRaw: string[] = JSON.parse(accountIds || '[]');
     const parsedHashtags: string[]   = JSON.parse(baseHashtags || '[]');
+    const { postableAccountIds: parsedAccountIds, skippedAccounts } = await filterPostableAccounts(
+      parsedAccountIdsRaw,
+      parseBoolean(allowUnhealthy),
+    );
+    logSkippedUnhealthyAccounts(workspaceId, skippedAccounts, 'bulk');
 
     if (!baseCaption?.trim())       { res.status(400).json({ error: 'baseCaption is required' }); return; }
-    if (parsedAccountIds.length === 0) { res.status(400).json({ error: 'accountIds is required' }); return; }
+    if (parsedAccountIdsRaw.length === 0) { res.status(400).json({ error: 'accountIds is required' }); return; }
+    if (parsedAccountIds.length === 0) {
+      res.status(400).json({
+        error: 'No healthy accounts selected for posting',
+        skippedAccounts,
+      });
+      return;
+    }
     if (!req.file)                  { res.status(400).json({ error: 'media file is required — Instagram needs an image' }); return; }
+
+    // ── Request-level Lock ──
+    payloadHash = generateRequestPayloadHash(req.body, req.file);
+    if (!acquireRequestLock(payloadHash)) {
+      logActivity({
+        workspaceId,
+        type: 'posting',
+        entityType: 'request',
+        entityId: 'lock-blocked',
+        action: 'duplicate_request_blocked',
+        status: 'blocked',
+        message: 'Duplicate bulk-post request blocked by request-level lock.',
+        metadata: { payloadHash },
+      });
+      res.status(409).json({
+        error: 'Duplicate request blocked (request-level lock). Please wait a few seconds before trying again.',
+        createdCount: 0,
+        skippedDuplicateCount: 0,
+        skippedUnhealthyCount: skippedAccounts.length,
+        jobIds: [],
+      });
+      return;
+    }
 
     const mediaLocalPath = req.file.path;
 
@@ -78,11 +210,12 @@ router.post('/bulk', upload.single('media'), async (req: Request, res: Response)
     }
 
     // ── Queue one job per account with staggered delays ───────────────
-    // 5–15 min random delay between accounts to avoid same-timestamp detection
-    const MIN_ACCOUNT_DELAY_MS = 5 * 60 * 1000;   // 5 minutes
-    const MAX_ACCOUNT_DELAY_MS = 15 * 60 * 1000;  // 15 minutes
+    // 15–45 min random delay between accounts to avoid same-timestamp detection
+    const MIN_ACCOUNT_DELAY_MS = 15 * 60 * 1000;   // 15 minutes
+    const MAX_ACCOUNT_DELAY_MS = 45 * 60 * 1000;  // 45 minutes
 
     const createdPosts: any[] = [];
+    let skippedDuplicateCount = 0;
     let cumulativeDelay = 0;
 
     // Base delay from scheduleAt if provided
@@ -92,21 +225,72 @@ router.post('/bulk', upload.single('media'), async (req: Request, res: Response)
       cumulativeDelay = targetTime > now ? targetTime - now : 0;
     }
 
+    const accountRows = await prisma.socialAccount.findMany({
+      where: { id: { in: parsedAccountIds } },
+      select: { id: true, username: true },
+    });
+    const usernameByAccountId = new Map(accountRows.map(account => [account.id, account.username]));
+
     for (let i = 0; i < parsedAccountIds.length; i++) {
       const accountId = parsedAccountIds[i];
+      const username = usernameByAccountId.get(accountId) || accountId;
       const { caption, hashtags } = captions[i] ?? { caption: baseCaption, hashtags: parsedHashtags.join(' ') };
       const finalContent = `${caption}\n\n${hashtags}`;
+      const scheduleDate = cumulativeDelay > 0 ? new Date(Date.now() + cumulativeDelay) : null;
 
-      // Create DB record
-      const post = await prisma.post.create({
-        data: {
-          workspaceId,
-          content: finalContent,
-          mediaUrls: JSON.stringify([req.file!.filename]),
-          accountIds: JSON.stringify([accountId]),
-          status: cumulativeDelay > 0 ? 'scheduled' : 'pending',
-          scheduleAt: cumulativeDelay > 0 ? new Date(Date.now() + cumulativeDelay) : null,
-        },
+      // ── Idempotency Key ──
+      const idempotencyKey = generateIdempotencyKey({
+        accountId,
+        mediaFilename: req.file!.filename,
+        content: finalContent,
+        campaignId,
+        scheduledAt: scheduleDate,
+      });
+
+      // Create DB record with uniqueness constraint handling
+      let post;
+      try {
+        post = await prisma.post.create({
+          data: {
+            workspaceId,
+            content: finalContent,
+            mediaUrls: JSON.stringify([req.file!.filename]),
+            accountIds: JSON.stringify([accountId]),
+            status: cumulativeDelay > 0 ? 'scheduled' : 'pending',
+            scheduleAt: scheduleDate,
+            idempotencyKey,
+          },
+        });
+      } catch (err: any) {
+        if (err.code === 'P2002') {
+          skippedDuplicateCount++;
+          logActivity({
+            workspaceId,
+            type: 'posting',
+            entityType: 'post',
+            entityId: 'duplicate-skipped',
+            accountId,
+            action: 'duplicate_job_skipped',
+            status: 'skipped',
+            message: `Duplicate job skipped for @${username} (idempotency key conflict)`,
+            metadata: { idempotencyKey, username },
+          });
+          continue; // Skip to next account
+        }
+        throw err;
+      }
+
+      // Log successful job creation
+      logActivity({
+        workspaceId,
+        type: 'posting',
+        entityType: 'post',
+        entityId: post.id,
+        accountId,
+        action: 'posting_job_created',
+        status: 'created',
+        message: `Posting job successfully created for @${username} (Idempotency: ${idempotencyKey})`,
+        metadata: { jobId: post.id, idempotencyKey, username },
       });
 
       // Queue the job
@@ -127,6 +311,17 @@ router.post('/bulk', upload.single('media'), async (req: Request, res: Response)
             delay: cumulativeDelay,
           }
         );
+        logActivity({
+          workspaceId,
+          type: 'queue',
+          entityType: 'post',
+          entityId: post.id,
+          accountId,
+          action: 'job_queued',
+          status: 'queued',
+          message: `Posting job queued for account @${username}`,
+          metadata: { source: 'bulk', delayMs: cumulativeDelay, spinIndex: i },
+        });
       } else {
         // ── Direct Fallback Mode (No Redis) ──
         console.log(`[BulkPost] Redis missing. Queuing direct post for ${accountId} with ${cumulativeDelay}ms delay`);
@@ -139,8 +334,14 @@ router.post('/bulk', upload.single('media'), async (req: Request, res: Response)
             // Re-importing service to ensure it's available in this scope if needed
             const { instagramPostingService } = await import('../services/InstagramPostingService');
             
-            // Mark as pending in DB
-            await prisma.post.update({ where: { id: post.id }, data: { status: 'pending' } });
+            await prisma.post.update({
+              where: { id: post.id },
+              data: {
+                status: 'pending_verify',
+                results: JSON.stringify({ [accountId]: { status: 'PENDING_VERIFY' } })
+              }
+            });
+            console.log(`[DirectPost] ${accountId} marked PENDING_VERIFY before Instagram publish verification`);
             
             const result = await instagramPostingService.postToInstagram(accountId, finalContent, mediaLocalPath);
             
@@ -153,19 +354,42 @@ router.post('/bulk', upload.single('media'), async (req: Request, res: Response)
                   results: JSON.stringify({ [accountId]: { status: 'success' } })
                 }
               });
+              logActivity({
+                workspaceId,
+                type: 'posting',
+                entityType: 'post',
+                entityId: post.id,
+                accountId,
+                action: 'publish_success',
+                status: 'success',
+                message: `Published Instagram post for @${result.username}`,
+                metadata: { source: 'direct_fallback' },
+              });
               console.log(`[DirectPost] ✅ Published for @${result.username}`);
             } else {
               throw new Error(result.error);
             }
           } catch (err: any) {
             console.error(`[DirectPost] ❌ Failed for ${accountId}:`, err.message);
+            const failedStatus = err.message?.includes('FAILED_VERIFY') ? 'FAILED_VERIFY' : 'failed';
             await prisma.post.update({
               where: { id: post.id },
               data: {
                 status: 'failed',
-                results: JSON.stringify({ [accountId]: { status: 'failed', error: err.message } })
+                results: JSON.stringify({ [accountId]: { status: failedStatus, error: err.message } })
               }
             }).catch(() => {});
+            logActivity({
+              workspaceId,
+              type: 'posting',
+              entityType: 'post',
+              entityId: post.id,
+              accountId,
+              action: 'publish_failure',
+              status: 'failed',
+              message: `Direct fallback publish failed for ${accountId}`,
+              metadata: { source: 'direct_fallback', failedStatus, error: err.message },
+            });
           }
         })();
       }
@@ -185,15 +409,377 @@ router.post('/bulk', upload.single('media'), async (req: Request, res: Response)
 
     res.status(202).json({
       message: automationQueue 
-        ? `Queued ${createdPosts.length} posts via BullMQ.`
-        : `Queued ${createdPosts.length} posts via Direct Fallback (Redis is down).`,
+        ? `Queued ${createdPosts.length} posts via BullMQ (skipped ${skippedDuplicateCount} duplicates).`
+        : `Queued ${createdPosts.length} posts via Direct Fallback (Redis is down, skipped ${skippedDuplicateCount} duplicates).`,
       posts: createdPosts,
       redisAvailable: !!automationQueue,
+      skippedAccounts,
     });
-
   } catch (error: any) {
-    console.error('[BulkPost] Error:', error);
-    res.status(500).json({ error: 'Failed to queue bulk posts', details: error.message });
+    console.error('[Bulk] Error:', error);
+    res.status(500).json({ error: 'Failed to queue posts', details: error.message });
+  } finally {
+    if (payloadHash) {
+      releaseRequestLock(payloadHash);
+    }
+  }
+});
+
+// ── POST /api/posts/bulk-multi — Multi-media bulk post (Assignment Mode support) ───────────
+router.post('/bulk-multi', upload.array('media', 20), async (req: Request, res: Response) => {
+  let payloadHash = '';
+  try {
+    const {
+      mode = 'broadcast',
+      baseCaption,
+      baseHashtags, // JSON string string[]
+      accountIds,   // JSON string string[] (used in broadcast mode)
+      groupIds,     // JSON string string[] (used in broadcast mode)
+      assignments,  // JSON string {accountId, caption, photoIndex}[] (used in assign mode)
+      spinCaptions: shouldSpin = 'true',
+      workspaceId = 'workspace-default',
+      delayMinMinutes,
+      delayMaxMinutes,
+      allowUnhealthy,
+      campaignId = null,
+    } = req.body;
+
+    const files = req.files as Express.Multer.File[];
+    if (!files || files.length === 0) {
+      res.status(400).json({ error: 'At least one media file is required' });
+      return;
+    }
+
+    let parsedAccountIds = JSON.parse(accountIds || '[]');
+    const parsedGroupIds = JSON.parse(groupIds || '[]');
+    const parsedHashtags   = JSON.parse(baseHashtags || '[]');
+    let parsedAssignments = JSON.parse(assignments || '[]');
+    const minDelayMinutes = parseDelayMinutes(delayMinMinutes, DEFAULT_DELAY_MINUTES);
+    const maxDelayMinutes = parseDelayMinutes(delayMaxMinutes, DEFAULT_DELAY_MAX_MINUTES);
+
+    if (
+      Number.isNaN(minDelayMinutes) ||
+      Number.isNaN(maxDelayMinutes) ||
+      minDelayMinutes < 0 ||
+      maxDelayMinutes < minDelayMinutes ||
+      maxDelayMinutes > MAX_DELAY_MINUTES
+    ) {
+      res.status(400).json({ error: 'Invalid delay settings' });
+      return;
+    }
+
+    // Validation
+    if (mode === 'broadcast') {
+      if (!baseCaption?.trim()) { res.status(400).json({ error: 'baseCaption is required' }); return; }
+      if (parsedAccountIds.length === 0 && parsedGroupIds.length === 0) { res.status(400).json({ error: 'accountIds or groupIds is required' }); return; }
+    } else {
+      if (parsedAssignments.length === 0) { res.status(400).json({ error: 'assignments are required' }); return; }
+    }
+
+    const createdPosts: any[] = [];
+    let skippedAccounts: any[] = [];
+    let skippedDuplicateCount = 0;
+    let cumulativeDelay = 0;
+    let delayFromPrevious = 0;
+
+    if (mode === 'broadcast' && parsedGroupIds.length > 0) {
+      const resolvedAccounts = await resolveAccountSelection({
+        accountIds: parsedAccountIds,
+        groupIds: parsedGroupIds,
+      });
+      parsedAccountIds = resolvedAccounts.map((account) => account.id);
+      if (parsedAccountIds.length === 0) {
+        res.status(400).json({ error: 'No accounts resolved from selected accounts or groups' });
+        return;
+      }
+    }
+
+    const targetAccountIds = mode === 'assign'
+      ? parsedAssignments.map((as: any) => as.accountId).filter(Boolean)
+      : parsedAccountIds;
+    const healthFilter = await filterPostableAccounts(targetAccountIds, parseBoolean(allowUnhealthy));
+    skippedAccounts = healthFilter.skippedAccounts;
+    logSkippedUnhealthyAccounts(workspaceId, skippedAccounts, 'bulk-multi');
+
+    if (mode === 'assign') {
+      const allowedIds = new Set(healthFilter.postableAccountIds);
+      parsedAssignments = parsedAssignments.filter((as: any) => allowedIds.has(as.accountId));
+      if (parsedAssignments.length === 0) {
+        res.status(400).json({ error: 'No healthy accounts selected for posting', skippedAccounts });
+        return;
+      }
+    } else {
+      parsedAccountIds = healthFilter.postableAccountIds;
+      if (parsedAccountIds.length === 0) {
+        res.status(400).json({ error: 'No healthy accounts selected for posting', skippedAccounts });
+        return;
+      }
+    }
+
+    const accountRows = await prisma.socialAccount.findMany({
+      where: { id: { in: mode === 'assign' ? parsedAssignments.map((as: any) => as.accountId).filter(Boolean) : parsedAccountIds } },
+      select: { id: true, username: true },
+    });
+    const usernameByAccountId = new Map(accountRows.map(account => [account.id, account.username]));
+
+    // ── Request-level Lock ──
+    payloadHash = generateRequestPayloadHash(req.body, req.files);
+    if (!acquireRequestLock(payloadHash)) {
+      logActivity({
+        workspaceId,
+        type: 'posting',
+        entityType: 'request',
+        entityId: 'lock-blocked',
+        action: 'duplicate_request_blocked',
+        status: 'blocked',
+        message: 'Duplicate bulk-multi-post request blocked by request-level lock.',
+        metadata: { payloadHash },
+      });
+      res.status(409).json({
+        error: 'Duplicate request blocked (request-level lock). Please wait a few seconds before trying again.',
+        createdCount: 0,
+        skippedDuplicateCount: 0,
+        skippedUnhealthyCount: skippedAccounts.length,
+        jobIds: [],
+      });
+      return;
+    }
+
+    if (mode === 'assign') {
+      // ── ASSIGN MODE Logic ──────────────────────────────────────────
+      for (let i = 0; i < parsedAssignments.length; i++) {
+        const as = parsedAssignments[i];
+        const file = files[as.photoIndex];
+        if (!file) continue;
+
+        const finalContent = as.caption;
+        const accountId = as.accountId;
+        const username = usernameByAccountId.get(accountId) || accountId;
+        const scheduledTime = new Date(Date.now() + cumulativeDelay);
+
+        // ── Idempotency Key ──
+        const idempotencyKey = generateIdempotencyKey({
+          accountId,
+          mediaFilename: file.filename,
+          content: finalContent,
+          campaignId,
+          scheduledAt: cumulativeDelay > 0 ? scheduledTime : null,
+        });
+
+        // Create DB record with uniqueness check
+        let post;
+        try {
+          post = await prisma.post.create({
+            data: {
+              workspaceId,
+              content: finalContent,
+              mediaUrls: JSON.stringify([file.filename]),
+              accountIds: JSON.stringify([accountId]),
+              status: cumulativeDelay > 0 ? 'scheduled' : 'pending',
+              scheduleAt: cumulativeDelay > 0 ? scheduledTime : null,
+              idempotencyKey,
+            },
+          });
+        } catch (err: any) {
+          if (err.code === 'P2002') {
+            skippedDuplicateCount++;
+            logActivity({
+              workspaceId,
+              type: 'posting',
+              entityType: 'post',
+              entityId: 'duplicate-skipped',
+              accountId,
+              action: 'duplicate_job_skipped',
+              status: 'skipped',
+              message: `Duplicate job skipped for @${username} (idempotency key conflict)`,
+              metadata: { idempotencyKey, username },
+            });
+            continue; // Skip
+          }
+          throw err;
+        }
+
+        // Log successful job creation
+        logActivity({
+          workspaceId,
+          type: 'posting',
+          entityType: 'post',
+          entityId: post.id,
+          accountId,
+          action: 'posting_job_created',
+          status: 'created',
+          message: `Posting job successfully created for @${username} (Idempotency: ${idempotencyKey})`,
+          metadata: { jobId: post.id, idempotencyKey, username },
+        });
+
+        // Queue job
+        if (automationQueue) {
+          await automationQueue.add('postJob', {
+            postId: post.id,
+            accountId,
+            content: finalContent,
+            mediaLocalPath: file.path,
+            mediaUrls: [file.filename],
+            spinIndex: 0,
+          }, {
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 30000 },
+            delay: cumulativeDelay,
+          });
+          logActivity({
+            workspaceId,
+            type: 'queue',
+            entityType: 'post',
+            entityId: post.id,
+            accountId,
+            action: 'job_queued',
+            status: 'queued',
+            message: `Posting job queued for @${username}`,
+            metadata: { source: 'bulk-multi', mode: 'assign', delayMs: cumulativeDelay },
+          });
+        }
+
+        console.log(`[BulkMulti] Scheduled @${username} | delay ${minutesFromMs(delayFromPrevious)} min | scheduled ${scheduledTime.toISOString()}`);
+
+        createdPosts.push({
+          ...post,
+          scheduledDelayMinutes: minutesFromMs(delayFromPrevious),
+          scheduleAt: cumulativeDelay > 0 ? scheduledTime.toISOString() : null,
+          username,
+        });
+
+        delayFromPrevious = randomDelayMs(minDelayMinutes, maxDelayMinutes);
+        cumulativeDelay += delayFromPrevious;
+      }
+    } else {
+      // ── BROADCAST MODE Logic (similar to /bulk but uses first file) ──────
+      const file = files[0];
+      let captions: { caption: string; hashtags: string }[];
+      
+      if (shouldSpin === 'true') {
+        captions = await spinCaptions(baseCaption, parsedHashtags, parsedAccountIds.length);
+      } else {
+        captions = parsedAccountIds.map(() => ({ caption: baseCaption, hashtags: parsedHashtags.join(' ') }));
+      }
+
+      for (let i = 0; i < parsedAccountIds.length; i++) {
+        const accountId = parsedAccountIds[i];
+        const username = usernameByAccountId.get(accountId) || accountId;
+        const { caption, hashtags } = captions[i];
+        const finalContent = `${caption}\n\n${hashtags}`;
+        const scheduledTime = new Date(Date.now() + cumulativeDelay);
+
+        // ── Idempotency Key ──
+        const idempotencyKey = generateIdempotencyKey({
+          accountId,
+          mediaFilename: file.filename,
+          content: finalContent,
+          campaignId,
+          scheduledAt: cumulativeDelay > 0 ? scheduledTime : null,
+        });
+
+        // Create DB record with uniqueness check
+        let post;
+        try {
+          post = await prisma.post.create({
+            data: {
+              workspaceId,
+              content: finalContent,
+              mediaUrls: JSON.stringify([file.filename]),
+              accountIds: JSON.stringify([accountId]),
+              status: cumulativeDelay > 0 ? 'scheduled' : 'pending',
+              scheduleAt: cumulativeDelay > 0 ? scheduledTime : null,
+              idempotencyKey,
+            },
+          });
+        } catch (err: any) {
+          if (err.code === 'P2002') {
+            skippedDuplicateCount++;
+            logActivity({
+              workspaceId,
+              type: 'posting',
+              entityType: 'post',
+              entityId: 'duplicate-skipped',
+              accountId,
+              action: 'duplicate_job_skipped',
+              status: 'skipped',
+              message: `Duplicate job skipped for @${username} (idempotency key conflict)`,
+              metadata: { idempotencyKey, username },
+            });
+            continue; // Skip
+          }
+          throw err;
+        }
+
+        // Log successful job creation
+        logActivity({
+          workspaceId,
+          type: 'posting',
+          entityType: 'post',
+          entityId: post.id,
+          accountId,
+          action: 'posting_job_created',
+          status: 'created',
+          message: `Posting job successfully created for @${username} (Idempotency: ${idempotencyKey})`,
+          metadata: { jobId: post.id, idempotencyKey, username },
+        });
+
+        if (automationQueue) {
+          await automationQueue.add('postJob', {
+            postId: post.id,
+            accountId,
+            content: finalContent,
+            mediaLocalPath: file.path,
+            mediaUrls: [file.filename],
+            spinIndex: i,
+          }, {
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 30000 },
+            delay: cumulativeDelay,
+          });
+          logActivity({
+            workspaceId,
+            type: 'queue',
+            entityType: 'post',
+            entityId: post.id,
+            accountId,
+            action: 'job_queued',
+            status: 'queued',
+            message: `Posting job queued for @${username}`,
+            metadata: { source: 'bulk-multi', mode: 'broadcast', delayMs: cumulativeDelay, spinIndex: i },
+          });
+        }
+
+        console.log(`[BulkMulti] Scheduled @${username} | delay ${minutesFromMs(delayFromPrevious)} min | scheduled ${scheduledTime.toISOString()}`);
+
+        createdPosts.push({
+          ...post,
+          scheduledDelayMinutes: minutesFromMs(delayFromPrevious),
+          scheduleAt: cumulativeDelay > 0 ? scheduledTime.toISOString() : null,
+          username,
+        });
+
+        delayFromPrevious = randomDelayMs(minDelayMinutes, maxDelayMinutes);
+        cumulativeDelay += delayFromPrevious;
+      }
+    }
+
+    res.status(202).json({
+      message: `Queued ${createdPosts.length} posts (skipped ${skippedDuplicateCount} duplicates).`,
+      posts: createdPosts,
+      skippedAccounts,
+      delaySettings: {
+        minMinutes: minDelayMinutes,
+        maxMinutes: maxDelayMinutes,
+      },
+    });
+  } catch (error: any) {
+    console.error('[BulkMulti] Error:', error);
+    res.status(500).json({ error: 'Failed to queue multi-media posts', details: error.message });
+  } finally {
+    if (payloadHash) {
+      releaseRequestLock(payloadHash);
+    }
   }
 });
 
@@ -228,17 +814,48 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     const createdPosts = [];
+    let skippedCount = 0;
     for (const accountId of accountIds) {
-      const post = await prisma.post.create({
-        data: {
-          workspaceId,
-          content,
-          mediaUrls: JSON.stringify(mediaUrls || []),
-          accountIds: JSON.stringify([accountId]),
-          status: baseDelay > 0 ? 'scheduled' : 'pending',
-          scheduleAt: scheduleAt ? new Date(scheduleAt) : null,
-        },
+      const firstMedia = mediaUrls && mediaUrls.length > 0 ? mediaUrls[0] : 'no-media';
+      const scheduleDate = scheduleAt ? new Date(scheduleAt) : null;
+      const idempotencyKey = generateIdempotencyKey({
+        accountId,
+        mediaFilename: firstMedia,
+        content,
+        scheduledAt: scheduleDate,
       });
+
+      let post;
+      try {
+        post = await prisma.post.create({
+          data: {
+            workspaceId,
+            content,
+            mediaUrls: JSON.stringify(mediaUrls || []),
+            accountIds: JSON.stringify([accountId]),
+            status: baseDelay > 0 ? 'scheduled' : 'pending',
+            scheduleAt: scheduleDate,
+            idempotencyKey,
+          },
+        });
+      } catch (err: any) {
+        if (err.code === 'P2002') {
+          skippedCount++;
+          logActivity({
+            workspaceId,
+            type: 'posting',
+            entityType: 'post',
+            entityId: 'duplicate-skipped-legacy',
+            accountId,
+            action: 'duplicate_job_skipped',
+            status: 'skipped',
+            message: `Duplicate legacy job skipped for account ${accountId} (idempotency key conflict)`,
+            metadata: { idempotencyKey },
+          });
+          continue;
+        }
+        throw err;
+      }
 
       if (automationQueue) {
         await automationQueue.add(
@@ -246,17 +863,29 @@ router.post('/', async (req: Request, res: Response) => {
           { postId: post.id, accountId, content, mediaUrls: mediaUrls || [], spinIndex: 0 },
           { attempts: 3, backoff: { type: 'exponential', delay: 5000 }, delay: baseDelay }
         );
+        logActivity({
+          workspaceId,
+          type: 'queue',
+          entityType: 'post',
+          entityId: post.id,
+          accountId,
+          action: 'job_queued',
+          status: 'queued',
+          message: `Posting job queued for account ${accountId}`,
+          metadata: { source: 'legacy', delayMs: baseDelay },
+        });
       }
+
       createdPosts.push(post);
     }
 
     res.status(202).json({
-      message: `Queued ${createdPosts.length} posts`,
+      message: `Queued ${createdPosts.length} posts (skipped ${skippedCount} duplicates).`,
       posts: createdPosts,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('[postRoutes] Error:', error);
-    res.status(500).json({ error: 'Failed to queue posts' });
+    res.status(500).json({ error: 'Failed to queue posts', details: error.message });
   }
 });
 

@@ -13,22 +13,34 @@ import {
   ChevronLeft,
   ChevronRight,
   Zap,
+  Heart,
+  Target,
+  Workflow,
+  Activity,
+  ClipboardCheck,
+  BrainCircuit,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/useAppStore'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 
 const navItems = [
-  { label: 'Dashboard',        path: '/',          icon: LayoutDashboard },
-  { label: 'Farm View',        path: '/farm',       icon: Tv2 },
-  { label: 'Accounts',         path: '/accounts',   icon: Users },
-  { label: 'Compose & Post',   path: '/compose',    icon: SendHorizontal },
-  { label: 'Scheduler',        path: '/scheduler',  icon: CalendarDays },
-  { label: 'AI Writer',        path: '/ai-writer',  icon: Sparkles },
-  { label: 'Warming Manager',  path: '/warming',    icon: Leaf },
-  { label: 'Proxy Manager',    path: '/proxies',    icon: Globe },
-  { label: 'Analytics',        path: '/analytics',  icon: BarChart3 },
-  { label: 'Settings',         path: '/settings',   icon: Settings },
+  { label: 'Dashboard',        path: '/',             icon: LayoutDashboard },
+  { label: 'Farm View',        path: '/farm',          icon: Tv2 },
+  { label: 'Accounts',         path: '/accounts',      icon: Users },
+  { label: 'Engagement',       path: '/engagement',    icon: Heart },
+  { label: 'Campaigns',        path: '/campaigns',     icon: Target },
+  { label: 'Campaign Engine',   path: '/campaign-engine', icon: Workflow },
+  { label: 'Content Planner',  path: '/content-planner', icon: BrainCircuit },
+  { label: 'Activity',         path: '/activity',      icon: Activity },
+  { label: 'Validation',       path: '/validation',    icon: ClipboardCheck },
+  { label: 'Compose & Post',   path: '/compose',       icon: SendHorizontal },
+  { label: 'Scheduler',        path: '/scheduler',     icon: CalendarDays },
+  { label: 'AI Writer',        path: '/ai-writer',     icon: Sparkles },
+  { label: 'Warming Manager',  path: '/warming',       icon: Leaf },
+  { label: 'Proxy Manager',    path: '/proxies',       icon: Globe },
+  { label: 'Analytics',        path: '/analytics',     icon: BarChart3 },
+  { label: 'Settings',         path: '/settings',      icon: Settings },
 ]
 
 export default function Sidebar() {
@@ -53,7 +65,7 @@ export default function Sidebar() {
           </div>
           {!sidebarCollapsed && (
             <div className="min-w-0">
-              <p className="text-sm font-bold text-foreground leading-tight">SocialCommand</p>
+              <p className="text-sm font-bold text-foreground leading-tight">ROCK BASE</p>
               <p className="text-[10px] text-muted-foreground leading-tight">Farm Platform</p>
             </div>
           )}

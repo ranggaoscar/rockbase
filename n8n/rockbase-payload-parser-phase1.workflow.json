@@ -1,0 +1,166 @@
+{
+  "name": "ROCK BASE Payload Parser Phase 1",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rockbase-simulation",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b6a0a1f4-5d2f-4ad7-a67f-0a2a0c6a4e01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "rockbase-simulation"
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $json.body ?? $json;\n\nconst core = payload.core ?? {};\nconst production = payload.production ?? {};\nconst ai = payload.ai ?? {};\nconst distribution = payload.distribution ?? {};\nconst pipeline = payload.pipeline ?? {};\n\nconst asArray = (value) => Array.isArray(value) ? value : value ? [value] : [];\n\nreturn [{\n  json: {\n    rawPayload: payload,\n    normalized: {\n      campaign_name: core.campaignName ?? '',\n      destination_brand: core.destinationBrand ?? '',\n      content_type: production.contentType ?? '',\n      visual_style: production.visualStyle ?? '',\n      render_complexity: production.renderComplexity ?? '',\n      hashtags: asArray(ai.hashtagSet),\n      posting_windows: asArray(distribution.postingWindow),\n      target_account_types: asArray(distribution.accountTypeTargets),\n      pipeline_targets: asArray(pipeline.destinationPipeline)\n    },\n    sections: {\n      core,\n      production,\n      ai,\n      distribution,\n      pipeline\n    }\n  }\n}];"
+      },
+      "id": "63ad9d56-f8c1-4edc-8478-4a0e3d46d2ad",
+      "name": "Normalize Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $json;\nconst { core, production, ai, distribution, pipeline } = item.sections;\nconst errors = [];\nconst warnings = [];\n\nif (!core || Object.keys(core).length === 0) errors.push('missing core section');\nif (!production || Object.keys(production).length === 0) errors.push('missing production section');\nif (!ai || Object.keys(ai).length === 0) warnings.push('missing ai section');\nif (!distribution || Object.keys(distribution).length === 0) warnings.push('missing distribution section');\nif (!pipeline || Object.keys(pipeline).length === 0) errors.push('missing pipeline section');\n\nif (!core.requestId) errors.push('missing core.requestId');\nif (!core.campaignId) errors.push('missing core.campaignId');\nif (!core.orchestrationVersion) warnings.push('missing core.orchestrationVersion');\nif (!production.contentType) errors.push('missing production.contentType');\nif (!production.format) warnings.push('missing production.format');\nif (!production.visualStyle) warnings.push('missing production.visualStyle');\nif (!pipeline.automationStage) warnings.push('missing pipeline.automationStage');\nif (!Array.isArray(pipeline.destinationPipeline) || pipeline.destinationPipeline.length === 0) errors.push('missing pipeline.destinationPipeline');\n\nconst allowedPipelines = ['n8n', 'ComfyUI', 'AI Writer'];\nconst unsupportedPipelines = Array.isArray(pipeline.destinationPipeline)\n  ? pipeline.destinationPipeline.filter((target) => !allowedPipelines.includes(target))\n  : [];\nif (unsupportedPipelines.length > 0) warnings.push(`unsupported pipeline targets: ${unsupportedPipelines.join(', ')}`);\n\nconst validated = errors.length === 0;\nconst validationStatus = validated ? (warnings.length ? 'warning' : 'valid') : 'failed';\n\nreturn [{\n  json: {\n    ...item,\n    validation: {\n      validated,\n      validationStatus,\n      errors,\n      warnings\n    }\n  }\n}];"
+      },
+      "id": "d7e96cf8-f60f-4e06-81fb-737c47a67785",
+      "name": "Validate Schema",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $json;\nconst { core, production, ai, distribution, pipeline } = item.sections;\n\nreturn [{\n  json: {\n    ...item,\n    parsedSections: {\n      core: {\n        requestId: core.requestId ?? null,\n        campaignId: core.campaignId ?? null,\n        campaignName: core.campaignName ?? null,\n        objective: core.objective ?? null,\n        materialTopic: core.materialTopic ?? null,\n        destinationBrand: core.destinationBrand ?? null,\n        orchestrationVersion: core.orchestrationVersion ?? null\n      },\n      production: {\n        contentType: production.contentType ?? null,\n        format: production.format ?? null,\n        resolution: production.resolution ?? null,\n        aspectRatio: production.aspectRatio ?? null,\n        visualStyle: production.visualStyle ?? null,\n        visualMood: production.visualMood ?? null,\n        renderComplexity: production.renderComplexity ?? null\n      },\n      ai: {\n        captionSeed: ai.captionSeed ?? null,\n        hookSeed: ai.hookSeed ?? null,\n        CTA: ai.CTA ?? null,\n        hashtagSet: Array.isArray(ai.hashtagSet) ? ai.hashtagSet : [],\n        variationCount: Number(ai.variationCount ?? 0),\n        promptDirection: ai.promptDirection ?? null\n      },\n      distribution: {\n        accountTypeTargets: Array.isArray(distribution.accountTypeTargets) ? distribution.accountTypeTargets : [],\n        estimatedBatch: distribution.estimatedBatch ?? null,\n        postingWindow: Array.isArray(distribution.postingWindow) ? distribution.postingWindow : [],\n        distributionPriority: distribution.distributionPriority ?? null,\n        targetPlatforms: Array.isArray(distribution.targetPlatforms) ? distribution.targetPlatforms : []\n      },\n      pipeline: {\n        destinationPipeline: Array.isArray(pipeline.destinationPipeline) ? pipeline.destinationPipeline : [],\n        automationStage: pipeline.automationStage ?? null,\n        orchestrationStatus: pipeline.orchestrationStatus ?? null\n      }\n    }\n  }\n}];"
+      },
+      "id": "26d6c9a6-3812-459f-83d2-0cf574e1f8e0",
+      "name": "Split Sections",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $json;\nconst sections = item.parsedSections;\nconst pipelineTargets = sections.pipeline.destinationPipeline;\nconst variationCount = Number(sections.ai.variationCount || 0);\nconst accountTargets = sections.distribution.accountTypeTargets.length;\nconst hasRender = pipelineTargets.includes('ComfyUI');\nconst estimatedWorkload = {\n  variationCount,\n  accountTargetTypes: accountTargets,\n  renderRequired: hasRender,\n  complexity: sections.production.renderComplexity ?? 'unknown',\n  workloadLabel: hasRender\n    ? `${variationCount || 1} visual/copy unit(s), render simulation only`\n    : `${variationCount || 1} copy unit(s), no render`\n};\n\nreturn [{\n  json: {\n    ok: true,\n    validated: item.validation.validated,\n    requestId: sections.core.requestId,\n    executionSummary: {\n      requestId: sections.core.requestId,\n      orchestrationStage: sections.pipeline.automationStage,\n      detectedPipelineCount: pipelineTargets.length,\n      estimatedWorkload,\n      validationStatus: item.validation.validationStatus,\n      validationErrors: item.validation.errors,\n      validationWarnings: item.validation.warnings\n    },\n    normalized: item.normalized,\n    parsedSections: sections,\n    simulationOnly: true,\n    blockedActions: [\n      'no ComfyUI call',\n      'no AI generation',\n      'no posting integration',\n      'no queue dispatch'\n    ]\n  }\n}];"
+      },
+      "id": "b03bba3d-136e-4ddd-ae8d-f71a54178286",
+      "name": "Build Execution Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "d3d93fa4-b26d-4e22-ae15-097f41af9177",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1300,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Payload": {
+      "main": [
+        [
+          {
+            "node": "Validate Schema",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Schema": {
+      "main": [
+        [
+          {
+            "node": "Split Sections",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Sections": {
+      "main": [
+        [
+          {
+            "node": "Build Execution Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Execution Summary": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "7aab87c3-10db-4c44-8c9d-f8e31fdd2aac",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "id": "rockbase-payload-parser-phase1",
+  "tags": [
+    {
+      "name": "ROCK BASE"
+    },
+    {
+      "name": "simulation-safe"
+    }
+  ]
+}
