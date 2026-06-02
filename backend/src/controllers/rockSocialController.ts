@@ -528,7 +528,7 @@ export const uploadImage = async (req: Request, res: Response) => {
     if (!req.file) {
       return res.status(400).json({ message: 'No image file provided. Field name must be "image".' });
     }
-    const baseUrl = process.env.BACKEND_URL || 'http://localhost:3000';
+    const baseUrl = process.env.BACKEND_URL || 'http://localhost:3010';
     const url = `${baseUrl}/uploads/${req.file.filename}`;
     return res.status(200).json({ url });
   } catch (error) {

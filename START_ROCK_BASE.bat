@@ -1,8 +1,10 @@
 @echo off
 setlocal
 
-set "PROJECT_DIR=C:\AI PROJECTS\Dashboard_Sentral\RockBase-Codex-Dev"
+set "PROJECT_DIR=%~dp0"
+if "%PROJECT_DIR:~-1%"=="\" set "PROJECT_DIR=%PROJECT_DIR:~0,-1%"
 set "APP_URL=http://localhost:5173"
+set "BACKEND_PORT=3010"
 
 title ROCK BASE Launcher
 
@@ -54,12 +56,12 @@ if not exist "%PROJECT_DIR%\frontend\node_modules\vite\bin\vite.js" (
 
 echo Starting ROCK BASE with Windows npm...
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$c = Test-NetConnection -ComputerName 127.0.0.1 -Port 3000 -InformationLevel Quiet; if ($c) { exit 0 } else { exit 1 }" >nul 2>nul
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$c = Test-NetConnection -ComputerName 127.0.0.1 -Port %BACKEND_PORT% -InformationLevel Quiet; if ($c) { exit 0 } else { exit 1 }" >nul 2>nul
 if errorlevel 1 (
-  echo Backend port 3000 is free. Starting backend...
-  start "ROCK BASE Backend" cmd /k "pushd ""%PROJECT_DIR%\backend"" && npm.cmd run dev"
+  echo Backend port %BACKEND_PORT% is free. Starting backend...
+  start "ROCK BASE Backend" cmd /k "pushd ""%PROJECT_DIR%\backend"" && set PORT=%BACKEND_PORT%&& set FRONTEND_URL=http://localhost:5173&& set BACKEND_URL=http://localhost:%BACKEND_PORT%&& npm.cmd run dev"
 ) else (
-  echo Backend port 3000 is already active. Reusing existing backend.
+  echo Backend port %BACKEND_PORT% is already active. Reusing existing backend.
 )
 
 timeout /t 3 /nobreak >nul
