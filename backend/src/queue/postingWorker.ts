@@ -269,6 +269,27 @@ export const postingWorker = new Worker<PostJobData>(
     } catch (error: any) {
       console.error(`[Worker] Job ${job.id} failed:`, error.message);
 
+      const isPrePublishFailure = error.message?.includes('CAPTION_VERIFY_FAILED')
+        || error.message?.includes('No valid media file path provided')
+        || error.message?.includes('Media file not found');
+
+      if (isPrePublishFailure && job.attemptsMade < (job.opts.attempts || 3) - 1) {
+        await prisma.post.update({
+          where: { id: postId },
+          data: {
+            status: 'pending',
+            results: JSON.stringify({
+              ...existingResults,
+              [accountId]: {
+                status: 'retrying',
+                error: error.message,
+                retryAttempt: job.attemptsMade + 1,
+              },
+            }),
+          },
+        }).catch(() => {});
+      }
+
       // On final retry, update post in DB
       if (job.attemptsMade >= (job.opts.attempts || 3) - 1) {
         const isFailedVerify = error.message?.includes('FAILED_VERIFY');

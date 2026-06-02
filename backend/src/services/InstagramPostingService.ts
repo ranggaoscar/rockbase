@@ -200,12 +200,16 @@ export class InstagramPostingService {
 
       // 7. Caption and Share
       console.log('[Instagram] Entering caption and sharing...');
-      const captionInsert = await this.insertCaptionIntoActiveCreateModal(page, account.username, caption);
-      console.log(
-        `[Instagram] @${account.username} caption insertion verified=${captionInsert.verified}, selector=${captionInsert.selector}, method=${captionInsert.method}, length=${captionInsert.length}`
-      );
-      if (!captionInsert.verified) {
-        throw new Error(`CAPTION_VERIFY_FAILED: caption empty after insertion attempts; selector=${captionInsert.selector || 'none'}`);
+      if (caption.trim()) {
+        const captionInsert = await this.insertCaptionIntoActiveCreateModal(page, account.username, caption);
+        console.log(
+          `[Instagram] @${account.username} caption insertion verified=${captionInsert.verified}, selector=${captionInsert.selector}, method=${captionInsert.method}, length=${captionInsert.length}`
+        );
+        if (!captionInsert.verified) {
+          throw new Error(`CAPTION_VERIFY_FAILED: caption empty after insertion attempts; selector=${captionInsert.selector || 'none'}`);
+        }
+      } else {
+        console.log(`[Instagram] @${account.username} caption is empty — posting media only`);
       }
 
       const captionInsertedScreenshot = await this.captureShareScreenshot(page, account.username, 'caption_inserted');
@@ -597,7 +601,7 @@ export class InstagramPostingService {
       console.log(
         `[Instagram] @${username} caption pre-publish verify attempt ${attempt}: verified=${captionCheck.verified}, selector=${captionCheck.selector}, length=${captionCheck.length}`
       );
-      if (!captionCheck.verified) {
+      if (expectedCaption.trim() && !captionCheck.verified) {
         throw new Error(`CAPTION_VERIFY_FAILED: caption empty before final Share; selector=${captionCheck.selector || 'none'}, length=${captionCheck.length}`);
       }
 
