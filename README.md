@@ -1,72 +1,82 @@
 # ROCK BASE Dashboard
 
-A powerful web-based dashboard for managing multiple social media "satellite" accounts with real-time phone farm mirroring and AI-powered mass posting.
+ROCK BASE is a local dashboard for managing multiple social media accounts with Farm View, session saving, warming flows, AI-assisted captions, and mass posting queues.
 
-## 🚀 How to Start
+## Start Here
 
-### Prerequisites
-1. **Node.js** (v18+)
-2. **Redis** (Required for background posting queue)
-3. **SQLite** (Bundled, no setup needed)
+For a new PC, follow the full setup guide:
 
-### Automatic Startup (Windows)
-Double-click the `start.bat` file in the root directory. It will launch both the backend and frontend in separate windows.
+[README_SETUP.md](README_SETUP.md)
 
-### Manual Startup
-**Backend:**
-```bash
-cd backend
-npm install
-npm run dev
+Quick Windows flow:
+
+```bat
+SETUP_ROCK_BASE.bat
+CHECK_ROCK_BASE.bat
+START_ROCK_BASE.bat
 ```
 
-**Frontend:**
-```bash
-cd frontend
-npm install
-npm run dev
+Dashboard URL:
+
+```text
+http://localhost:5173
 ```
 
----
+Default login:
 
-## 🔑 Default Credentials
+```text
+Email: admin@rockbase.com
+Password: Admin@123
+```
 
-- **URL:** http://localhost:5173
-- **Email:** `admin@rockbase.com`
-- **Password:** `Admin@123`
+## Requirements
 
----
+- Node.js 18+
+- npm
+- Redis on `127.0.0.1:6379`
+- SQLite through Prisma
 
-## ✨ Features & Status
+## Local Data Safety
+
+Private runtime files are intentionally not committed to Git:
+
+- `backend/.env`
+- local `.db` files
+- account cookies and saved sessions
+- uploads
+- logs and screenshots
+- backups
+- `node_modules`
+
+Each PC needs its own `.env`, database, accounts, and saved sessions.
+
+## Useful Scripts
+
+- `SETUP_ROCK_BASE.bat` - installs dependencies, prepares Prisma, seeds the default admin user, and installs Playwright Chromium.
+- `CHECK_ROCK_BASE.bat` - checks Node, npm, `.env`, dependencies, Redis, Prisma, backend health, and frontend port.
+- `START_ROCK_BASE.bat` - opens backend and frontend in separate Windows command windows.
+- `start.bat` - simpler starter for local development.
+
+## Features
 
 | Feature | Status | Description |
 |:---|:---|:---|
-| **Farm View** | ✅ Working | Real-time monitoring of all accounts via Playwright screenshots. |
-| **Remote Control** | ✅ Working | Manually control any browser session to handle logins or 2FA. |
-| **Save Session** | ✅ Working | Persists cookies to SQLite (encrypted) so you stay logged in. |
-| **Instagram Warming** | ✅ Working | 14-day automated "human" behavior (Follow, Like, Reels, Explore). |
-| **Mass Auto Posting** | ✅ Working | Bulk post to multiple IG accounts with AI caption variations. |
-| **Caption Spinner** | ✅ Working | Uses Gemini AI to spin captions and hashtags per account. |
-| **Direct Fallback** | ✅ Working | Posting works even if Redis is down (using background promises). |
-| **TikTok Automation** | ⏳ Planned | Currently manual control only; automation coming soon. |
+| Farm View | Working | Real-time monitoring of account sessions through Playwright screenshots. |
+| Remote Control | Working | Manually control browser sessions for login and checkpoints. |
+| Save Session | Working | Persists encrypted cookies in the local SQLite database. |
+| Instagram Warming | Working | Human-behavior style warming actions. |
+| Mass Auto Posting | Working | Bulk posting with account filtering, queueing, and caption variation. |
+| Caption Spinner | Working | Uses AI configuration for caption and hashtag variants. |
+| TikTok Automation | Planned | Manual control only for now. |
 
----
+## Developer Notes
 
-## 🛠️ Tech Stack
-- **Frontend:** React + Vite + Tailwind CSS + Shadcn UI
-- **Backend:** Node.js + Express + Prisma (SQLite)
-- **Automation:** Playwright + Stealth Plugin
-- **Task Queue:** BullMQ + Redis
-- **AI:** Google Gemini (Generative AI)
+Do not delete these local runtime folders unless you intentionally want to remove local data:
 
----
+- `backend/dev.db`
+- `backend/prisma/dev.db`
+- `backend/uploads/`
+- `backend/backups/`
+- `backend/logs/`
 
-## ⚠️ Developer Notes
-
-**CRITICAL: Do not delete these files/folders during development, as they contain your work:**
-
-- `backend/dev.db` - The main database containing all accounts, posts, and **encrypted sessions**.
-- `backend/uploads/` - Contains all media uploaded for posts.
-- `backend/backups/` - Contains all backups. If you have an issue, you may need this.
-
-Losing these files will result in the loss of all your accounts and their logged-in sessions.
+Before testing large posting batches, run `CHECK_ROCK_BASE.bat`, confirm Redis is up, test 1 account, then test a small group.
