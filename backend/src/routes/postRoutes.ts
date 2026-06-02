@@ -805,6 +805,12 @@ router.post('/', async (req: Request, res: Response) => {
       res.status(400).json({ error: 'No accounts selected for posting' });
       return;
     }
+    if (!Array.isArray(mediaUrls) || mediaUrls.length === 0) {
+      res.status(400).json({
+        error: 'mediaUrls is required for Instagram posting. Upload media or use the bulk post endpoint.',
+      });
+      return;
+    }
 
     let baseDelay = 0;
     if (scheduleAt) {

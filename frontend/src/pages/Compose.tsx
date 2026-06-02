@@ -1057,16 +1057,45 @@ export default function Compose() {
   async function retryFailed() {
     const failed = results.filter(r => r.status === 'failed')
     if (failed.length === 0) return
+
+    if (mediaFiles.length === 0) {
+      toast.error('Cannot retry without media', 'Upload media again before retrying failed posts.')
+      return
+    }
+
+    const failedIds = new Set(failed.map(r => r.accountId))
+    const retryAssignments = assignments.filter(a => failedIds.has(a.accountId))
+    if (mode === 'assign' && retryAssignments.length === 0) {
+      toast.error('Cannot retry', 'No matching failed assignment rows were found.')
+      return
+    }
+
     setPosting(true)
-    for (const r of failed) {
-      try {
-        await api.post('/posts', { workspaceId: 'default', content: caption, mediaUrls: [], accountIds: [r.accountId] })
-        await new Promise(res => setTimeout(res, 600))
-        setResults(prev => prev.map(p => p.accountId === r.accountId ? { ...p, status: 'success' } : p))
-      } catch { /* keep as failed */ }
+    try {
+      const formData = new FormData()
+      formData.append('mode', mode)
+      formData.append('baseCaption', caption)
+      formData.append('spinCaptions', shouldSpin.toString())
+      formData.append('delayMinMinutes', String(delayMinMinutes))
+      formData.append('delayMaxMinutes', String(delayMaxMinutes))
+      formData.append('baseHashtags', JSON.stringify(caption.match(/#\S+/g) || []))
+
+      if (mode === 'assign') {
+        formData.append('assignments', JSON.stringify(retryAssignments))
+      } else {
+        formData.append('accountIds', JSON.stringify(Array.from(failedIds)))
+        formData.append('groupIds', JSON.stringify([]))
+      }
+
+      mediaFiles.forEach((file) => formData.append('media', file))
+      await postsApi.bulkMulti(formData)
+      setResults(prev => prev.map(p => failedIds.has(p.accountId) ? { ...p, status: 'success', error: undefined } : p))
+      toast.success('Retry queued with media')
+    } catch (err: any) {
+      const msg = err.response?.data?.error || err.response?.data?.details || 'Retry failed'
+      toast.error('Retry failed', msg)
     }
     setPosting(false)
-    toast.success('Retry complete')
   }
 
   const successCount = results.filter(r => r.status === 'success').length
