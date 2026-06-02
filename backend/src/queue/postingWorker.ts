@@ -2,6 +2,8 @@ import { Worker, Job } from 'bullmq';
 import { PrismaClient } from '@prisma/client';
 import { instagramPostingService } from '../services/InstagramPostingService';
 import * as fs from 'fs';
+import * as http from 'http';
+import * as https from 'https';
 import * as path from 'path';
 import { logActivity } from '../services/ActivityLogService';
 import { PostJobData } from './jobTypes';
@@ -11,6 +13,88 @@ const connection = {
   host: process.env.REDIS_HOST || '127.0.0.1',
   port: parseInt(process.env.REDIS_PORT || '6379'),
 };
+
+const REMOTE_MEDIA_TIMEOUT_MS = 60_000;
+
+function sanitizeUploadFilename(filename: string): string {
+  const safeName = path.basename(filename).replace(/[^a-zA-Z0-9._-]/g, '_');
+  return safeName || `remote-media-${Date.now()}.jpg`;
+}
+
+function filenameFromMediaUrl(mediaUrl: string): string {
+  const parsed = new URL(mediaUrl);
+  const candidate = parsed.searchParams.get('filename') || parsed.pathname.split('/').pop() || '';
+  const filename = sanitizeUploadFilename(decodeURIComponent(candidate));
+
+  return path.extname(filename) ? filename : `${filename}.jpg`;
+}
+
+async function downloadToFile(mediaUrl: string, destinationPath: string, redirectCount = 0): Promise<void> {
+  if (redirectCount > 3) {
+    throw new Error(`Too many redirects while downloading media from ${mediaUrl}`);
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const parsed = new URL(mediaUrl);
+    const client = parsed.protocol === 'http:' ? http : https;
+    const request = client.get(parsed, (response) => {
+      const statusCode = response.statusCode || 0;
+
+      if (statusCode >= 300 && statusCode < 400 && response.headers.location) {
+        response.resume();
+        const redirectedUrl = new URL(response.headers.location, parsed).toString();
+        downloadToFile(redirectedUrl, destinationPath, redirectCount + 1).then(resolve, reject);
+        return;
+      }
+
+      if (statusCode < 200 || statusCode >= 300) {
+        response.resume();
+        reject(new Error(`Failed to download media (${statusCode}) from ${mediaUrl}`));
+        return;
+      }
+
+      const fileStream = fs.createWriteStream(destinationPath);
+      response.pipe(fileStream);
+      fileStream.on('finish', () => fileStream.close(() => resolve()));
+      fileStream.on('error', reject);
+    });
+
+    request.setTimeout(REMOTE_MEDIA_TIMEOUT_MS, () => {
+      request.destroy(new Error(`Timed out downloading media from ${mediaUrl}`));
+    });
+    request.on('error', reject);
+  });
+}
+
+async function resolveRemoteMediaPath(mediaUrl: string): Promise<string> {
+  const uploadsDir = path.join(process.cwd(), 'uploads');
+  await fs.promises.mkdir(uploadsDir, { recursive: true });
+
+  const targetPath = path.join(uploadsDir, filenameFromMediaUrl(mediaUrl));
+  try {
+    const existing = await fs.promises.stat(targetPath);
+    if (existing.size > 0) return targetPath;
+  } catch {}
+
+  const tempPath = path.join(
+    uploadsDir,
+    `.${Date.now()}-${Math.random().toString(36).slice(2)}-${path.basename(targetPath)}.tmp`,
+  );
+
+  try {
+    await downloadToFile(mediaUrl, tempPath);
+    try {
+      await fs.promises.rename(tempPath, targetPath);
+    } catch (error: any) {
+      if (error?.code !== 'EEXIST') throw error;
+      await fs.promises.unlink(tempPath).catch(() => {});
+    }
+    return targetPath;
+  } catch (error) {
+    await fs.promises.unlink(tempPath).catch(() => {});
+    throw error;
+  }
+}
 
 export const postingWorker = new Worker<PostJobData>(
   'automationQueue',
@@ -80,12 +164,33 @@ export const postingWorker = new Worker<PostJobData>(
       }
     }
 
-    // Resolve media path: use explicit path, or fall back to a local filename in mediaUrls
+    // Resolve media path: use explicit path, or fall back to an uploads filename/URL in mediaUrls.
     let resolvedMediaPath: string | undefined = rawMediaPath;
     if (!resolvedMediaPath && mediaUrls?.length > 0) {
       const first = mediaUrls[0];
-      if (first && !first.startsWith('http')) {
-        resolvedMediaPath = path.join(process.cwd(), 'uploads', first);
+      if (first) {
+        let parsed: URL | undefined;
+        try {
+          parsed = new URL(first);
+        } catch {}
+
+        if (parsed) {
+          const uploadPrefix = '/uploads/';
+          if (parsed.pathname.startsWith(uploadPrefix)) {
+            resolvedMediaPath = path.join(process.cwd(), 'uploads', path.basename(parsed.pathname));
+          } else if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+            resolvedMediaPath = await resolveRemoteMediaPath(first);
+          }
+        } else {
+          const normalized = first.replace(/\\/g, '/');
+          const uploadIndex = normalized.lastIndexOf('/uploads/');
+          const filename = uploadIndex >= 0
+            ? normalized.slice(uploadIndex + '/uploads/'.length)
+            : normalized;
+          resolvedMediaPath = path.isAbsolute(filename)
+            ? filename
+            : path.join(process.cwd(), 'uploads', path.basename(filename));
+        }
       }
     }
     console.log(`[Worker] Media path: ${resolvedMediaPath}`);
