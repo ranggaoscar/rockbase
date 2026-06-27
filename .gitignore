@@ -58,3 +58,18 @@ Thumbs.db
 
 # Prisma
 /backend/src/generated/prisma
+
+# Local secrets/data
+.env
+.env.*
+!.env.example
+*.db
+*.db.backup
+*.sqlite
+backend/dev.db
+backend/dev.db.backup
+backend/prisma/*.db
+backend/backups/
+backend/uploads/
+.claude/
+node_modules/
