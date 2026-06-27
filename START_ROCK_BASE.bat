@@ -58,10 +58,11 @@ echo Starting ROCK BASE with Windows npm...
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$c = Test-NetConnection -ComputerName 127.0.0.1 -Port %BACKEND_PORT% -InformationLevel Quiet; if ($c) { exit 0 } else { exit 1 }" >nul 2>nul
 if errorlevel 1 (
-  echo Backend port %BACKEND_PORT% is free. Starting backend...
-  start "ROCK BASE Backend" cmd /k "pushd ""%PROJECT_DIR%\backend"" && set PORT=%BACKEND_PORT%&& set FRONTEND_URL=http://localhost:5173&& set BACKEND_URL=http://localhost:%BACKEND_PORT%&& npm.cmd run dev"
+  echo Backend port %BACKEND_PORT% is free. Starting backend and worker...
+  start "ROCK BASE Backend" cmd /k "pushd ""%PROJECT_DIR%\backend"" && set PORT=%BACKEND_PORT%&& set FRONTEND_URL=http://localhost:5173&& set BACKEND_URL=http://localhost:%BACKEND_PORT%&& set RUN_WORKERS_SEPARATELY=true&& npm.cmd run dev"
+  start "ROCK BASE Worker" cmd /k "pushd ""%PROJECT_DIR%\backend"" && set RUN_WORKERS_SEPARATELY=true&& npm.cmd run worker"
 ) else (
-  echo Backend port %BACKEND_PORT% is already active. Reusing existing backend.
+  echo Backend port %BACKEND_PORT% is already active. Reusing existing backend/worker.
 )
 
 timeout /t 3 /nobreak >nul

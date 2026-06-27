@@ -5,8 +5,10 @@
   "main": "index.js",
   "scripts": {
     "dev": "nodemon --exec \"ts-node --transpile-only src/server.ts\"",
+    "worker": "nodemon --exec \"ts-node --transpile-only src/worker.ts\"",
     "seed": "ts-node src/scripts/seed.ts",
     "queue:clear-posting": "ts-node --transpile-only src/scripts/clear-posting-queue.ts",
+    "queue:requeue-pending": "ts-node --transpile-only src/scripts/requeue-pending-posts.ts",
     "migrate-safe": "ts-node src/scripts/backup-now.ts && npx prisma migrate dev",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

@@ -53,6 +53,8 @@ router.post('/like', async (req: AuthRequest, res: Response) => {
       accountIds,
       actionType: 'like',
       target: postUrl,
+      force: true,
+      checkAborted: () => runningTasks.get(taskId)?.aborted || false,
     }).catch((err) => {
       console.error(`[Engagement] Like task failed:`, err.message);
     }).finally(() => {
@@ -87,6 +89,8 @@ router.post('/follow', async (req: AuthRequest, res: Response) => {
       accountIds,
       actionType: 'follow',
       target: username,
+      force: true,
+      checkAborted: () => runningTasks.get(taskId)?.aborted || false,
     }).catch((err) => {
       console.error(`[Engagement] Follow task failed:`, err.message);
     }).finally(() => {
@@ -122,6 +126,8 @@ router.post('/comment', async (req: AuthRequest, res: Response) => {
       actionType: 'comment',
       target: postUrl,
       aiComment: true,
+      force: true,
+      checkAborted: () => runningTasks.get(taskId)?.aborted || false,
     }).catch((err) => {
       console.error(`[Engagement] Comment task failed:`, err.message);
     }).finally(() => {
@@ -155,6 +161,8 @@ router.post('/follow-and-like', async (req: AuthRequest, res: Response) => {
       accountIds,
       actionType: 'follow_and_like',
       target: username,
+      force: true,
+      checkAborted: () => runningTasks.get(taskId)?.aborted || false,
     }).catch((err) => {
       console.error(`[Engagement] Follow+Like task failed:`, err.message);
     }).finally(() => {
@@ -175,19 +183,37 @@ router.post('/hashtag', async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    const taskId = `hashtag-${Date.now()}`;
+    runningTasks.set(taskId, { aborted: false });
+
     res.status(202).json({
       success: true,
+      taskId,
       message: `Queued hashtag engagement on #${hashtag.replace('#', '')} for ${accountIds.length} accounts`,
     });
 
-    // Process accounts sequentially with stagger
-    const delays = HumanBehavior.calculateStaggerDelays(accountIds.length);
-    for (let i = 0; i < accountIds.length; i++) {
-      if (delays[i] > 0) {
-        await new Promise(r => setTimeout(r, delays[i]));
+    // Process accounts sequentially with stagger in the background
+    (async () => {
+      try {
+        const delays = HumanBehavior.calculateStaggerDelays(accountIds.length);
+        for (let i = 0; i < accountIds.length; i++) {
+          if (runningTasks.get(taskId)?.aborted) {
+            console.log(`[Engagement] Hashtag engagement campaign aborted.`);
+            break;
+          }
+          if (delays[i] > 0) {
+            await new Promise(r => setTimeout(r, delays[i]));
+          }
+          if (runningTasks.get(taskId)?.aborted) {
+            console.log(`[Engagement] Hashtag engagement campaign aborted.`);
+            break;
+          }
+          await targetedEngagementService.engageByHashtag(accountIds[i], hashtag, actions).catch(() => {});
+        }
+      } finally {
+        runningTasks.delete(taskId);
       }
-      targetedEngagementService.engageByHashtag(accountIds[i], hashtag, actions).catch(() => {});
-    }
+    })();
 
   } catch (err: any) {
     res.status(500).json({ error: err.message });

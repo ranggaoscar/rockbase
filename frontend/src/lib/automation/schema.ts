@@ -520,7 +520,16 @@ export function buildUniversalAutomationSchema(
 export function isAllowedLocalWebhookEndpoint(value: string) {
   try {
     const url = new URL(value)
-    return url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && url.pathname.length > 1
+    const hn = url.hostname
+    const isLocal = Boolean(
+      ['localhost', '127.0.0.1', '[::1]'].includes(hn) ||
+      hn.startsWith('192.168.') ||
+      hn.startsWith('10.') ||
+      hn.startsWith('172.') ||
+      hn.match(/^100\.(6[4-9]|[7-9]\d|1\d\d|12[0-7])\./) // Tailscale 100.64.0.0/10
+    )
+
+    return (url.protocol === 'http:' || url.protocol === 'https:') && isLocal && url.pathname.length > 1
   } catch {
     return false
   }

@@ -69,14 +69,75 @@ app.use('/api/rock-social', rockSocialRoutes);
 app.use('/api/system', systemRoutes); // Improvement #9 — log access
 
 // Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+app.get('/api/health', async (req, res) => {
+  let dbStatus = 'disconnected';
+  try {
+    const { PrismaClient } = require('@prisma/client');
+    const prisma = new PrismaClient();
+    await prisma.$queryRaw`SELECT 1`;
+    dbStatus = 'connected';
+  } catch (err: any) {
+    dbStatus = `error: ${err.message}`;
+  }
+
+  let redisStatus = 'disconnected';
+  let queueCounts: any = null;
+  try {
+    const client = await automationQueue.client;
+    const pingResult = await client.ping();
+    redisStatus = pingResult === 'PONG' ? 'connected' : `unexpected: ${pingResult}`;
+
+    // Get queue counts
+    const states = ['wait', 'active', 'delayed', 'failed', 'completed'] as const;
+    queueCounts = await automationQueue.getJobCounts(...states);
+  } catch (err: any) {
+    redisStatus = `error: ${err.message}`;
+  }
+
+  let browserMetrics = { activeContexts: 0, activePages: 0 };
+  let activeAccountIds: string[] = [];
+  try {
+    const { browserManager } = require('./services/BrowserManager');
+    browserMetrics = browserManager.getMetrics();
+    activeAccountIds = browserManager.getActiveAccountIds();
+  } catch (err: any) {
+    console.error('[HealthCheck] BrowserManager error:', err);
+  }
+
+  const isHealthy = dbStatus === 'connected' && redisStatus === 'connected';
+
+  res.status(isHealthy ? 200 : 500).json({
+    status: isHealthy ? 'ok' : 'unhealthy',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    workerMode: process.env.RUN_WORKERS_SEPARATELY === 'true' ? 'separate' : 'in-process',
+    database: {
+      status: dbStatus,
+    },
+    redis: {
+      status: redisStatus,
+    },
+    queue: queueCounts ? {
+      name: 'automationQueue',
+      counts: queueCounts,
+    } : null,
+    browserManager: {
+      activeContexts: browserMetrics.activeContexts,
+      activePages: browserMetrics.activePages,
+      activeAccountIds,
+    }
+  });
 });
 
 // Initialize Workers
-import './queue/postingWorker';
-import './queue/analyticsWorker';
-import './queue/engagementWorker';
+if (process.env.RUN_WORKERS_SEPARATELY !== 'true') {
+  console.log('[Server] Initializing workers in-process...');
+  require('./queue/postingWorker');
+  require('./queue/analyticsWorker');
+  require('./queue/engagementWorker');
+} else {
+  console.log('[Server] Workers will run in a separate process.');
+}
 
 // HTTP + Socket.io server
 const server = http.createServer(app);

@@ -33,7 +33,7 @@ export default function Engagement() {
 
   useEffect(() => {
     api.get<{ accounts: Account[] }>('/accounts')
-      .then(({ data }) => setAccounts(data.accounts.filter(a => a.status === 'active')))
+      .then(({ data }) => setAccounts(data.accounts.filter(a => a.status !== 'error')))
       .catch(() => toast.error('Failed to load accounts'))
   }, [])
 

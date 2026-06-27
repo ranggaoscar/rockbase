@@ -167,6 +167,10 @@ export const activityApi = {
   queueSummary: () => api.get('/activity/queue-summary'),
 }
 
+export const systemApi = {
+  resetQueue: () => api.post('/system/queue/reset'),
+}
+
 // ── Types ─────────────────────────────────────────────────────
 export interface AppUser {
   id: string

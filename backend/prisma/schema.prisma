@@ -1,117 +1,99 @@
-datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
-}
-
 generator client {
   provider      = "prisma-client-js"
   binaryTargets = ["native", "debian-openssl-3.0.x", "windows"]
 }
 
-enum CampaignSchedulerStatus {
-  PENDING
-  READY
-  EXECUTED
-  FAILED
-  CANCELLED
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
 }
 
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  password  String
-  name      String   @default("Admin")
-  role      String   @default("Operator") // Admin, Manager, Operator
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
+  id         String          @id @default(uuid())
+  email      String          @unique
+  password   String
+  name       String          @default("Admin")
+  role       String          @default("Operator")
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
   workspaces WorkspaceUser[]
 }
 
 model Workspace {
-  id        String   @id @default(uuid())
-  name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  users    WorkspaceUser[]
-  accounts SocialAccount[]
+  id            String          @id @default(uuid())
+  name          String
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
   accountGroups AccountGroup[]
-  activityLogs ActivityLog[]
-  posts    Post[]
-  drafts   Draft[]
+  activityLogs  ActivityLog[]
+  drafts        Draft[]
+  posts         Post[]
+  accounts      SocialAccount[]
+  users         WorkspaceUser[]
 }
 
 model WorkspaceUser {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   userId      String
   workspaceId String
-  user        User      @relation(fields: [userId], references: [id])
   workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  user        User      @relation(fields: [userId], references: [id])
 }
 
 model SocialAccount {
-  id              String    @id @default(uuid())
-  workspaceId     String
-  platform        String    // Instagram, TikTok
-  username        String
-  accountPassword String?   // Encrypted platform password
-  email           String?   // Email used to register the platform account
-  status          String    @default("warming_up") // active, warming_up, idle, error, flagged, logged_out
-  sessionHealth   String    @default("UNKNOWN") // HEALTHY, NEEDS_RELOGIN, CHECKPOINT, EXPIRED, PAUSED, UNKNOWN
-  sessionHealthReason String?
+  id                     String               @id @default(uuid())
+  workspaceId            String
+  platform               String
+  username               String
+  accountPassword        String?
+  email                  String?
+  status                 String               @default("warming_up")
+  cookies                String?
+  proxyId                String?
+  brandTag               String?
+  notes                  String?
+  warmingDay             Int                  @default(0)
+  warmingStartDate       DateTime?
+  lastActive             DateTime?
+  autoReplyEnabled       Boolean              @default(false)
+  autoDmEnabled          Boolean              @default(false)
+  replyTemplate          String?
+  dmTemplate             String?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+  sessionHealth          String               @default("UNKNOWN")
+  sessionHealthReason    String?
   sessionHealthCheckedAt DateTime?
-  cookies         String?   // Encrypted JSON session cookies
-  proxyId         String?
-  brandTag        String?   // e.g. "brand_marmer_1"
-  notes           String?
-  warmingDay      Int       @default(0)  // 0-14
-  warmingStartDate DateTime?
-  lastActive      DateTime?
-
-  // Auto-Engagement Settings
-  autoReplyEnabled Boolean @default(false)
-  autoDmEnabled    Boolean @default(false)
-  replyTemplate    String?
-  dmTemplate       String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  workspace   Workspace    @relation(fields: [workspaceId], references: [id])
-  proxy       Proxy?       @relation(fields: [proxyId], references: [id])
-  analytics   Analytics[]
-  warmingLogs WarmingLog[]
-  groupMemberships AccountGroupMember[]
-
-  @@unique([username, platform])
+  groupMemberships       AccountGroupMember[]
+  analytics              Analytics[]
+  proxy                  Proxy?               @relation(fields: [proxyId], references: [id])
+  workspace              Workspace            @relation(fields: [workspaceId], references: [id])
+  warmingLogs            WarmingLog[]
 }
 
 model AccountGroup {
-  id          String   @id @default(uuid())
+  id          String               @id @default(uuid())
   workspaceId String
   name        String
   description String?
   color       String?
-  isArchived  Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  workspace Workspace @relation(fields: [workspaceId], references: [id])
-  members   AccountGroupMember[]
+  isArchived  Boolean              @default(false)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  workspace   Workspace            @relation(fields: [workspaceId], references: [id])
+  members     AccountGroupMember[]
 
   @@unique([workspaceId, name])
   @@index([workspaceId, isArchived, name])
 }
 
 model AccountGroupMember {
-  id        String   @id @default(uuid())
+  id        String        @id @default(uuid())
   groupId   String
   accountId String
-  createdAt DateTime @default(now())
-
-  group   AccountGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  account SocialAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  createdAt DateTime      @default(now())
+  account   SocialAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  group     AccountGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
 
   @@unique([groupId, accountId])
   @@index([accountId])
@@ -119,85 +101,79 @@ model AccountGroupMember {
 }
 
 model Proxy {
-  id          String    @id @default(uuid())
+  id          String          @id @default(uuid())
   host        String
   port        Int
   username    String?
   password    String?
-  isActive    Boolean   @default(true)
-  status      String    @default("working") // working, dead, slow
+  isActive    Boolean         @default(true)
+  status      String          @default("working")
   lastChecked DateTime?
-  location    String?   // e.g. "ID - Jakarta"
-
-  accounts SocialAccount[]
+  location    String?
+  accounts    SocialAccount[]
 }
 
 model Post {
-  id          String    @id @default(uuid())
-  workspaceId String
-  content     String
-  mediaUrls   String    // Serialized JSON array
-  accountIds  String    // Serialized JSON array
-  status      String    @default("scheduled") // scheduled, pending, published, failed
-  results     String?   // Serialized JSON object
-  scheduleAt  DateTime?
-  postedAt    DateTime?
-  idempotencyKey String? @unique
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  id             String    @id @default(uuid())
+  workspaceId    String
+  content        String
+  mediaUrls      String
+  accountIds     String
+  status         String    @default("scheduled")
+  results        String?
+  scheduleAt     DateTime?
+  postedAt       DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  idempotencyKey String?   @unique
+  workspace      Workspace @relation(fields: [workspaceId], references: [id])
 }
 
 model WarmingLog {
-  id        String   @id @default(uuid())
-  accountId String
-  day       Int
-  action    String   // follow, like, watch_reel, comment, view_story, save_post, explore
-  status    String   @default("pending") // pending, completed, failed
-  details   String?  // e.g. "Followed @target_account"
-  executedAt DateTime @default(now())
-
-  account SocialAccount @relation(fields: [accountId], references: [id])
+  id         String        @id @default(uuid())
+  accountId  String
+  day        Int
+  action     String
+  status     String        @default("pending")
+  details    String?
+  executedAt DateTime      @default(now())
+  account    SocialAccount @relation(fields: [accountId], references: [id])
 }
 
 model Analytics {
-  id              String   @id @default(uuid())
+  id              String        @id @default(uuid())
   socialAccountId String
-  followers       Int      @default(0)
-  following       Int      @default(0)
-  postsCount      Int      @default(0)
-  likes           Int      @default(0)
-  comments        Int      @default(0)
-  shares          Int      @default(0)
-  reach           Int      @default(0)
-  impressions     Int      @default(0)
-  engagementRate  Float    @default(0)
-  date            DateTime @default(now())
-
-  account SocialAccount @relation(fields: [socialAccountId], references: [id])
+  followers       Int           @default(0)
+  following       Int           @default(0)
+  postsCount      Int           @default(0)
+  likes           Int           @default(0)
+  comments        Int           @default(0)
+  shares          Int           @default(0)
+  reach           Int           @default(0)
+  impressions     Int           @default(0)
+  engagementRate  Float         @default(0)
+  date            DateTime      @default(now())
+  account         SocialAccount @relation(fields: [socialAccountId], references: [id])
 }
 
 model Draft {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   workspaceId String
   title       String?
   content     String
-  mediaUrls   String   // Serialized JSON array
-  platforms   String   // Serialized JSON array
-  hashtags    String   // Serialized JSON array
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  mediaUrls   String
+  platforms   String
+  hashtags    String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
 }
 
 model ScheduledPost {
   id                 String    @id @default(uuid())
   content            String
-  mediaUrls          String    // Serialized JSON array
-  accountIds         String    // Serialized JSON array
+  mediaUrls          String
+  accountIds         String
   scheduledAt        DateTime
   timezone           String    @default("Asia/Jakarta")
   recurrence         String    @default("none")
@@ -209,73 +185,63 @@ model ScheduledPost {
 }
 
 model Campaign {
-  id                 String    @id @default(uuid())
-  workspaceId        String    @default("workspace-default")
-  name               String
-  type               String    // "follow", "like", "comment", "mixed", "bulk_post"
-  targetType         String    // "hashtag", "username", "post_url"
-  targetValue        String    // e.g. "#marmer" or "@username" or post URL
-  accountIds         String    // Serialized JSON array of assigned account IDs
-  groupIds           String    @default("[]") // Serialized JSON array of selected account group IDs
-  planningSummary    String?   // Serialized JSON campaign planning snapshot
-  status             String    @default("pending") // pending, running, paused, completed, stopped
-
-  // Limits per account per day
-  dailyFollowLimit   Int       @default(25)
-  dailyLikeLimit     Int       @default(65)
-  dailyCommentLimit  Int       @default(12)
-
-  // Progress tracking
-  totalActions       Int       @default(0)
-  completedActions   Int       @default(0)
-  failedActions      Int       @default(0)
-
-  // Scheduling
-  activeHoursStart   String    @default("08:00")
-  activeHoursEnd     String    @default("22:00")
-  timezone           String    @default("Asia/Jakarta")
-  scheduledAt        DateTime?
-  schedulerStatus    CampaignSchedulerStatus @default(PENDING)
-
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
-  completedAt        DateTime?
-
-  isArchived         Boolean   @default(false)
-  archivedAt         DateTime?
-
-  actions            CampaignAction[]
+  id                String                  @id @default(uuid())
+  workspaceId       String                  @default("workspace-default")
+  name              String
+  type              String
+  targetType        String
+  targetValue       String
+  accountIds        String
+  groupIds          String                  @default("[]")
+  planningSummary   String?
+  status            String                  @default("pending")
+  dailyFollowLimit  Int                     @default(25)
+  dailyLikeLimit    Int                     @default(65)
+  dailyCommentLimit Int                     @default(12)
+  totalActions      Int                     @default(0)
+  completedActions  Int                     @default(0)
+  failedActions     Int                     @default(0)
+  activeHoursStart  String                  @default("08:00")
+  activeHoursEnd    String                  @default("22:00")
+  timezone          String                  @default("Asia/Jakarta")
+  scheduledAt       DateTime?
+  schedulerStatus   CampaignSchedulerStatus @default(PENDING)
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+  completedAt       DateTime?
+  isArchived        Boolean                 @default(false)
+  archivedAt        DateTime?
+  actions           CampaignAction[]
 
   @@index([schedulerStatus, scheduledAt])
   @@index([workspaceId, isArchived, createdAt])
 }
 
 model CampaignAction {
-  id           String    @id @default(uuid())
-  campaignId   String
-  accountId    String
-  actionType   String    // "follow", "like", "comment", "post"
-  targetUrl    String?   // specific URL targeted
-  status       String    @default("pending") // pending, queued, running, completed, failed, skipped
-  result       String?   // JSON result details
-  scheduledAt  DateTime?
-  executedAt   DateTime?
-
-  campaign     Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  id          String    @id @default(uuid())
+  campaignId  String
+  accountId   String
+  actionType  String
+  targetUrl   String?
+  status      String    @default("pending")
+  result      String?
+  scheduledAt DateTime?
+  executedAt  DateTime?
+  campaign    Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
 }
 
 model EngagementLog {
-  id           String    @id @default(uuid())
-  accountId    String
-  actionType   String    // "follow", "like", "comment", "browse", "scroll"
-  target       String?   // URL or username targeted
-  status       String    @default("completed") // completed, failed, skipped
-  details      String?
-  executedAt   DateTime  @default(now())
+  id         String   @id @default(uuid())
+  accountId  String
+  actionType String
+  target     String?
+  status     String   @default("completed")
+  details    String?
+  executedAt DateTime @default(now())
 }
 
 model ActivityLog {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   workspaceId String
   type        String
   entityType  String
@@ -287,9 +253,8 @@ model ActivityLog {
   status      String
   message     String
   metadata    Json?
-  createdAt   DateTime @default(now())
-
-  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
 
   @@index([workspaceId, createdAt])
   @@index([workspaceId, type, createdAt])
@@ -297,4 +262,12 @@ model ActivityLog {
   @@index([workspaceId, accountId, createdAt])
   @@index([workspaceId, groupId, createdAt])
   @@index([workspaceId, campaignId, createdAt])
+}
+
+enum CampaignSchedulerStatus {
+  PENDING
+  READY
+  EXECUTED
+  FAILED
+  CANCELLED
 }

@@ -573,8 +573,19 @@ Sound genuine, not robotic. Return ONLY the comment text.`;
           const comment = await this.generateAiComment();
           console.log(`[InstagramWarming] [Comment] Generated: "${comment}"`);
 
-          // Find comment input - modern Instagram selectors
-          const commentArea = await page.$('textarea[aria-label*="comment" i], textarea[placeholder*="comment" i], textarea[aria-label*="Add a comment" i]');
+          // Find comment input - modern Instagram selectors with timeout
+          let commentArea = await trySelectors(page, IG_SELECTORS.commentInput, { timeout: 10000 });
+
+          if (!commentArea) {
+            // Try clicking the comment icon first
+            const commentIcon = await trySelectors(page, IG_SELECTORS.commentIcon, { timeout: 5000 });
+            if (commentIcon) {
+              await clickSvgParent(page, commentIcon);
+              await shortDelay();
+              commentArea = await trySelectors(page, IG_SELECTORS.commentInput, { timeout: 10000 });
+            }
+          }
+
           if (!commentArea) {
             console.log('[InstagramWarming] [Comment] Comment input not found, skipping');
             result.details.push('Comment input not found');
@@ -583,17 +594,20 @@ Sound genuine, not robotic. Return ONLY the comment text.`;
             continue;
           }
 
-          await commentArea.scrollIntoViewIfNeeded();
+          await commentArea.scrollIntoViewIfNeeded().catch(() => {});
           await shortDelay();
-          await commentArea.click();
+          await commentArea.click().catch(() => {});
+          await commentArea.focus().catch(() => {});
           await shortDelay();
           await commentArea.type(comment, { delay: 50 + Math.random() * 100 });
           await delay(1000, 2500);
 
           // Try to find and click Post button
-          const postBtn = await page.$('div[role="button"]:has-text("Post"), button:has-text("Post"), div[role="button"] >> text=/^Post$/');
+          const postBtn = await trySelectors(page, IG_SELECTORS.postBtn, { timeout: 5000 });
           if (postBtn) {
-            await postBtn.click();
+            await postBtn.click().catch(async () => {
+              await page.keyboard.press('Enter');
+            });
             await mediumDelay();
 
             // Verify comment was posted

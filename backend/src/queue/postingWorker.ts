@@ -14,6 +14,18 @@ const connection = {
   port: parseInt(process.env.REDIS_PORT || '6379'),
 };
 
+const HUMAN_CONFIG = {
+  throttle: { min: 30, max: 90 }, // seconds between ANY post globally (delay between different accounts)
+  batchDelay: 300, // 5 minutes between batches
+  maxBatchSize: 5, // Posts per batch before delaying
+  randomize: true
+};
+
+const workerState = {
+  lastGlobalJobTime: 0,
+  batchCount: 0,
+};
+
 const REMOTE_MEDIA_TIMEOUT_MS = 60_000;
 
 function sanitizeUploadFilename(filename: string): string {
@@ -70,7 +82,15 @@ async function resolveRemoteMediaPath(mediaUrl: string): Promise<string> {
   const uploadsDir = path.join(process.cwd(), 'uploads');
   await fs.promises.mkdir(uploadsDir, { recursive: true });
 
-  const targetPath = path.join(uploadsDir, filenameFromMediaUrl(mediaUrl));
+  let targetUrl = mediaUrl;
+  if (targetUrl.includes('comfyui.bresciastone.com')) {
+    const localUrl = process.env.COMFYUI_LOCAL_URL || 'http://127.0.0.1:8188';
+    targetUrl = targetUrl.replace('https://comfyui.bresciastone.com', localUrl)
+                         .replace('http://comfyui.bresciastone.com', localUrl);
+    console.log(`[Worker] Redirecting Cloudflare ComfyUI URL to local network: ${targetUrl}`);
+  }
+
+  const targetPath = path.join(uploadsDir, filenameFromMediaUrl(targetUrl));
   try {
     const existing = await fs.promises.stat(targetPath);
     if (existing.size > 0) return targetPath;
@@ -82,7 +102,7 @@ async function resolveRemoteMediaPath(mediaUrl: string): Promise<string> {
   );
 
   try {
-    await downloadToFile(mediaUrl, tempPath);
+    await downloadToFile(targetUrl, tempPath);
     try {
       await fs.promises.rename(tempPath, targetPath);
     } catch (error: any) {
@@ -164,47 +184,85 @@ export const postingWorker = new Worker<PostJobData>(
       }
     }
 
-    // Resolve media path: use explicit path, or fall back to an uploads filename/URL in mediaUrls.
-    let resolvedMediaPath: string | undefined = rawMediaPath;
-    if (!resolvedMediaPath && mediaUrls?.length > 0) {
-      const first = mediaUrls[0];
-      if (first) {
-        let parsed: URL | undefined;
-        try {
-          parsed = new URL(first);
-        } catch {}
-
-        if (parsed) {
-          const uploadPrefix = '/uploads/';
-          if (parsed.pathname.startsWith(uploadPrefix)) {
-            resolvedMediaPath = path.join(process.cwd(), 'uploads', path.basename(parsed.pathname));
-          } else if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-            resolvedMediaPath = await resolveRemoteMediaPath(first);
-          }
-        } else {
-          const normalized = first.replace(/\\/g, '/');
-          const uploadIndex = normalized.lastIndexOf('/uploads/');
-          const filename = uploadIndex >= 0
-            ? normalized.slice(uploadIndex + '/uploads/'.length)
-            : normalized;
-          resolvedMediaPath = path.isAbsolute(filename)
-            ? filename
-            : path.join(process.cwd(), 'uploads', path.basename(filename));
-        }
+    // ── Human-like Rate Limiting & Throttling ──
+    const now = Date.now();
+    let delayMs = 0;
+    
+    // 1. Throttle: random delay between posts globally
+    if (workerState.lastGlobalJobTime > 0) {
+      const minThrottle = HUMAN_CONFIG.throttle.min * 1000;
+      const maxThrottle = HUMAN_CONFIG.throttle.max * 1000;
+      const randomThrottle = HUMAN_CONFIG.randomize 
+        ? Math.floor(Math.random() * (maxThrottle - minThrottle + 1)) + minThrottle
+        : minThrottle;
+        
+      const timeSinceLastGlobal = now - workerState.lastGlobalJobTime;
+      if (timeSinceLastGlobal < randomThrottle) {
+        delayMs = Math.max(delayMs, randomThrottle - timeSinceLastGlobal);
       }
     }
-    console.log(`[Worker] Media path: ${resolvedMediaPath}`);
 
-    // Mark as running — but don't reset if already progressed
-    const progressStates = ['pending_verify', 'published', 'pending'];
-    if (!progressStates.includes(post.status)) {
-      await prisma.post.update({ where: { id: postId }, data: { status: 'pending' } });
+    // 2. Batch delay: pause for several minutes after processing a batch of posts
+    if (workerState.batchCount >= HUMAN_CONFIG.maxBatchSize) {
+      workerState.batchCount = 0;
+      const batchWait = HUMAN_CONFIG.batchDelay * 1000;
+      delayMs = Math.max(delayMs, batchWait);
+      console.log(`[Worker] Batch limit reached. Applying batch delay of ${HUMAN_CONFIG.batchDelay}s.`);
     }
 
-    const account = await prisma.socialAccount.findUnique({ where: { id: accountId } });
-    if (!account) throw new Error(`Account ${accountId} not found`);
+    if (delayMs > 0) {
+      console.log(`[Worker] Human behavior throttle: sleeping for ${Math.round(delayMs / 1000)}s before processing job ${job.id}`);
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+
+    // Update state to account for this action
+    workerState.lastGlobalJobTime = Date.now();
+    workerState.batchCount += 1;
+
+    let account: any = null;
+    let reachedPendingVerify = false;
 
     try {
+      account = await prisma.socialAccount.findUnique({ where: { id: accountId } });
+      if (!account) throw new Error(`Account ${accountId} not found`);
+
+      // Resolve media path: use explicit path, or fall back to an uploads filename/URL in mediaUrls.
+      let resolvedMediaPath: string | undefined = rawMediaPath;
+      if (!resolvedMediaPath && mediaUrls?.length > 0) {
+        const first = mediaUrls[0];
+        if (first) {
+          let parsed: URL | undefined;
+          try {
+            parsed = new URL(first);
+          } catch {}
+
+          if (parsed) {
+            const uploadPrefix = '/uploads/';
+            if (parsed.pathname.startsWith(uploadPrefix)) {
+              resolvedMediaPath = path.join(process.cwd(), 'uploads', path.basename(parsed.pathname));
+            } else if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+              resolvedMediaPath = await resolveRemoteMediaPath(first);
+            }
+          } else {
+            const normalized = first.replace(/\\/g, '/');
+            const uploadIndex = normalized.lastIndexOf('/uploads/');
+            const filename = uploadIndex >= 0
+              ? normalized.slice(uploadIndex + '/uploads/'.length)
+              : normalized;
+            resolvedMediaPath = path.isAbsolute(filename)
+              ? filename
+              : path.join(process.cwd(), 'uploads', path.basename(filename));
+          }
+        }
+      }
+      console.log(`[Worker] Media path: ${resolvedMediaPath}`);
+
+      // Mark as running — but don't reset if already progressed
+      const progressStates = ['pending_verify', 'published', 'pending'];
+      if (!progressStates.includes(post.status)) {
+        await prisma.post.update({ where: { id: postId }, data: { status: 'pending' } });
+      }
+
       if (account.platform === 'Instagram') {
         // Real Playwright automation
         if (!resolvedMediaPath || !fs.existsSync(resolvedMediaPath)) {
@@ -221,6 +279,7 @@ export const postingWorker = new Worker<PostJobData>(
             results: JSON.stringify({ [accountId]: { status: 'PENDING_VERIFY', username: account.username } }),
           },
         });
+        reachedPendingVerify = true;
         console.log(`[Worker] @${account.username} marked PENDING_VERIFY before Instagram publish verification`);
 
         const result = await instagramPostingService.postToInstagram(accountId, content, mediaPath);
@@ -269,9 +328,7 @@ export const postingWorker = new Worker<PostJobData>(
     } catch (error: any) {
       console.error(`[Worker] Job ${job.id} failed:`, error.message);
 
-      const isPrePublishFailure = error.message?.includes('CAPTION_VERIFY_FAILED')
-        || error.message?.includes('No valid media file path provided')
-        || error.message?.includes('Media file not found');
+      const isPrePublishFailure = !reachedPendingVerify;
 
       if (isPrePublishFailure && job.attemptsMade < (job.opts.attempts || 3) - 1) {
         await prisma.post.update({
@@ -304,7 +361,7 @@ export const postingWorker = new Worker<PostJobData>(
           },
         }).catch(() => {});
         logActivity({
-          workspaceId: account.workspaceId,
+          workspaceId: account?.workspaceId || 'workspace-default',
           type: 'posting',
           entityType: 'post',
           entityId: postId,
@@ -312,12 +369,12 @@ export const postingWorker = new Worker<PostJobData>(
           action: isFailedVerify ? 'publish_unverified' : 'publish_failure',
           status: isFailedVerify ? 'warning' : 'failed',
           message: isFailedVerify
-            ? `Publish unverified for @${account.username} (likely succeeded)`
-            : `Publishing failed for @${account.username}`,
+            ? `Publish unverified for @${account?.username || accountId} (likely succeeded)`
+            : `Publishing failed for @${account?.username || accountId}`,
           metadata: { jobId: job.id, resultStatus, error: error.message },
         });
         logActivity({
-          workspaceId: account.workspaceId,
+          workspaceId: account?.workspaceId || 'workspace-default',
           type: 'queue',
           entityType: 'post',
           entityId: postId,
@@ -333,6 +390,14 @@ export const postingWorker = new Worker<PostJobData>(
   },
   { connection, concurrency: 3 },
 );
+
+postingWorker.on('ready', () => {
+  console.log('[PostingWorker] Worker is ready and listening to automationQueue');
+});
+
+postingWorker.on('error', (err) => {
+  console.error('[PostingWorker] Error:', err);
+});
 
 postingWorker.on('failed', (job, err) => {
   console.error(`[Worker] Job ${job?.id} permanently failed: ${err.message}`);

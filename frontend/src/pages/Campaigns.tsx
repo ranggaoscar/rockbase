@@ -916,11 +916,15 @@ function nextAutomationStatus(status: AutomationSimulationStatus): AutomationSim
 function isAllowedLocalWebhookEndpoint(value: string) {
   try {
     const url = new URL(value)
-    return (
-      url.protocol === 'http:' &&
-      ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) &&
-      url.pathname.length > 1
+    const hn = url.hostname
+    const isLocal = Boolean(
+      ['localhost', '127.0.0.1', '[::1]'].includes(hn) ||
+      hn.startsWith('192.168.') ||
+      hn.startsWith('10.') ||
+      hn.startsWith('172.') ||
+      hn.match(/^100\.(6[4-9]|[7-9]\d|1\d\d|12[0-7])\./) // Tailscale 100.64.0.0/10
     )
+    return (url.protocol === 'http:' || url.protocol === 'https:') && isLocal && url.pathname.length > 1
   } catch {
     return false
   }
@@ -1624,7 +1628,7 @@ export default function Campaigns() {
     loadQueueSummary()
     api.get<{ accounts: Account[] }>('/accounts')
       .then(({ data }) => {
-        setAccounts(data.accounts.filter(a => a.status === 'active'))
+        setAccounts(data.accounts.filter(a => a.status !== 'error'))
         setAccountsLoadError(null)
       })
       .catch((error) => {
@@ -1947,6 +1951,7 @@ export default function Campaigns() {
         headers: {
           'Content-Type': 'application/json',
           'X-Rockbase-Simulation': 'true',
+          'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjY2VlNTAzYy00NGFhLTQyODItYTE3ZS0wOWY5NjA0NWJiZTQiLCJpc3MiOiJuOG4iLCJhdWQiOiJwdWJsaWMtYXBpIiwianRpIjoiNjMzZWNiMzEtNGYwZi00OWMyLWE3ZTYtYjNhOWM3YjU4YzNjIiwiaWF0IjoxNzgwODA3ODk2fQ.amgpYh2fYudLwpsjhFTGqYrh_an2fXPqv7CQrecQIgs',
         },
         body: JSON.stringify(schema),
         signal: controller.signal,

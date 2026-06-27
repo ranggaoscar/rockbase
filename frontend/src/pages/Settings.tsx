@@ -99,6 +99,7 @@ export default function Settings() {
   const [showKey, setShowKey]     = useState(false)
   const [geminiKey, setGeminiKey] = useState('')
   const [dirty, setDirty]         = useState(false)
+  const [clearingQueue, setClearingQueue] = useState(false)
 
   const fetchSettings = useCallback(async () => {
     try {
@@ -117,6 +118,20 @@ export default function Settings() {
   }, [])
 
   useEffect(() => { fetchSettings(); runHealthCheck() }, [fetchSettings, runHealthCheck])
+
+  async function handleClearQueue() {
+    if (!confirm('Are you sure you want to clear the posting queue? All pending, delayed, and failed jobs will be removed. This cannot be undone.')) return
+    setClearingQueue(true)
+    try {
+      const { data } = await api.post('/system/queue/clear')
+      toast.success(`Queue cleared. Removed: ${data.removed?.wait || 0} pending, ${data.removed?.failed || 0} failed.`)
+      runHealthCheck()
+    } catch {
+      toast.error('Failed to clear queue')
+    } finally {
+      setClearingQueue(false)
+    }
+  }
 
   function patch<K extends keyof AppSettings>(key: K, value: AppSettings[K]) {
     setSettings(prev => prev ? { ...prev, [key]: value } : prev)
@@ -320,12 +335,20 @@ export default function Settings() {
                 <span className="text-sm text-muted-foreground">Run health check below</span>
               )}
             </div>
-            <Button size="sm" variant="outline" onClick={runHealthCheck} disabled={loadingHealth}>
-              {loadingHealth
-                ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" /> Checking…</>
-                : <><RefreshCw className="h-3.5 w-3.5" /> Check Now</>
-              }
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" className="text-red-400 hover:text-red-300 hover:bg-red-500/10" onClick={handleClearQueue} disabled={clearingQueue}>
+                {clearingQueue
+                  ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" /> Clearing…</>
+                  : <><Trash2 className="h-3.5 w-3.5" /> Reset Queue</>
+                }
+              </Button>
+              <Button size="sm" variant="outline" onClick={runHealthCheck} disabled={loadingHealth}>
+                {loadingHealth
+                  ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" /> Checking…</>
+                  : <><RefreshCw className="h-3.5 w-3.5" /> Check Now</>
+                }
+              </Button>
+            </div>
           </div>
 
           {/* Check list */}

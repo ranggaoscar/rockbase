@@ -53,7 +53,7 @@ export default function CreateScheduleModal({ open, onClose, onSuccess, editPost
   useEffect(() => {
     if (!open) return
     api.get<{ accounts: Account[] }>('/accounts')
-      .then(({ data }) => setAccounts(data.accounts.filter(a => a.status === 'active')))
+      .then(({ data }) => setAccounts(data.accounts.filter(a => a.status !== 'error')))
       .catch(() => toast.error('Failed to load accounts'))
 
     if (editPost) {

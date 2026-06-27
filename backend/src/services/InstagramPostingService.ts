@@ -75,14 +75,12 @@ export class InstagramPostingService {
       await short();
 
       // 2.5 — Simulate human feed browsing before creating post
-      console.log(`[HumanBehavior] @${account.username} browsing feed before posting...`);
-      await HumanBehavior.humanScroll(page, 2 + Math.floor(Math.random() * 4));
-      await HumanBehavior.mediumPause();
-      // Small chance to interact with feed naturally
-      if (Math.random() < 0.3) {
-        await HumanBehavior.humanScroll(page, 1 + Math.floor(Math.random() * 2));
-        await HumanBehavior.shortPause();
-      }
+      console.log(`[HumanBehavior] @${account.username} starting full warmup browse before posting...`);
+      await HumanBehavior.warmupBrowse(page);
+      
+      // Ensure we are back on the home feed and stable before clicking Create
+      await page.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await HumanBehavior.shortPause();
 
       // 3. Click the "Create" / "+" button in the sidebar
       const createSelectors = [

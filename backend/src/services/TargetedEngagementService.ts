@@ -119,21 +119,21 @@ export class TargetedEngagementService {
   /**
    * Like a specific Instagram post URL with full human flow.
    */
-  public async likePost(accountId: string, postUrl: string): Promise<ActionResult> {
+  public async likePost(accountId: string, postUrl: string, force: boolean = false): Promise<ActionResult> {
     const result: ActionResult = {
       accountId, actionType: 'like', target: postUrl,
       status: 'completed', executedAt: new Date().toISOString(),
     };
 
     // Check active hours
-    if (!HumanBehavior.isActiveHours()) {
+    if (!force && !HumanBehavior.isActiveHours()) {
       result.status = 'skipped';
       result.details = 'Outside active hours (08:00-22:00 WIB)';
       return result;
     }
 
     // Random skip (20% off-actions)
-    if (HumanBehavior.shouldSkip()) {
+    if (!force && HumanBehavior.shouldSkip()) {
       result.status = 'skipped';
       result.details = 'Random skip (off-action)';
       await this._logEngagement(result);
@@ -199,20 +199,20 @@ export class TargetedEngagementService {
   /**
    * Follow a specific Instagram username with full human flow.
    */
-  public async followUser(accountId: string, username: string): Promise<ActionResult> {
+  public async followUser(accountId: string, username: string, force: boolean = false): Promise<ActionResult> {
     const cleanUsername = username.replace('@', '');
     const result: ActionResult = {
       accountId, actionType: 'follow', target: cleanUsername,
       status: 'completed', executedAt: new Date().toISOString(),
     };
 
-    if (!HumanBehavior.isActiveHours()) {
+    if (!force && !HumanBehavior.isActiveHours()) {
       result.status = 'skipped';
       result.details = 'Outside active hours';
       return result;
     }
 
-    if (HumanBehavior.shouldSkip()) {
+    if (!force && HumanBehavior.shouldSkip()) {
       result.status = 'skipped';
       result.details = 'Random skip (off-action)';
       await this._logEngagement(result);
@@ -284,14 +284,14 @@ export class TargetedEngagementService {
   /**
    * Follow a user AND like their recent posts.
    */
-  public async followAndLike(accountId: string, username: string, likeCount: number = 3): Promise<ActionResult> {
+  public async followAndLike(accountId: string, username: string, likeCount: number = 3, force: boolean = false): Promise<ActionResult> {
     const cleanUsername = username.replace('@', '');
     const result: ActionResult = {
       accountId, actionType: 'follow_and_like', target: cleanUsername,
       status: 'completed', executedAt: new Date().toISOString(),
     };
 
-    if (!HumanBehavior.isActiveHours()) {
+    if (!force && !HumanBehavior.isActiveHours()) {
       result.status = 'skipped';
       result.details = 'Outside active hours';
       return result;
@@ -328,7 +328,7 @@ export class TargetedEngagementService {
 
       for (const link of postLinks) {
         if (liked >= likeCount) break;
-        if (HumanBehavior.shouldSkip()) continue;
+        if (!force && HumanBehavior.shouldSkip()) continue;
 
         try {
           await link.click();
@@ -381,19 +381,20 @@ export class TargetedEngagementService {
     postUrl: string,
     customComment?: string,
     aiComment?: boolean,
+    force: boolean = false,
   ): Promise<ActionResult> {
     const result: ActionResult = {
       accountId, actionType: 'comment', target: postUrl,
       status: 'completed', executedAt: new Date().toISOString(),
     };
 
-    if (!HumanBehavior.isActiveHours()) {
+    if (!force && !HumanBehavior.isActiveHours()) {
       result.status = 'skipped';
       result.details = 'Outside active hours';
       return result;
     }
 
-    if (HumanBehavior.shouldSkip()) {
+    if (!force && HumanBehavior.shouldSkip()) {
       result.status = 'skipped';
       result.details = 'Random skip';
       await this._logEngagement(result);
@@ -433,31 +434,35 @@ export class TargetedEngagementService {
       // 5. Pre-engage pause
       await HumanBehavior.preEngagePause();
 
-      // 6. Find and click comment input
-      let commentInput = await trySelectors(page, IG_SELECTORS.commentInput);
+      // 6. Find and click comment input (wait up to 10 seconds for initial render)
+      let commentInput = await trySelectors(page, IG_SELECTORS.commentInput, { timeout: 10000 });
 
       if (!commentInput) {
-        // Try clicking the comment icon first
-        const commentIcon = await trySelectors(page, IG_SELECTORS.commentIcon);
+        // Try clicking the comment icon first to focus/open the box (wait up to 5 seconds)
+        const commentIcon = await trySelectors(page, IG_SELECTORS.commentIcon, { timeout: 5000 });
         if (commentIcon) {
           await clickSvgParent(page, commentIcon);
           await HumanBehavior.shortPause();
-          commentInput = await trySelectors(page, IG_SELECTORS.commentInput);
+          commentInput = await trySelectors(page, IG_SELECTORS.commentInput, { timeout: 10000 });
         }
       }
 
       if (!commentInput) throw new Error('Comment input not found');
 
-      // 7. Click the comment input and type
-      await commentInput.click();
+      // 7. Click, focus, and type comment
+      await commentInput.scrollIntoViewIfNeeded().catch(() => {});
+      await commentInput.click().catch(() => {});
+      await commentInput.focus().catch(() => {});
       await HumanBehavior.shortPause();
       await HumanBehavior.humanType(page, comment);
       await HumanBehavior.mediumPause();
 
       // 8. Submit comment
-      const postBtn = await trySelectors(page, IG_SELECTORS.postBtn);
+      const postBtn = await trySelectors(page, IG_SELECTORS.postBtn, { timeout: 5000 });
       if (postBtn) {
-        await postBtn.click();
+        await postBtn.click().catch(async () => {
+          await page.keyboard.press('Enter');
+        });
       } else {
         await page.keyboard.press('Enter');
       }
@@ -552,21 +557,41 @@ export class TargetedEngagementService {
           if (actions.comment && Math.random() < 0.3) {
             try {
               const comment = await generateAiComment();
-              const commentInput = await page.$('textarea[aria-label="Add a comment…"]');
+              let commentInput = await trySelectors(page, IG_SELECTORS.commentInput, { timeout: 5000 });
+              if (!commentInput) {
+                const commentIcon = await trySelectors(page, IG_SELECTORS.commentIcon, { timeout: 3000 });
+                if (commentIcon) {
+                  await clickSvgParent(page, commentIcon);
+                  await HumanBehavior.shortPause();
+                  commentInput = await trySelectors(page, IG_SELECTORS.commentInput, { timeout: 5000 });
+                }
+              }
+
               if (commentInput) {
-                await commentInput.click();
+                await commentInput.scrollIntoViewIfNeeded().catch(() => {});
+                await commentInput.click().catch(() => {});
+                await commentInput.focus().catch(() => {});
                 await HumanBehavior.shortPause();
                 await HumanBehavior.humanType(page, comment);
                 await HumanBehavior.shortPause();
-                await page.keyboard.press('Enter');
+
+                const postBtn = await trySelectors(page, IG_SELECTORS.postBtn, { timeout: 3000 });
+                if (postBtn) {
+                  await postBtn.click().catch(() => page.keyboard.press('Enter'));
+                } else {
+                  await page.keyboard.press('Enter');
+                }
                 await HumanBehavior.mediumPause();
+
                 results.push({
                   accountId, actionType: 'comment', target: `#${cleanHashtag} post`,
                   status: 'completed', details: `Commented: "${comment}"`,
                   executedAt: new Date().toISOString(),
                 });
               }
-            } catch { /* comment failed, continue */ }
+            } catch (err: any) {
+              console.warn(`[Hashtag Engage] Comment failed for ${accountId}:`, err.message);
+            }
           }
 
           engaged++;
@@ -611,46 +636,96 @@ export class TargetedEngagementService {
     target: string;
     aiComment?: boolean;
     onProgress?: (result: ActionResult) => void;
+    force?: boolean;
+    checkAborted?: () => boolean;
   }): Promise<ActionResult[]> {
-    const { accountIds, actionType, target, aiComment, onProgress } = params;
+    const { accountIds, actionType, target, aiComment, onProgress, force = false, checkAborted } = params;
     const results: ActionResult[] = [];
 
     // Check active hours first
-    await HumanBehavior.waitForActiveHours();
+    if (!force) {
+      await HumanBehavior.waitForActiveHours();
+    }
 
     // Calculate staggered delays
-    const delays = HumanBehavior.calculateStaggerDelays(accountIds.length);
+    const delays = force 
+      ? accountIds.map((_, i) => i * 3000) 
+      : HumanBehavior.calculateStaggerDelays(accountIds.length);
 
-    console.log(`[Engagement] Starting ${actionType} campaign for ${accountIds.length} accounts on target: ${target}`);
-    console.log(`[Engagement] Stagger delays (min): ${delays.map(d => Math.round(d / 60000)).join(', ')}`);
+    console.log(`[Engagement] Starting ${actionType} campaign for ${accountIds.length} accounts on target: ${target} (Force: ${force})`);
+    if (force) {
+      console.log(`[Engagement] Stagger delays (ms): ${delays.join(', ')}`);
+    } else {
+      console.log(`[Engagement] Stagger delays (min): ${delays.map(d => Math.round(d / 60000)).join(', ')}`);
+    }
 
     for (let i = 0; i < accountIds.length; i++) {
       const accountId = accountIds[i];
       const delayMs = delays[i];
 
+      // Check aborted before stagger delay
+      if (checkAborted && checkAborted()) {
+        console.log(`[Engagement] Campaign aborted before account ${i + 1}/${accountIds.length}`);
+        for (let j = i; j < accountIds.length; j++) {
+          results.push({
+            accountId: accountIds[j],
+            actionType,
+            target,
+            status: 'skipped',
+            details: 'Task aborted by user',
+            executedAt: new Date().toISOString(),
+          });
+        }
+        break;
+      }
+
       // Wait for stagger delay
       if (delayMs > 0) {
-        console.log(`[Engagement] Waiting ${Math.round(delayMs / 60000)} min before account ${i + 1}/${accountIds.length}`);
+        if (force) {
+          console.log(`[Engagement] Waiting ${delayMs / 1000}s before account ${i + 1}/${accountIds.length}`);
+        } else {
+          console.log(`[Engagement] Waiting ${Math.round(delayMs / 60000)} min before account ${i + 1}/${accountIds.length}`);
+        }
+        
+        // Wait in small checks or simple delay
         await new Promise(resolve => setTimeout(resolve, delayMs));
       }
 
+      // Check aborted again after stagger delay (just in case)
+      if (checkAborted && checkAborted()) {
+        console.log(`[Engagement] Campaign aborted after delay, before account ${i + 1}/${accountIds.length}`);
+        for (let j = i; j < accountIds.length; j++) {
+          results.push({
+            accountId: accountIds[j],
+            actionType,
+            target,
+            status: 'skipped',
+            details: 'Task aborted by user',
+            executedAt: new Date().toISOString(),
+          });
+        }
+        break;
+      }
+
       // Re-check active hours before each account
-      await HumanBehavior.waitForActiveHours();
+      if (!force) {
+        await HumanBehavior.waitForActiveHours();
+      }
 
       let result: ActionResult;
 
       switch (actionType) {
         case 'like':
-          result = await this.likePost(accountId, target);
+          result = await this.likePost(accountId, target, force);
           break;
         case 'follow':
-          result = await this.followUser(accountId, target);
+          result = await this.followUser(accountId, target, force);
           break;
         case 'comment':
-          result = await this.commentOnPost(accountId, target, undefined, aiComment);
+          result = await this.commentOnPost(accountId, target, undefined, aiComment, force);
           break;
         case 'follow_and_like':
-          result = await this.followAndLike(accountId, target);
+          result = await this.followAndLike(accountId, target, 3, force);
           break;
         default:
           result = {
