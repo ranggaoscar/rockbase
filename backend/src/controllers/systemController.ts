@@ -94,79 +94,133 @@ export const resetQueue = async (_req: Request, res: Response) => {
       host: process.env.REDIS_HOST || '127.0.0.1',
       port: parseInt(process.env.REDIS_PORT || '6379', 10),
     };
+    
+    // 1. Instantiate queues
     const queue = new Queue('automationQueue', { connection });
+    const engQueue = new Queue('engagementQueue', { connection });
+
+    // 2. FORCE-KILL all active browsers & Playwright contexts instantly
+    console.log('[Emergency Reset] Force-killing Playwright browsers and contexts...');
+    const { browserManager } = require('../services/BrowserManager');
+    const { sessionPool } = require('../services/SessionPool');
+    
+    await browserManager.forceKillAll().catch((e: any) => console.error('Error force-killing browsers:', e));
+    await sessionPool.releaseAll().catch((e: any) => console.error('Error releasing session pool:', e));
+
+    // 3. WIPE/DRAIN the BullMQ Queues completely
+    console.log('[Emergency Reset] Draining automationQueue and engagementQueue...');
+    try {
+      await queue.drain(true);
+      const states = ['wait', 'active', 'delayed', 'paused', 'failed', 'completed'] as const;
+      for (const state of states) {
+        await queue.clean(0, 100000, state);
+      }
+    } catch (e: any) {
+      console.error('Error cleaning automationQueue:', e);
+    }
+
+    try {
+      await engQueue.drain(true);
+      const states = ['wait', 'active', 'delayed', 'paused', 'failed', 'completed'] as const;
+      for (const state of states) {
+        await engQueue.clean(0, 100000, state);
+      }
+    } catch (e: any) {
+      console.error('Error cleaning engagementQueue:', e);
+    }
+
+    // 4. Update Database statuses of currently pending/running posts to failed
     const { PrismaClient } = require('@prisma/client');
     const prisma = new PrismaClient();
 
-    // 1. Re-queue pending jobs
-    const pendingPosts = await prisma.post.findMany({
-      where: { status: 'pending' },
-    });
-    
-    let queuedCount = 0;
-    for (const post of pendingPosts) {
-      try {
-        const accountIds = JSON.parse(post.accountIds || '[]');
-        const mediaUrls = JSON.parse(post.mediaUrls || '[]');
-        for (const accountId of accountIds) {
-          await queue.add('postJob', {
-            postId: post.id,
-            accountId: accountId,
-            content: post.content,
-            mediaUrls: mediaUrls,
-          }, {
-            attempts: 3,
-            backoff: { type: 'exponential', delay: 60000 },
-            removeOnComplete: true,
-            removeOnFail: false
-          });
-          queuedCount++;
-        }
-      } catch (err) {
-        console.error(`Failed to re-queue post ${post.id}`, err);
+    // Mark all 'pending' or 'pending_verify' posts as 'failed' (Emergency Stopped)
+    const runningPosts = await prisma.post.findMany({
+      where: {
+        status: { in: ['pending', 'pending_verify'] }
       }
+    });
+
+    let updatedPostsCount = 0;
+    for (const post of runningPosts) {
+      let resultsObj: Record<string, any> = {};
+      try {
+        resultsObj = JSON.parse(post.results || '{}');
+      } catch {}
+
+      // Add emergency stopped note to each account in results
+      let accountIds: string[] = [];
+      try {
+        accountIds = JSON.parse(post.accountIds || '[]');
+      } catch {}
+
+      for (const accountId of accountIds) {
+        if (!resultsObj[accountId] || resultsObj[accountId].status !== 'success') {
+          resultsObj[accountId] = {
+            status: 'failed',
+            error: 'Emergency Stop triggered by User / Operator',
+            message: 'Posting aborted'
+          };
+        }
+      }
+
+      await prisma.post.update({
+        where: { id: post.id },
+        data: {
+          status: 'failed',
+          results: JSON.stringify(resultsObj)
+        }
+      });
+      updatedPostsCount++;
     }
 
-    // 2. Mark old pending_verify as failed
-    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-    const updatedVerify = await prisma.post.updateMany({
-      where: { 
-        status: 'pending_verify',
-        createdAt: { lt: oneHourAgo }
-      },
-      data: { status: 'failed' }
-    });
-
-    // 3. Mark stale scheduled as failed
-    const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    // 5. Clean stale scheduled posts (stale = schedule date is more than 1 day old and not published)
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const updatedScheduled = await prisma.post.updateMany({
-      where: { 
+      where: {
         status: 'scheduled',
-        scheduleAt: { lt: oneWeekAgo }
+        scheduleAt: { lt: oneDayAgo }
       },
-      data: { status: 'failed' }
+      data: {
+        status: 'failed'
+      }
     });
 
-    // 4. Delete failed/warning activity logs of type posting or queue
+    // 6. Log the emergency action in activity log
+    const { logActivity } = require('../services/ActivityLogService');
+    await logActivity({
+      workspaceId: 'workspace-default',
+      type: 'queue',
+      entityType: 'queue',
+      entityId: 'emergency-reset',
+      action: 'emergency_reset_triggered',
+      status: 'warning',
+      message: '🚨 Emergency Stop & Reset triggered! All pending and running posting processes have been force-aborted and queues cleared.',
+      metadata: { abortedPostsCount: updatedPostsCount }
+    }).catch((e: any) => console.error('Error logging activity:', e));
+
+    // 7. Delete warning and failed activity logs of type posting or queue to clean up timeline if they want,
+    // but keep our emergency reset log visible!
     await prisma.activityLog.deleteMany({
       where: {
         type: { in: ['posting', 'queue'] },
-        status: { in: ['failed', 'warning'] }
+        status: { in: ['failed', 'warning'] },
+        entityId: { not: 'emergency-reset' }
       }
     });
 
     await queue.close();
+    await engQueue.close();
     await prisma.$disconnect();
 
     return res.status(200).json({
-      message: 'Queue reset successfully.',
-      requeuedPending: queuedCount,
-      markedFailedPendingVerify: updatedVerify.count,
-      markedFailedScheduled: updatedScheduled.count
+      message: '🚨 Emergency Stop and Queue Wiped successfully! All active automation browsers have been killed and queues drained.',
+      abortedPosts: updatedPostsCount,
+      markedFailedStaleScheduled: updatedScheduled.count
     });
+
   } catch (error) {
     return res.status(500).json({
-      message: 'Failed to reset queue.',
+      message: 'Failed to perform emergency stop and queue reset.',
       error: error instanceof Error ? error.message : String(error),
     });
   }

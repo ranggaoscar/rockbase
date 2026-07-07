@@ -1,6 +1,7 @@
 import { Worker, Job } from 'bullmq';
 import { PrismaClient } from '@prisma/client';
 import { instagramPostingService } from '../services/InstagramPostingService';
+import { tiktokPostingService } from '../services/TikTokPostingService';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as https from 'https';
@@ -320,9 +321,104 @@ export const postingWorker = new Worker<PostJobData>(
 
         console.log(`[Worker] Published to Instagram @${account.username}`);
 
+      } else if (account.platform === 'TikTok' || account.platform === 'Tiktok') {
+        // TikTok automation via TikTok Studio
+        if (!resolvedMediaPath || !fs.existsSync(resolvedMediaPath)) {
+          throw new Error('No valid media file path provided. TikTok posts require a video.');
+        }
+
+        // narrowed: resolvedMediaPath is string from here
+        const mediaPath: string = resolvedMediaPath;
+
+        await prisma.post.update({
+          where: { id: postId },
+          data: {
+            status: 'pending_verify',
+            results: JSON.stringify({ [accountId]: { status: 'PENDING_VERIFY', username: account.username } }),
+          },
+        });
+        reachedPendingVerify = true;
+        console.log(`[Worker] @${account.username} marked PENDING_VERIFY before TikTok publish verification`);
+
+        const result = await tiktokPostingService.postToTikTok(accountId, content, mediaPath);
+
+        if (result.status !== 'success') throw new Error(result.error || 'TikTok posting failed');
+
+        await prisma.post.update({
+          where: { id: postId },
+          data: {
+            status: 'published',
+            postedAt: new Date(result.postedAt || Date.now()),
+            results: JSON.stringify({ ...existingResults, [accountId]: { status: 'success', postedAt: result.postedAt } }),
+          },
+        });
+
+        logActivity({
+          workspaceId: account.workspaceId,
+          type: 'posting',
+          entityType: 'post',
+          entityId: postId,
+          accountId,
+          action: 'publish_success',
+          status: 'success',
+          message: `Published TikTok post for @${account.username}`,
+          metadata: { jobId: job.id, postedAt: result.postedAt, platform: 'TikTok' },
+        });
+        logActivity({
+          workspaceId: account.workspaceId,
+          type: 'queue',
+          entityType: 'post',
+          entityId: postId,
+          accountId,
+          action: 'job_success',
+          status: 'success',
+          message: `Posting queue job ${job.id} completed`,
+          metadata: { jobId: job.id, platform: 'TikTok' },
+        });
+
+        console.log(`[Worker] Published to TikTok @${account.username}`);
+
       } else {
-        // Platform not yet automated - mark as failed with clear message
-        throw new Error(`Platform "${account.platform}" automation not yet implemented`);
+        // Platform not yet automated — graceful skip instead of hard fail
+        console.warn(`[Worker] Platform "${account.platform}" automation not yet implemented — skipping job ${job.id} for @${account.username} gracefully`);
+        
+        existingResults[accountId] = {
+          status: 'skipped',
+          reason: `platform_not_automated:${account.platform}`,
+          message: `Platform "${account.platform}" posting is not yet implemented`,
+        };
+        await prisma.post.update({
+          where: { id: postId },
+          data: {
+            status: 'skipped',
+            results: JSON.stringify(existingResults),
+          },
+        }).catch(() => {});
+
+        logActivity({
+          workspaceId: account?.workspaceId || 'workspace-default',
+          type: 'posting',
+          entityType: 'post',
+          entityId: postId,
+          accountId,
+          action: 'platform_not_implemented',
+          status: 'skipped',
+          message: `Skipped @${account.username} — platform "${account.platform}" not yet automated`,
+          metadata: { jobId: job.id, platform: account.platform },
+        });
+        logActivity({
+          workspaceId: account?.workspaceId || 'workspace-default',
+          type: 'queue',
+          entityType: 'post',
+          entityId: postId,
+          accountId,
+          action: 'job_skipped_platform',
+          status: 'skipped',
+          message: `Posting queue job ${job.id} skipped — platform not implemented`,
+          metadata: { jobId: job.id, platform: account.platform },
+        });
+
+        return { status: 'skipped', reason: `platform_${account.platform}_not_implemented` };
       }
 
     } catch (error: any) {

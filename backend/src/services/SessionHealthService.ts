@@ -47,8 +47,8 @@ export class SessionHealthService {
       return this.persistResult(account.id, account.workspaceId, account.username, 'PAUSED', 'Account is paused/idle', checkedAt);
     }
 
-    if (account.platform !== 'Instagram') {
-      return this.persistResult(account.id, account.workspaceId, account.username, 'UNKNOWN', 'Session checks currently support Instagram only', checkedAt);
+    if (account.platform !== 'Instagram' && account.platform !== 'TikTok' && account.platform !== 'Tiktok') {
+      return this.persistResult(account.id, account.workspaceId, account.username, 'UNKNOWN', 'Session checks currently support Instagram and TikTok only', checkedAt);
     }
 
     if (!account.cookies) {

@@ -78,6 +78,7 @@ async function filterPostableAccounts(accountIds: string[], allowUnhealthy: bool
     select: {
       id: true,
       username: true,
+      platform: true,
       sessionHealth: true,
       sessionHealthReason: true,
       sessionHealthCheckedAt: true,
@@ -89,6 +90,20 @@ async function filterPostableAccounts(accountIds: string[], allowUnhealthy: bool
 
   for (const accountId of uniqueIds) {
     const account = byId.get(accountId);
+
+    // Block unsupported platforms (only Instagram + TikTok are automated now)
+        if (account && account.platform !== 'Instagram' && account.platform !== 'TikTok' && account.platform !== 'Tiktok') {
+          skippedAccounts.push({
+            accountId,
+            username: account.username || accountId,
+            platform: account.platform,
+            health: 'N/A',
+            reason: `Platform "${account.platform}" posting automation is not yet implemented`,
+            checkedAt: null,
+          });
+          continue;
+        }
+
     const health = account?.sessionHealth || 'UNKNOWN';
     if (account && sessionHealthService.isPostableHealth(health)) {
       postableAccountIds.push(accountId);

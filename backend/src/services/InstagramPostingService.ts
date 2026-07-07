@@ -93,42 +93,34 @@ export class InstagramPostingService {
       let clicked = false;
       for (const sel of createSelectors) {
         const btn = await page.$(sel);
-        if (btn) {
-          console.log(`[Instagram] Found Create button: ${sel}`);
-          // Dismiss potential modals first
-          const notNowBtn = await page.$('button:has-text("Not Now"), button:has-text("Not now")').catch(() => null);
-          if (notNowBtn) {
-            console.log('[Instagram] Dismissing modal before Create');
-            await this.robustClick(page, notNowBtn);
-          }
+                if (btn) {
+                  console.log(`[Instagram] Found Create button: ${sel}`);
+                  // Dismiss potential modals first
+                  await this.dismissCreatePostOverlays(page).catch(() => null);
+                  await this.robustClick(page, sel);
+                  clicked = true;
+                  break;
+                }
+              }
+              if (!clicked) throw new Error('Could not find the Create/New Post button');
 
-          await this.robustClick(page, sel);
-          clicked = true;
-          break;
-        }
-      }
-      if (!clicked) throw new Error('Could not find the Create/New Post button');
+              await medium();
 
-      await medium();
+              // 3.5 Double check for "Not Now" / "Video posts are now shared as reels" again
+              await this.dismissCreatePostOverlays(page).catch(() => null);
 
-      // 3.5 Double check for "Not Now" again
-      const notNowBtnAfter = await page.$('button:has-text("Not Now"), button:has-text("Not now")').catch(() => null);
-      if (notNowBtnAfter) {
-        console.log('[Instagram] Dismissing modal after Create');
-        await this.robustClick(page, notNowBtnAfter);
-      }
-
-      // 3.6 Click "Post" submenu
-      console.log('[Instagram] Waiting for Post submenu...');
-      try {
-        const postBtn = page.locator('span, div, a').filter({ hasText: /^Post$/ }).first();
-        await postBtn.waitFor({ state: 'attached', timeout: 10000 });
-        console.log('[Instagram] Found Post submenu, clicking...');
-        await this.robustClick(page, postBtn);
-        await medium();
-      } catch (err) {
-        console.log('[Instagram] Warning: Could not trigger Post submenu, attempting to proceed...');
-      }
+              // 3.6 Click "Post" submenu
+              console.log('[Instagram] Waiting for Post submenu...');
+              try {
+                const postBtn = page.locator('span, div, a').filter({ hasText: /^Post$/ }).first();
+                await postBtn.waitFor({ state: 'attached', timeout: 10000 });
+                console.log('[Instagram] Found Post submenu, clicking...');
+                await this.robustClick(page, postBtn);
+                await medium();
+                await this.dismissCreatePostOverlays(page).catch(() => null);
+              } catch (err) {
+                console.log('[Instagram] Warning: Could not trigger Post submenu, attempting to proceed...');
+              }
 
       // 4. Handle "Select from computer" file upload dialog
       console.log('[Instagram] Waiting for "Select from computer" button...');
@@ -286,6 +278,75 @@ export class InstagramPostingService {
         '--disable-features=IsolateOrigins,site-per-process',
       ],
     });
+  }
+
+  /**
+   * Dismiss Instagram overlays that can block the create-post flow:
+   *  - "Not Now" / "Not now" dialogs (login, notifications, etc.)
+   *  - "Video posts are now shared as reels" policy modal (Instagram 2025)
+   *  - Generic "OK" acknowledgement buttons
+   */
+  private async dismissCreatePostOverlays(page: Page): Promise<boolean> {
+    const targets: Array<{ selector: string; label: string }> = [
+      { selector: 'button:has-text("Not Now")', label: 'Not Now' },
+      { selector: 'button:has-text("Not now")', label: 'Not now' },
+      { selector: 'button:has-text("OK")', label: 'OK' },
+      { selector: 'button:has-text("Ok")', label: 'Ok' },
+      { selector: 'button:has-text("Got it")', label: 'Got it' },
+      { selector: 'button:has-text("Allow")', label: 'Allow' },
+      { selector: 'button:has-text("Dismiss")', label: 'Dismiss' },
+    ];
+
+    let dismissedAny = false;
+    for (const target of targets) {
+      try {
+        const handle = await page.$(target.selector);
+        if (!handle) continue;
+        const visible = await handle.isVisible().catch(() => false);
+        if (!visible) continue;
+        console.log(`[Instagram] Dismissing overlay button: ${target.label}`);
+        await handle.click({ timeout: 3000 }).catch(async () => {
+          await page.evaluate((sel) => {
+            const btn = document.querySelector(sel) as HTMLButtonElement | null;
+            if (btn) btn.click();
+          }, target.selector).catch(() => null);
+        });
+        dismissedAny = true;
+        await delay(700, 1400);
+      } catch {
+        // continue to next target
+      }
+    }
+
+    // Detect the "Video posts are now shared as reels" modal by text
+    try {
+      const modal = await page.evaluate(() => {
+        const dialogs = Array.from(document.querySelectorAll('[role="dialog"], div'))
+          .filter((el) => (el as HTMLElement).offsetParent !== null);
+        for (const dialog of dialogs) {
+          const text = (dialog.textContent || '').toLowerCase();
+          if (text.includes('video posts are now shared as reels')
+              || (text.includes('original audio') && text.includes('remix') && text.length < 1500)) {
+            const okBtn = Array.from(dialog.querySelectorAll('button'))
+              .find((b) => /^ok$/i.test((b.textContent || '').trim()));
+            if (okBtn) {
+              okBtn.click();
+              return true;
+            }
+          }
+        }
+        return false;
+      });
+      if (modal) {
+        console.log('[Instagram] Dismissed "Video posts are now shared as reels" modal via text scan');
+        dismissedAny = true;
+        await delay(700, 1400);
+      }
+    } catch {
+      // ignore
+    }
+
+    return dismissedAny;
   }
 
   private async insertCaptionIntoActiveCreateModal(

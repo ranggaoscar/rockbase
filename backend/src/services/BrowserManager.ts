@@ -188,6 +188,7 @@ export class BrowserManager {
       }
 
       await prisma.socialAccount.update({
+
         where: { id: accountId },
         data: { status }
       });
@@ -200,6 +201,23 @@ export class BrowserManager {
     }
 
     return status;
+  }
+
+  /**
+   * Force-closes the entire browser instance and all active contexts.
+   */
+  public async forceKillAll(): Promise<void> {
+    console.log(`[BrowserManager] Force-killing browser and all active contexts...`);
+    this.activeContexts.clear();
+    if (this.browser) {
+      try {
+        await this.browser.close();
+      } catch (err) {
+        console.error(`[BrowserManager] Error during browser force-close:`, err);
+      } finally {
+        this.browser = null;
+      }
+    }
   }
 
   /**
