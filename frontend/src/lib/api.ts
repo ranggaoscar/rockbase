@@ -55,6 +55,10 @@ export const accountsApi = {
   delete: (id: string) => api.delete(`/accounts/${id}`),
   startSession: (id: string) => api.post(`/accounts/${id}/start-session`),
   stopSession: (id: string) => api.post(`/accounts/${id}/stop-session`),
+  importCookies: (id: string, cookies: any) => api.post(`/accounts/${id}/cookies`, { cookies }),
+  exportCookies: (id: string) => api.get(`/accounts/${id}/cookies`),
+  importCookiesBulk: (accounts: { id?: string; username?: string; cookies: any }[]) =>
+    api.post('/accounts/import-cookies-bulk', { accounts }),
 }
 
 export const accountGroupsApi = {

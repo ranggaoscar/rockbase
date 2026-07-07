@@ -304,4 +304,158 @@ router.post('/:id/stop-session', async (req: AuthRequest, res: Response) => {
   }
 });
 
+// ── Cookie Paste ─────────────────────────────────────────────────────────────
+// POST /api/accounts/:id/cookies — import cookies for an account (no Playwright needed)
+router.post('/:id/cookies', async (req: AuthRequest, res: Response) => {
+  const id = String(req.params.id);
+  const { cookies } = req.body;
+
+  if (!cookies) {
+    res.status(400).json({ error: 'cookies is required' });
+    return;
+  }
+
+  try {
+    // Support both JSON array and plain string formats
+    let cookiesStr: string;
+    if (typeof cookies === 'string') {
+      cookiesStr = cookies;
+    } else if (Array.isArray(cookies)) {
+      cookiesStr = JSON.stringify(cookies);
+    } else if (typeof cookies === 'object') {
+      cookiesStr = JSON.stringify(cookies);
+    } else {
+      res.status(400).json({ error: 'cookies must be a string or JSON array' });
+      return;
+    }
+
+    // Encrypt cookies before storing
+    const encrypted = encrypt(cookiesStr);
+
+    await prisma.socialAccount.update({
+      where: { id },
+      data: {
+        cookies: encrypted,
+        sessionHealth: 'HEALTHY',
+        sessionHealthReason: 'Cookies imported manually',
+        sessionHealthCheckedAt: new Date(),
+        status: 'active',
+        lastActive: new Date(),
+      },
+    });
+
+    res.json({
+      success: true,
+      message: 'Cookies imported successfully. Account is now active.',
+    });
+  } catch (err: any) {
+    console.error('Cookie import error:', err);
+    res.status(500).json({ error: 'Failed to import cookies', details: err.message });
+  }
+});
+
+// POST /api/accounts/import-cookies-bulk — bulk import cookies via JSON
+router.post('/import-cookies-bulk', async (req: AuthRequest, res: Response) => {
+  const { accounts } = req.body;
+
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    res.status(400).json({ error: 'accounts array is required' });
+    return;
+  }
+
+  let successCount = 0;
+  const errors: { username?: string; error: string }[] = [];
+
+  for (const entry of accounts) {
+    try {
+      const account = await prisma.socialAccount.findFirst({
+        where: {
+          OR: [
+            { id: entry.id || '' },
+            { username: entry.username || '' },
+          ],
+        },
+      });
+
+      if (!account) {
+        errors.push({ username: entry.username || entry.id, error: 'Account not found' });
+        continue;
+      }
+
+      if (!entry.cookies) {
+        errors.push({ username: account.username, error: 'No cookies provided' });
+        continue;
+      }
+
+      let cookiesStr: string;
+      if (typeof entry.cookies === 'string') {
+        cookiesStr = entry.cookies;
+      } else {
+        cookiesStr = JSON.stringify(entry.cookies);
+      }
+
+      const encrypted = encrypt(cookiesStr);
+
+      await prisma.socialAccount.update({
+        where: { id: account.id },
+        data: {
+          cookies: encrypted,
+          sessionHealth: 'HEALTHY',
+          sessionHealthReason: 'Cookies imported manually',
+          sessionHealthCheckedAt: new Date(),
+          status: 'active',
+          lastActive: new Date(),
+        },
+      });
+
+      successCount++;
+    } catch (err: any) {
+      errors.push({ username: entry.username || entry.id, error: err.message });
+    }
+  }
+
+  res.json({
+    success: successCount > 0,
+    message: `Bulk import complete: ${successCount} success, ${errors.length} failed.`,
+    successCount,
+    errorCount: errors.length,
+    errors: errors.slice(0, 50),
+  });
+});
+
+// GET /api/accounts/:id/cookies — export cookies (for backup / export)
+router.get('/:id/cookies', async (req: AuthRequest, res: Response) => {
+  const id = String(req.params.id);
+  try {
+    const account = await prisma.socialAccount.findUnique({ where: { id } });
+    if (!account) {
+      res.status(404).json({ error: 'Account not found' });
+      return;
+    }
+
+    if (!account.cookies) {
+      res.status(404).json({ error: 'No cookies stored for this account' });
+      return;
+    }
+
+    let decrypted: string;
+    try {
+      decrypted = decrypt(account.cookies);
+    } catch {
+      decrypted = account.cookies; // fallback if not encrypted
+    }
+
+    // Try to parse as JSON for pretty display
+    try {
+      const parsed = JSON.parse(decrypted);
+      res.json({ success: true, cookies: parsed });
+    } catch {
+      res.json({ success: true, cookies: decrypted });
+    }
+  } catch (err: any) {
+    console.error('Cookie export error:', err);
+    res.status(500).json({ error: 'Failed to export cookies' });
+  }
+});
+
 export default router;

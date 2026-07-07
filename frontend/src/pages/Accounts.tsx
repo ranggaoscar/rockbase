@@ -1,8 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import {
-  Search, Upload, Plus, Trash2, Play, Square,
+import { useCallback, useEffect, useMemo, useState } from 'react'import { Search, Upload, Plus, Trash2, Play, Square,
   Instagram, Music2, MoreHorizontal, Edit2, ChevronDown,
-  Users, ShieldCheck, RefreshCw, KeyRound,
+  Users, ShieldCheck, RefreshCw, KeyRound, Cookie,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -23,6 +21,7 @@ import AddAccountModal from '@/components/farm/AddAccountModal'
 import EditAccountModal from '@/components/accounts/EditAccountModal'
 import ImportCSVModal from '@/components/accounts/ImportCSVModal'
 import LoginHelperModal from '@/components/accounts/LoginHelperModal'
+import CookiePasteModal from '@/components/accounts/CookiePasteModal'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 interface Account {
@@ -107,6 +106,7 @@ export default function Accounts() {
   const [sessionHealthFilter, setSessionHealthFilter] = useState('all')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [loginHelperTarget, setLoginHelperTarget] = useState<Account | null>(null)
+  const [cookiePasteTarget, setCookiePasteTarget] = useState<Account | null>(null)
   const [editTarget, setEditTarget] = useState<Account | null>(null)
   const [showAdd, setShowAdd] = useState(false)
   const [showImport, setShowImport] = useState(false)
@@ -784,6 +784,9 @@ export default function Accounts() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => setCookiePasteTarget(account)}>
+                          <Cookie className="h-3.5 w-3.5 text-yellow-400" /> Import Cookies
+                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => setLoginHelperTarget(account)}>
                           <KeyRound className="h-3.5 w-3.5" /> Manual Login Helper
                         </DropdownMenuItem>
@@ -820,6 +823,7 @@ export default function Accounts() {
       <AddAccountModal open={showAdd} onClose={() => setShowAdd(false)} onSuccess={fetchAccounts} />
       <EditAccountModal account={editTarget} open={!!editTarget} onClose={() => setEditTarget(null)} onSuccess={fetchAccounts} />
       <ImportCSVModal open={showImport} onClose={() => setShowImport(false)} onSuccess={fetchAccounts} />
+      <CookiePasteModal account={cookiePasteTarget} open={!!cookiePasteTarget} onClose={() => setCookiePasteTarget(null)} onSuccess={fetchAccounts} />
       <LoginHelperModal account={loginHelperTarget} open={!!loginHelperTarget} onClose={() => setLoginHelperTarget(null)} />
     </div>
   )
