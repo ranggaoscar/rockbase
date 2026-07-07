@@ -1,0 +1,102 @@
+# ── ROCK BASE — Docker Compose ──────────────────────────────────────
+# Start with:  docker compose up -d
+# Stop with:   docker compose down
+# Logs:       docker compose logs -f
+#
+# Default login: admin@rockbase.com / Admin@123
+# Dashboard:     http://localhost:5173
+
+version: "3.9"
+
+services:
+
+  # ── Redis ──────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: rockbase-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Backend API ────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: rockbase-api
+    restart: unless-stopped
+    ports:
+      - "3010:3010"
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file:
+      - backend/.env
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - FRONTEND_URL=http://localhost:5173
+      - BACKEND_URL=http://localhost:3010
+      - PORT=3010
+      - RUN_WORKERS_SEPARATELY=false
+      - NODE_ENV=production
+    volumes:
+      - backend-uploads:/app/backend/uploads
+      - backend-backups:/app/backend/backups
+      - backend-logs:/app/backend/logs
+      - backend-db:/app/backend/prisma
+
+  # ── Backend Worker (optional - run separately for production) ────
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: rockbase-worker
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file:
+      - backend/.env
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - FRONTEND_URL=http://localhost:5173
+      - BACKEND_URL=http://backend:3010
+      - PORT=3011
+      - RUN_WORKERS_SEPARATELY=true
+      - NODE_ENV=production
+    command: npm run worker
+    volumes:
+      - backend-uploads:/app/backend/uploads
+      - backend-backups:/app/backend/backups
+      - backend-logs:/app/backend/logs
+      - backend-db:/app/backend/prisma
+    profiles:
+      - worker  # Start with: docker compose --profile worker up -d
+
+  # ── Frontend ───────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: rockbase-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  redis-data:
+  backend-uploads:
+  backend-backups:
+  backend-logs:
+  backend-db:

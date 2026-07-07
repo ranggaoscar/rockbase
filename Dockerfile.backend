@@ -1,0 +1,32 @@
+# ── ROCK BASE Backend ───────────────────────────────────────────────
+FROM node:20-slim AS base
+
+# Install Playwright system dependencies + Chromium
+RUN apt-get update && apt-get install -y \
+    wget curl gnupg ca-certificates \
+    libnss3 libnspr4 libatk-bridge2.0-0 libdrm2 \
+    libxkbcommon0 libxcomposite1 libxdamage1 \
+    libxrandr2 libgbm1 libpango-1.0-0 libcairo2 \
+    libasound2 libatspi2.0-0 libwayland-client0 \
+    libxshmfence1 libglib2.0-0 \
+    --no-install-recommends && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app/backend
+
+# Install backend dependencies
+COPY backend/package.json backend/package-lock.json ./
+RUN npm ci --only=production || npm install
+
+# Install Playwright Chromium
+RUN npx playwright install chromium
+
+# Copy backend source
+COPY backend/ ./
+
+# Generate Prisma client
+RUN npx prisma generate
+
+EXPOSE 3010
+
+CMD ["npm", "run", "dev"]
