@@ -10,6 +10,10 @@ import * as path from 'path';
 
 dotenv.config();
 
+// ── Initialize structured logging ──────────────────────────────────
+import { logger } from './services/logger';
+logger.info('Server starting up', { nodeVersion: process.version, platform: process.platform });
+
 const app = express();
 const port = process.env.PORT || 3010;
 
@@ -231,6 +235,7 @@ async function cleanStaleQueueOnStartup() {
 export { STARTUP_SESSION_ID };
 
 server.listen(port, async () => {
+  logger.info(`ROCK BASE backend running on port ${port}`, { sessionId: STARTUP_SESSION_ID });
   console.log(`ROCK BASE backend running on port ${port}`);
   console.log(`Session ID: ${STARTUP_SESSION_ID}`);
   console.log(`Frontend expected at: ${process.env.FRONTEND_URL || 'http://localhost:5173'}`);
