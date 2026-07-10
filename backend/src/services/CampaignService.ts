@@ -784,6 +784,19 @@ export class CampaignService {
   }
 
   /**
+   * Get count of schedulable campaigns (PENDING with scheduledAt in the future).
+   * Used by CampaignSchedulerService to skip expensive polling when no campaigns exist.
+   */
+  public async getSchedulableCampaignCount(): Promise<number> {
+    return prisma.campaign.count({
+      where: {
+        schedulerStatus: 'PENDING' as any,
+        scheduledAt: { not: null },
+      },
+    });
+  }
+
+  /**
    * Get actions log for a campaign.
    */
   public async getCampaignActions(campaignId: string): Promise<any[]> {

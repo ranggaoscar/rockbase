@@ -186,17 +186,22 @@ export const resetQueue = async (_req: Request, res: Response) => {
     });
 
     // 6. Log the emergency action in activity log
+    // Note: logActivity is synchronous (fire-and-forget), no await needed
     const { logActivity } = require('../services/ActivityLogService');
-    await logActivity({
-      workspaceId: 'workspace-default',
-      type: 'queue',
-      entityType: 'queue',
-      entityId: 'emergency-reset',
-      action: 'emergency_reset_triggered',
-      status: 'warning',
-      message: '🚨 Emergency Stop & Reset triggered! All pending and running posting processes have been force-aborted and queues cleared.',
-      metadata: { abortedPostsCount: updatedPostsCount }
-    }).catch((e: any) => console.error('Error logging activity:', e));
+    try {
+      logActivity({
+        workspaceId: 'workspace-default',
+        type: 'queue',
+        entityType: 'queue',
+        entityId: 'emergency-reset',
+        action: 'emergency_reset_triggered',
+        status: 'warning',
+        message: '🚨 Emergency Stop & Reset triggered! All pending and running posting processes have been force-aborted and queues cleared.',
+        metadata: { abortedPostsCount: updatedPostsCount }
+      });
+    } catch (e: any) {
+      console.error('Error logging activity:', e);
+    }
 
     // 7. Delete warning and failed activity logs of type posting or queue to clean up timeline if they want,
     // but keep our emergency reset log visible!

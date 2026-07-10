@@ -14,6 +14,17 @@ dotenv.config();
 import { logger } from './services/logger';
 logger.info('Server starting up', { nodeVersion: process.version, platform: process.platform });
 
+// ── GLOBAL ERROR HANDLERS — Prevent process crash ──────────────────
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught Exception — server will try to recover:', err);
+  logger.error('Uncaught Exception', { error: err.message, stack: err.stack });
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[FATAL] Unhandled Rejection — server will try to recover:', reason);
+  logger.error('Unhandled Rejection', { reason: String(reason) });
+});
+
 const app = express();
 const port = process.env.PORT || 3010;
 
@@ -253,3 +264,36 @@ browserManager.initBrowser().then(() => {
 }).catch((err: any) => {
   console.error('Failed to initialize Playwright:', err);
 });
+
+// ── Graceful Shutdown ──────────────────────────────────────────────
+function gracefulShutdown(signal: string) {
+  console.log(`[Shutdown] Received ${signal}. Cleaning up...`);
+  logger.info('Server shutting down', { signal });
+
+  // Stop campaign scheduler
+  campaignSchedulerService.stop();
+
+  // Close socket.io
+  server.close(() => {
+    console.log('[Shutdown] HTTP server closed.');
+  });
+
+  // Force-kill all browser contexts
+  browserManager.forceKillAll().catch((e: any) => {
+    console.error('[Shutdown] Error killing browsers:', e);
+  });
+
+  // Release session pool
+  sessionPool.releaseAll().catch((e: any) => {
+    console.error('[Shutdown] Error releasing session pool:', e);
+  });
+
+  // Exit after timeout
+  setTimeout(() => {
+    console.log('[Shutdown] Forcing exit after cleanup timeout.');
+    process.exit(0);
+  }, 10000).unref();
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
