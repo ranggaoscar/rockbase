@@ -78,6 +78,51 @@ router.post('/check-session-bulk', async (req: AuthRequest, res: Response) => {
   }
 });
 
+// POST /api/accounts/check-session-all?platform=Instagram
+// Checks all accounts for a given platform. Returns a streaming-style
+// result array — frontend can poll status during the bulk run.
+router.post('/check-session-all', async (req: AuthRequest, res: Response) => {
+  try {
+    const platform = String(req.query.platform || req.body?.platform || 'Instagram');
+    const accounts = await prisma.socialAccount.findMany({
+      where: { platform, status: { not: 'idle' } },
+      select: { id: true },
+    });
+    const accountIds = accounts.map((a) => a.id);
+    if (accountIds.length === 0) {
+      res.json({ checked: 0, results: [], summary: await sessionHealthService.getSummary() });
+      return;
+    }
+    if (accountIds.length > MAX_BULK_SESSION_CHECK) {
+      res.status(400).json({ error: `Total ${platform} accounts (${accountIds.length}) exceeds bulk limit (${MAX_BULK_SESSION_CHECK}). Use check-session-bulk with accountIds instead.` });
+      return;
+    }
+    const results = await sessionHealthService.checkBulk(accountIds);
+    res.json({
+      checked: results.length,
+      results,
+      summary: await sessionHealthService.getSummary(),
+    });
+  } catch (err: any) {
+    console.error('Bulk-all session health check error:', err);
+    res.status(500).json({ error: 'Failed to check sessions', details: err.message });
+  }
+});
+
+// POST /api/accounts/session-sweep?force=true
+// Triggers the daily health-check sweep manually. Returns the sweep result.
+router.post('/session-sweep', async (req: AuthRequest, res: Response) => {
+  try {
+    const { sessionHealthScheduler } = await import('../services/SessionHealthScheduler');
+    const force = req.query.force === 'true' || req.body?.force === true;
+    const result = await sessionHealthScheduler.runSweep(force);
+    res.json({ ...result, summary: await sessionHealthService.getSummary() });
+  } catch (err: any) {
+    console.error('Session sweep error:', err);
+    res.status(500).json({ error: 'Failed to run session sweep', details: err.message });
+  }
+});
+
 router.get('/:id', async (req: AuthRequest, res: Response) => {
   const id = String(req.params.id);
   try {

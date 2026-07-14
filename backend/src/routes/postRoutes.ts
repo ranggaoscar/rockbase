@@ -932,4 +932,109 @@ router.get('/status/:workspaceId', async (req: Request, res: Response) => {
   }
 });
 
+// ── GET /api/posts/:id — Single post detail with full result breakdown ───
+router.get('/:id', async (req: Request, res: Response) => {
+  try {
+    const post = await prisma.post.findUnique({ where: { id: String(req.params.id) } });
+    if (!post) {
+      res.status(404).json({ error: 'Post not found' });
+      return;
+    }
+
+    // Resolve account usernames for readability
+    const accountIds: string[] = post.accountIds ? JSON.parse(post.accountIds) : [];
+    const accounts = accountIds.length > 0
+      ? await prisma.socialAccount.findMany({
+          where: { id: { in: accountIds } },
+          select: { id: true, username: true, platform: true, sessionHealth: true },
+        })
+      : [];
+    const accountMap = new Map(accounts.map((a) => [a.id, a]));
+
+    const results: Record<string, any> = post.results ? JSON.parse(post.results) : {};
+    const enrichedResults: Record<string, any> = {};
+    for (const [accountId, result] of Object.entries(results)) {
+      const acc = accountMap.get(accountId);
+      enrichedResults[accountId] = {
+        ...(result as object),
+        accountUsername: acc?.username || accountId,
+        accountPlatform: acc?.platform || 'unknown',
+        accountSessionHealth: acc?.sessionHealth || 'UNKNOWN',
+      };
+    }
+
+    // Get related activity log entries for this post
+    const activities = await prisma.activityLog.findMany({
+      where: { entityId: post.id },
+      orderBy: { createdAt: 'asc' },
+      select: { action: true, status: true, message: true, createdAt: true, metadata: true },
+    });
+
+    res.json({
+      id: post.id,
+      status: post.status,
+      workspaceId: post.workspaceId,
+      content: post.content,
+      mediaUrls: post.mediaUrls ? JSON.parse(post.mediaUrls) : [],
+      accountIds,
+      accounts: Array.from(accountMap.values()),
+      scheduleAt: post.scheduleAt,
+      postedAt: post.postedAt,
+      createdAt: post.createdAt,
+      updatedAt: post.updatedAt,
+      results: enrichedResults,
+      activity: activities,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to fetch post', details: error.message });
+  }
+});
+
+// ── GET /api/posts?status=...&workspaceId=...&limit=... — Filtered post list ─
+router.get('/', async (req: Request, res: Response) => {
+  try {
+    const { status, workspaceId = 'workspace-default', limit = '50', accountId } = req.query;
+    const take = Math.min(parseInt(String(limit)) || 50, 200);
+
+    const where: any = { workspaceId: String(workspaceId) };
+    if (status) where.status = String(status);
+    if (accountId) where.accountIds = { contains: String(accountId) };
+
+    const posts = await prisma.post.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take,
+    });
+
+    const parsed = posts.map((p: any) => ({
+      id: p.id,
+      status: p.status,
+      workspaceId: p.workspaceId,
+      contentPreview: (p.content || '').slice(0, 120),
+      mediaUrls: p.mediaUrls ? JSON.parse(p.mediaUrls) : [],
+      accountIds: p.accountIds ? JSON.parse(p.accountIds) : [],
+      scheduleAt: p.scheduleAt,
+      postedAt: p.postedAt,
+      createdAt: p.createdAt,
+      results: p.results ? JSON.parse(p.results) : null,
+    }));
+
+    // Aggregate by status for at-a-glance dashboard view
+    const counts = await prisma.post.groupBy({
+      by: ['status'],
+      where: { workspaceId: String(workspaceId) },
+      _count: { _all: true },
+    });
+
+    res.json({
+      total: parsed.length,
+      counts: counts.reduce((acc: any, c: any) => ({ ...acc, [c.status]: c._count._all }), {}),
+      filter: { status: status || 'all', workspaceId, accountId: accountId || null, limit: take },
+      posts: parsed,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to fetch posts', details: error.message });
+  }
+});
+
 export default router;

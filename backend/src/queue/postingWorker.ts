@@ -7,6 +7,9 @@ import * as http from 'http';
 import * as https from 'https';
 import * as path from 'path';
 import { logActivity } from '../services/ActivityLogService';
+import { logger } from '../services/logger';
+import { sessionHealthService } from '../services/SessionHealthService';
+import { categorizeError } from '../utils/errorClassifier';
 import { PostJobData } from './jobTypes';
 
 const prisma = new PrismaClient();
@@ -75,7 +78,9 @@ async function downloadToFile(mediaUrl: string, destinationPath: string, redirec
     request.setTimeout(REMOTE_MEDIA_TIMEOUT_MS, () => {
       request.destroy(new Error(`Timed out downloading media from ${mediaUrl}`));
     });
-    request.on('error', reject);
+    request.on('error', (err) => {
+      reject(new Error(`Download failed for ${mediaUrl}: ${err.message}`));
+    });
   });
 }
 
@@ -423,6 +428,15 @@ export const postingWorker = new Worker<PostJobData>(
 
     } catch (error: any) {
       console.error(`[Worker] Job ${job.id} failed:`, error.message);
+      const categorized = categorizeError(error.message);
+      logger.error('Posting job error', {
+        jobId: job.id,
+        postId,
+        accountId,
+        category: categorized.category,
+        retryable: categorized.retryable,
+        error: error.message,
+      });
 
       const isPrePublishFailure = !reachedPendingVerify;
 
@@ -436,6 +450,7 @@ export const postingWorker = new Worker<PostJobData>(
               [accountId]: {
                 status: 'retrying',
                 error: error.message,
+                category: categorized.category,
                 retryAttempt: job.attemptsMade + 1,
               },
             }),
@@ -453,7 +468,17 @@ export const postingWorker = new Worker<PostJobData>(
           where: { id: postId },
           data: {
             status: postStatus,
-            results: JSON.stringify({ ...existingResults, [accountId]: { status: resultStatus, error: error.message } }),
+            results: JSON.stringify({
+              ...existingResults,
+              [accountId]: {
+                status: resultStatus,
+                error: error.message,
+                category: categorized.category,
+                humanReadable: categorized.humanReadable,
+                suggestedAction: categorized.suggestedAction,
+                retryable: categorized.retryable,
+              },
+            }),
           },
         }).catch(() => {});
         logActivity({
@@ -466,8 +491,15 @@ export const postingWorker = new Worker<PostJobData>(
           status: isFailedVerify ? 'warning' : 'failed',
           message: isFailedVerify
             ? `Publish unverified for @${account?.username || accountId} (likely succeeded)`
-            : `Publishing failed for @${account?.username || accountId}`,
-          metadata: { jobId: job.id, resultStatus, error: error.message },
+            : `Publishing failed for @${account?.username || accountId}: ${categorized.humanReadable}`,
+          metadata: {
+            jobId: job.id,
+            resultStatus,
+            error: error.message,
+            category: categorized.category,
+            suggestedAction: categorized.suggestedAction,
+            retryable: categorized.retryable,
+          },
         });
         logActivity({
           workspaceId: account?.workspaceId || 'workspace-default',
@@ -477,28 +509,103 @@ export const postingWorker = new Worker<PostJobData>(
           accountId,
           action: 'job_failure',
           status: 'failed',
-          message: `Posting queue job ${job.id} failed`,
-          metadata: { jobId: job.id, error: error.message },
+          message: `Posting queue job ${job.id} failed (${categorized.category})`,
+          metadata: { jobId: job.id, error: error.message, category: categorized.category },
         });
+
+        // Auto re-check session health on certain error categories.
+        // These indicate the session itself is broken, not transient network issues.
+        if (
+          account &&
+          (categorized.category === 'AUTH_EXPIRED' ||
+            categorized.category === 'CHECKPOINT' ||
+            categorized.category === 'BROWSER_LAUNCH')
+        ) {
+          logActivity({
+            workspaceId: account.workspaceId,
+            type: 'session',
+            entityType: 'account',
+            entityId: accountId,
+            accountId,
+            action: 'auto_health_check_triggered',
+            status: 'pending',
+            message: `Auto re-checking session for @${account.username} due to ${categorized.category}`,
+            metadata: { reason: categorized.category, failedPostId: postId },
+          });
+
+          // Fire-and-forget — don't block the worker on this.
+          sessionHealthService
+            .checkAccount(accountId)
+            .then((result) => {
+              logger.info('Auto session health check completed', {
+                accountId,
+                username: account.username,
+                health: result.health,
+                reason: result.reason,
+              });
+            })
+            .catch((err) => {
+              logger.error('Auto session health check failed', {
+                accountId,
+                username: account.username,
+                error: err.message,
+              });
+            });
+        }
       }
       throw error; // Re-throw so BullMQ handles retries
     }
   },
-  { connection, concurrency: 3 },
+  {
+    connection,
+    // Concurrency 1 — multiple accounts posting from same IP triggers IG
+    // bot detection and ECONNRESET. Serialize so each post has clean
+    // connection state and reduces rate-limit risk.
+    concurrency: 1,
+    // Instagram posting flow can take 3-5 min (warmup browse, click + waitFor
+    // selectors, upload processing, caption type, share, verify). Default
+    // lockDuration (30s) is far too short — worker loses lock mid-flow and
+    // BullMQ silently marks job as stalled without surfacing the timeout.
+    // 10 min gives headroom for slow accounts while still detecting real hangs.
+    lockDuration: 600000,
+    // Run stalled-check less aggressively — every 60s instead of 30s.
+    stalledInterval: 60000,
+    // Give stalled jobs 1 chance to recover before permanent fail.
+    maxStalledCount: 1,
+  },
 );
 
 postingWorker.on('ready', () => {
   console.log('[PostingWorker] Worker is ready and listening to automationQueue');
+  logger.info('PostingWorker ready', { pid: process.pid, concurrency: 1 });
 });
 
 postingWorker.on('error', (err) => {
   console.error('[PostingWorker] Error:', err);
+  logger.error('PostingWorker error', { error: err.message, stack: err.stack });
 });
 
 postingWorker.on('failed', (job, err) => {
   console.error(`[Worker] Job ${job?.id} permanently failed: ${err.message}`);
+  logger.error('Posting job permanently failed', {
+    jobId: job?.id,
+    postId: job?.data?.postId,
+    accountId: job?.data?.accountId,
+    error: err.message,
+    attempts: job?.attemptsMade,
+  });
 });
 
 postingWorker.on('completed', (job) => {
   console.log(`[Worker] Job ${job.id} completed successfully`);
+  logger.info('Posting job completed', {
+    jobId: job.id,
+    postId: job.data?.postId,
+    accountId: job.data?.accountId,
+  });
+});
+
+postingWorker.on('stalled', (jobId) => {
+  console.warn(`[Worker] ⚠️ STALLED: job ${jobId}`);
+  logger.warn('Posting job stalled — lock expired', { jobId });
 });

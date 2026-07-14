@@ -92,16 +92,16 @@ export class InstagramPostingService {
 
       let clicked = false;
       for (const sel of createSelectors) {
-        const btn = await page.$(sel);
-                if (btn) {
-                  console.log(`[Instagram] Found Create button: ${sel}`);
-                  // Dismiss potential modals first
-                  await this.dismissCreatePostOverlays(page).catch(() => null);
-                  await this.robustClick(page, sel);
-                  clicked = true;
-                  break;
-                }
-              }
+        const btn = await page.waitForSelector(sel, { state: 'visible', timeout: 3000 }).catch(() => null);
+        if (btn) {
+          console.log(`[Instagram] Found Create button: ${sel}`);
+          // Dismiss potential modals first
+          await this.dismissCreatePostOverlays(page).catch(() => null);
+          await this.robustClick(page, btn);
+          clicked = true;
+          break;
+        }
+      }
               if (!clicked) throw new Error('Could not find the Create/New Post button');
 
               await medium();

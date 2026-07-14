@@ -17,12 +17,36 @@ logger.info('Server starting up', { nodeVersion: process.version, platform: proc
 // ── GLOBAL ERROR HANDLERS — Prevent process crash ──────────────────
 process.on('uncaughtException', (err) => {
   console.error('[FATAL] Uncaught Exception — server will try to recover:', err);
-  logger.error('Uncaught Exception', { error: err.message, stack: err.stack });
+  logger.error('Uncaught Exception — process may need restart', {
+    error: err.message,
+    stack: err.stack,
+    name: err.name,
+    pid: process.pid,
+    uptime: process.uptime(),
+  });
 });
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[FATAL] Unhandled Rejection — server will try to recover:', reason);
-  logger.error('Unhandled Rejection', { reason: String(reason) });
+  logger.error('Unhandled Promise Rejection — process may need restart', {
+    reason: String(reason),
+    stack: reason instanceof Error ? reason.stack : undefined,
+    pid: process.pid,
+    uptime: process.uptime(),
+  });
+});
+
+process.on('exit', (code) => {
+  // Log normal exit so we can tell apart graceful shutdowns from crashes.
+  logger.warn('Process exit', { code, pid: process.pid, uptime: process.uptime() });
+});
+
+process.on('SIGTERM', () => {
+  logger.warn('Received SIGTERM', { pid: process.pid });
+});
+
+process.on('SIGINT', () => {
+  logger.warn('Received SIGINT', { pid: process.pid });
 });
 
 const app = express();
@@ -169,6 +193,7 @@ import { sessionPool } from './services/SessionPool';
 import { backupService } from './services/BackupService';
 import { logRetentionService } from './services/LogRetentionService';
 import { campaignSchedulerService } from './services/CampaignSchedulerService';
+import { sessionHealthScheduler } from './services/SessionHealthScheduler';
 
 // Initialize auto-backup
 backupService.init();
@@ -176,6 +201,7 @@ backupService.init();
 backupService.createBackup();
 logRetentionService.init();
 campaignSchedulerService.init();
+sessionHealthScheduler.init();
 
 io.on('connection', (socket) => {
   console.log('Client connected to WebSocket:', socket.id);
@@ -221,21 +247,25 @@ const STARTUP_SESSION_ID = `session-${Date.now()}-${Math.random().toString(36).s
 
 async function cleanStaleQueueOnStartup() {
   try {
-    const states = ['wait', 'delayed', 'failed'] as const;
+    // Preserve 'delayed' jobs — these are user-scheduled posts waiting for their
+    // scheduled time. Wiping them on restart loses user intent.
+    // Only clean 'wait' (queued but not delayed) and 'failed' (terminal failures).
+    const states = ['wait', 'failed'] as const;
     const counts = await automationQueue.getJobCounts(...states);
-    const totalStale = (counts.wait || 0) + (counts.delayed || 0) + (counts.failed || 0);
+    const delayedCount = (await automationQueue.getJobCounts('delayed')).delayed || 0;
+    const totalStale = (counts.wait || 0) + (counts.failed || 0);
 
     if (totalStale > 0) {
-      console.log(`[Startup] Cleaning ${totalStale} stale jobs from previous session...`);
+      console.log(`[Startup] Cleaning ${totalStale} stale jobs from previous session (preserving ${delayedCount} delayed job(s))...`);
       for (const state of states) {
         const removed = await automationQueue.clean(0, 10000, state);
         if (removed.length > 0) {
           console.log(`[Startup] Removed ${removed.length} ${state} job(s).`);
         }
       }
-      console.log('[Startup] Stale queue cleaned. Fresh session started.');
+      console.log(`[Startup] Stale queue cleaned. ${delayedCount} delayed job(s) preserved.`);
     } else {
-      console.log('[Startup] Queue is clean. No stale jobs.');
+      console.log(`[Startup] Queue is clean. No stale jobs. ${delayedCount} delayed job(s) preserved.`);
     }
   } catch (err: any) {
     console.warn('[Startup] Could not clean queue (Redis may not be running):', err.message);
@@ -272,6 +302,7 @@ function gracefulShutdown(signal: string) {
 
   // Stop campaign scheduler
   campaignSchedulerService.stop();
+  sessionHealthScheduler.stop();
 
   // Close socket.io
   server.close(() => {
