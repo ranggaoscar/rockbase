@@ -13,6 +13,7 @@ import { categorizeError } from '../utils/errorClassifier';
 import { PostJobData } from './jobTypes';
 import { DurableIdempotencyService, IdempotencyConflictError } from '../services/DurableIdempotencyService';
 import { postingWorkerDeliveryIdentity } from '../utils/socialPostingIdempotency';
+import { AccountExecutionLease, accountExecutionLockService } from '../services/AccountExecutionLockService';
 
 const prisma = new PrismaClient();
 const durableIdempotency = new DurableIdempotencyService(prisma);
@@ -233,6 +234,7 @@ export const postingWorker = new Worker<PostJobData>(
     let deliveryOperationKey: string | undefined;
     let deliveryOperationAcquired = false;
     let deliveryOperationCompleted = false;
+    let accountExecutionLock: AccountExecutionLease | null = null;
 
     const beginExternalDelivery = async () => {
       const identity = postingWorkerDeliveryIdentity({
@@ -304,6 +306,8 @@ export const postingWorker = new Worker<PostJobData>(
         // narrowed: resolvedMediaPath is string from here
         const mediaPath: string = resolvedMediaPath;
 
+        accountExecutionLock = await accountExecutionLockService.acquire(accountId);
+        if (!accountExecutionLock) throw new Error('ACCOUNT_EXECUTION_LOCK_UNAVAILABLE');
         const delivery = await beginExternalDelivery();
         if (!delivery.shouldExecute) return { status: 'skipped', reason: delivery.reason };
 
@@ -371,6 +375,8 @@ export const postingWorker = new Worker<PostJobData>(
         // narrowed: resolvedMediaPath is string from here
         const mediaPath: string = resolvedMediaPath;
 
+        accountExecutionLock = await accountExecutionLockService.acquire(accountId);
+        if (!accountExecutionLock) throw new Error('ACCOUNT_EXECUTION_LOCK_UNAVAILABLE');
         const delivery = await beginExternalDelivery();
         if (!delivery.shouldExecute) return { status: 'skipped', reason: delivery.reason };
 
@@ -603,6 +609,10 @@ export const postingWorker = new Worker<PostJobData>(
         }
       }
       throw error; // Re-throw so BullMQ handles retries
+    } finally {
+      await accountExecutionLock?.release().catch((releaseError) => {
+        logger.warn('Account execution lock release failed', { accountId, error: releaseError.message });
+      });
     }
   },
   {
