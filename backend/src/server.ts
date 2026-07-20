@@ -241,7 +241,7 @@ import { sessionHealthScheduler } from './services/SessionHealthScheduler';
 // Initialize auto-backup
 backupService.init();
 // Initial backup on startup for safety
-backupService.createBackup();
+void backupService.createBackup();
 logRetentionService.init();
 campaignSchedulerService.init();
 if (isAutomationEnabled()) {

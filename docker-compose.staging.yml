@@ -59,11 +59,7 @@ services:
       - staging-backups:/app/backend/backups
       - staging-logs:/app/backend/logs
     healthcheck:
-      test:
-        - CMD
-        - node
-        - -e
-        - "fetch('http://127.0.0.1:3010/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3010/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -89,6 +85,28 @@ services:
       DATABASE_URL: "file:./dev.db"
     volumes:
       - staging-db:/app/backend/prisma
+    cpus: "0.50"
+    mem_limit: 512m
+    pids_limit: 100
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - staging-network
+
+  restore-tool:
+    image: rockbase-backend:staging-migrate
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: build
+    profiles: ["tools"]
+    restart: "no"
+    environment:
+      AUTOMATION_ENABLED: "false"
+      RESTORE_TARGET_ROOT: /restore
+    volumes:
+      - staging-backups:/backups:ro
+      - staging-restore-test:/restore
     cpus: "0.50"
     mem_limit: 512m
     pids_limit: 100
@@ -134,6 +152,8 @@ volumes:
     name: rockbase-staging-backups
   staging-logs:
     name: rockbase-staging-logs
+  staging-restore-test:
+    name: rockbase-staging-restore-test
 
 networks:
   staging-network:

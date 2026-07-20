@@ -2,7 +2,7 @@ import { backupService } from '../services/BackupService';
 
 async function main() {
   console.log('[ManualBackup] Starting immediate database backup...');
-  const path = backupService.createBackup();
+  const path = await backupService.createBackup();
   if (path) {
     console.log(`[ManualBackup] Success! Backup saved to: ${path}`);
     process.exit(0);
