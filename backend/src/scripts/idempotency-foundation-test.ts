@@ -264,6 +264,44 @@ async function testService(root: string, schemaPath: string): Promise<void> {
       IdempotencyConflictError,
     );
 
+    const campaignKey = 'campaign-submission-operation';
+    const campaignHash = canonicalRequestHash({
+      name: 'Campaign durable fixture',
+      type: 'follow',
+      targetType: 'username',
+      targetValue: 'target-fixture',
+      accountIds: ['account-a'],
+      groupIds: [],
+    });
+    const campaignCreated = await firstService.beginOperation({
+      scope: 'campaign.submit',
+      key: campaignKey,
+      requestHash: campaignHash,
+    });
+    assert.equal(campaignCreated.acquired, true);
+    await firstService.markCompleted('campaign.submit', campaignKey, {
+      resourceType: 'campaign',
+      resourceId: 'campaign-fixture',
+      resultReference: { campaignId: 'campaign-fixture' },
+    });
+    const campaignDuplicate = await secondService.beginOperation({
+      scope: 'campaign.submit',
+      key: campaignKey,
+      requestHash: campaignHash,
+    });
+    assert.equal(campaignDuplicate.acquired, false);
+    assert.equal(campaignDuplicate.operation.resourceId, 'campaign-fixture');
+    assert.equal(campaignDuplicate.operation.status, IdempotencyStatus.COMPLETED);
+    await assert.rejects(
+      secondService.beginOperation({
+        scope: 'campaign.submit',
+        key: campaignKey,
+        requestHash: canonicalRequestHash({
+          name: 'Campaign durable fixture', type: 'follow', targetType: 'username', targetValue: 'different-target', accountIds: ['account-a'], groupIds: [],
+        }),
+      }),
+      IdempotencyConflictError,
+    );
     const delivery = postingWorkerDeliveryIdentity({
       postId: 'post-worker-fixture',
       accountId: 'account-worker-fixture',
@@ -335,6 +373,9 @@ async function testService(root: string, schemaPath: string): Promise<void> {
     const persisted = await restartedService.getOperation('post.submit', 'operation-new');
     assert.equal(persisted?.status, IdempotencyStatus.COMPLETED);
     assert.equal(persisted?.resourceId, 'campaign-a');
+    const persistedCampaign = await restartedService.getOperation('campaign.submit', 'campaign-submission-operation');
+    assert.equal(persistedCampaign?.resourceId, 'campaign-fixture');
+    assert.equal(persistedCampaign?.status, IdempotencyStatus.COMPLETED);
   } finally {
     await restartedClient.$disconnect();
   }

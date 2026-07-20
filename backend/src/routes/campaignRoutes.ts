@@ -9,8 +9,14 @@ import multer from 'multer';
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
+import { PrismaClient } from '@prisma/client';
+import { DurableIdempotencyService, IdempotencyConflictError, IdempotencyValidationError } from '../services/DurableIdempotencyService';
+import { canonicalRequestHash } from '../utils/canonicalRequestHash';
 
 const router = Router();
+const prisma = new PrismaClient();
+const durableIdempotency = new DurableIdempotencyService(prisma);
+const CAMPAIGN_SUBMISSION_SCOPE = 'campaign.submit';
 const CAMPAIGN_MEDIA_DIR = path.join(process.cwd(), 'uploads', 'campaign-media');
 if (!fs.existsSync(CAMPAIGN_MEDIA_DIR)) fs.mkdirSync(CAMPAIGN_MEDIA_DIR, { recursive: true });
 
@@ -101,20 +107,60 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const campaign = await campaignService.createCampaign({
-      name,
-      type,
-      targetType,
-      targetValue,
-      accountIds: Array.isArray(accountIds) ? accountIds : [],
-      groupIds: Array.isArray(groupIds) ? groupIds : [],
-      dailyFollowLimit, dailyLikeLimit, dailyCommentLimit,
-      activeHoursStart, activeHoursEnd,
-    });
+    const idempotencyKey = req.header('Idempotency-Key')?.trim();
+    let idempotencyAcquired = false;
+    if (idempotencyKey) {
+      const begun = await durableIdempotency.beginOperation({
+        scope: CAMPAIGN_SUBMISSION_SCOPE,
+        key: idempotencyKey,
+        requestHash: canonicalRequestHash({
+          name, type, targetType, targetValue,
+          accountIds: Array.isArray(accountIds) ? accountIds : [],
+          groupIds: Array.isArray(groupIds) ? groupIds : [],
+          dailyFollowLimit, dailyLikeLimit, dailyCommentLimit, activeHoursStart, activeHoursEnd,
+        }),
+      });
+      if (!begun.acquired) {
+        const campaign = begun.operation.resourceId
+          ? await prisma.campaign.findUnique({ where: { id: begun.operation.resourceId }, include: { actions: true } })
+          : null;
+        res.status(200).json({ campaign, operation: begun.operation });
+        return;
+      }
+      idempotencyAcquired = true;
+    }
 
-    res.status(201).json({ campaign });
+    try {
+      const campaign = await campaignService.createCampaign({
+        name,
+        type,
+        targetType,
+        targetValue,
+        accountIds: Array.isArray(accountIds) ? accountIds : [],
+        groupIds: Array.isArray(groupIds) ? groupIds : [],
+        dailyFollowLimit, dailyLikeLimit, dailyCommentLimit,
+        activeHoursStart, activeHoursEnd,
+      });
+
+      if (idempotencyKey) {
+        await durableIdempotency.markCompleted(CAMPAIGN_SUBMISSION_SCOPE, idempotencyKey, {
+          resourceType: 'campaign',
+          resourceId: campaign.id,
+          resultReference: { campaignId: campaign.id },
+        });
+      }
+
+      res.status(201).json({ campaign });
+    } catch (error) {
+      if (idempotencyAcquired && idempotencyKey) {
+        await durableIdempotency.markUnknown(CAMPAIGN_SUBMISSION_SCOPE, idempotencyKey, 'SUBMISSION_OUTCOME_UNCERTAIN').catch(() => {});
+      }
+      throw error;
+    }
   } catch (err: any) {
     console.error('[CampaignRoutes] Create error:', err);
+    if (err instanceof IdempotencyConflictError) { res.status(409).json({ error: err.message }); return; }
+    if (err instanceof IdempotencyValidationError) { res.status(400).json({ error: err.message }); return; }
     res.status(400).json({ error: err.message });
   }
 });
