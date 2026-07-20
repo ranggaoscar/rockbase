@@ -79,12 +79,12 @@ services:
       dockerfile: Dockerfile.backend
       target: build
     container_name: rockbase-staging-migrate
-    command: ["sh", "-c", "npx prisma migrate deploy && chown -R node:node /app/backend/prisma"]
+    command: ["sh", "-c", "npx prisma migrate deploy --schema /app/backend/prisma/schema.prisma && chown -R node:node /data"]
     restart: "no"
     environment:
-      DATABASE_URL: "file:./dev.db"
+      DATABASE_URL: "file:/data/dev.db"
     volumes:
-      - staging-db:/app/backend/prisma
+      - staging-db:/data
     cpus: "0.50"
     mem_limit: 512m
     pids_limit: 100

@@ -1,6 +1,7 @@
 import * as crypto from 'crypto';
 
-// In-memory cache for request-level locks
+// Deprecated process-local request lock. It is not a durable source of truth and
+// remains only for existing route compatibility until Sub-batch 4B2.
 const activeRequests = new Map<string, number>();
 const LOCK_TTL_MS = 15000; // 15 seconds TTL
 

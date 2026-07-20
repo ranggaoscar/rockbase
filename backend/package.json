@@ -11,6 +11,7 @@
     "queue:requeue-pending": "ts-node --transpile-only src/scripts/requeue-pending-posts.ts",
     "queue:reconcile": "node dist/scripts/queue-reconcile.js",
     "test:queue-runtime-safety": "ts-node --files src/scripts/queue-runtime-safety-test.ts",
+    "test:idempotency-foundation": "ts-node --files src/scripts/idempotency-foundation-test.ts",
     "migrate-safe": "ts-node src/scripts/backup-now.ts && npx prisma migrate dev",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

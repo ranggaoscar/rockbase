@@ -264,10 +264,37 @@ model ActivityLog {
   @@index([workspaceId, campaignId, createdAt])
 }
 
+model IdempotencyRecord {
+  id              String            @id @default(uuid())
+  scope           String
+  key             String
+  requestHash     String
+  status          IdempotencyStatus @default(IN_PROGRESS)
+  resourceType    String?
+  resourceId      String?
+  resultReference Json?
+  errorCategory   String?
+  metadata        Json?
+  expiresAt       DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@unique([scope, key])
+  @@index([status, updatedAt])
+  @@index([expiresAt])
+}
+
 enum CampaignSchedulerStatus {
   PENDING
   READY
   EXECUTED
   FAILED
   CANCELLED
+}
+
+enum IdempotencyStatus {
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  UNKNOWN
 }
