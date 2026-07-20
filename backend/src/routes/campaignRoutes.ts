@@ -41,6 +41,49 @@ const uploadCampaignMedia = multer({
 });
 
 router.use(authenticateToken);
+router.post('/:id/local-webhook', async (req: AuthRequest, res: Response) => {
+  const endpoint = process.env.ROCKBASE_LOCAL_WEBHOOK_URL?.trim();
+  if (!endpoint) {
+    res.status(503).json({ error: 'Webhook integration is not configured' });
+    return;
+  }
+
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Unsupported protocol');
+  } catch {
+    res.status(503).json({ error: 'Webhook integration is not configured' });
+    return;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Rockbase-Simulation': 'true',
+        ...(process.env.ROCKBASE_LOCAL_WEBHOOK_TOKEN
+          ? { Authorization: `Bearer ${process.env.ROCKBASE_LOCAL_WEBHOOK_TOKEN}` }
+          : {}),
+      },
+      body: JSON.stringify(req.body.schema ?? req.body),
+      signal: controller.signal,
+    });
+    const responsePayload = await response.text();
+    res.status(response.ok ? 200 : 502).json({
+      status: response.ok ? 'success' : 'failed',
+      webhookStatus: response.status,
+      responsePayload,
+    });
+  } catch {
+    res.status(502).json({ error: 'Webhook delivery failed' });
+  } finally {
+    clearTimeout(timeout);
+  }
+});
 
 // ── POST /api/campaigns — Create a new campaign ──────────────────────────
 router.post('/', async (req: AuthRequest, res: Response) => {

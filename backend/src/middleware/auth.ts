@@ -1,13 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
+import { AuthIdentity, verifyAccessToken } from './security';
 
 export interface AuthRequest extends Request {
-  user?: {
-    id: string;
-    email: string;
-    role: string;
-    name: string;
-  };
+  user?: AuthIdentity;
 }
 
 export const authenticateToken = (req: AuthRequest, res: Response, next: NextFunction): void => {
@@ -20,9 +15,7 @@ export const authenticateToken = (req: AuthRequest, res: Response, next: NextFun
   }
 
   try {
-    const secret = process.env.JWT_SECRET || 'fallback_dev_secret_change_in_production';
-    const decoded = jwt.verify(token, secret) as any;
-    req.user = decoded;
+    req.user = verifyAccessToken(token);
     next();
   } catch (err) {
     res.status(403).json({ error: 'Invalid or expired token' });

@@ -63,6 +63,7 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+!.env.staging.example
 *.db
 *.db.backup
 *.sqlite

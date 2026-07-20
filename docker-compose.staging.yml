@@ -34,8 +34,15 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       AUTOMATION_ENABLED: "false"
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      BOOTSTRAP_ADMIN_ENABLED: ${BOOTSTRAP_ADMIN_ENABLED:?BOOTSTRAP_ADMIN_ENABLED is required}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:?BOOTSTRAP_ADMIN_EMAIL is required}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?BOOTSTRAP_ADMIN_PASSWORD is required}
+      BOOTSTRAP_ADMIN_TOKEN: ${BOOTSTRAP_ADMIN_TOKEN:?BOOTSTRAP_ADMIN_TOKEN is required}
       DATABASE_URL: "file:./dev.db"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
@@ -56,7 +63,7 @@ services:
         - CMD
         - node
         - -e
-        - "fetch('http://127.0.0.1:3010/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+        - "fetch('http://127.0.0.1:3010/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
       interval: 10s
       timeout: 5s
       retries: 12
@@ -64,6 +71,27 @@ services:
     cpus: "1.00"
     mem_limit: 1g
     pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - staging-network
+
+  migrate:
+    image: rockbase-backend:staging-migrate
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: build
+    container_name: rockbase-staging-migrate
+    command: ["sh", "-c", "npx prisma migrate deploy && chown -R node:node /app/backend/prisma"]
+    restart: "no"
+    environment:
+      DATABASE_URL: "file:./dev.db"
+    volumes:
+      - staging-db:/app/backend/prisma
+    cpus: "0.50"
+    mem_limit: 512m
+    pids_limit: 100
     security_opt:
       - no-new-privileges:true
     networks:

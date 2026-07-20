@@ -8,8 +8,11 @@ import { Queue } from 'bullmq';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import * as path from 'path';
 import { AUTOMATION_DISABLED_MESSAGE, isAutomationEnabled } from './middleware/automation';
+import { authenticateToken } from './middleware/auth';
+import { assertJwtConfiguration, verifyAccessToken } from './middleware/security';
 
 dotenv.config();
+assertJwtConfiguration();
 
 // ── Initialize structured logging ──────────────────────────────────
 import { logger } from './services/logger';
@@ -71,7 +74,6 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 // Routes
 import authRoutes from './routes/authRoutes';
@@ -89,9 +91,29 @@ import campaignEngineRoutes from './routes/campaignEngineRoutes';
 import accountGroupRoutes from './routes/accountGroupRoutes';
 import activityRoutes from './routes/activityRoutes';
 import rockSocialRoutes from './routes/rockSocialRoutes';
+app.get('/livez', (_req, res) => {
+  res.status(200).json({ status: 'live' });
+});
+
+app.get('/readyz', async (_req, res) => {
+  try {
+    const { PrismaClient } = require('@prisma/client');
+    const prisma = new PrismaClient();
+    await prisma.$queryRaw`SELECT 1`;
+    const client = await automationQueue.client;
+    if (await client.ping() !== 'PONG') throw new Error('Redis unavailable');
+    await prisma.$disconnect();
+    res.status(200).json({ status: 'ready' });
+  } catch {
+    res.status(503).json({ status: 'not_ready' });
+  }
+});
+
 import systemRoutes from './routes/systemRoutes';
 
 app.use('/api/auth', authRoutes);
+app.use('/uploads', authenticateToken, express.static(path.join(process.cwd(), 'uploads')));
+app.use('/api', authenticateToken);
 app.use('/api/accounts', accountRoutes);
 app.use('/api/proxies', proxyRoutes);
 app.use('/api/warming', warmingRoutes);
@@ -168,6 +190,7 @@ app.get('/api/health', async (req, res) => {
       activeAccountIds,
     }
   });
+
 });
 
 // Initialize Workers
@@ -189,6 +212,22 @@ export const io = new Server(server, {
     origin: process.env.FRONTEND_URL || 'http://localhost:5173',
     methods: ['GET', 'POST'],
   },
+});
+io.use((socket, next) => {
+  const authToken = typeof socket.handshake.auth?.token === 'string'
+    ? socket.handshake.auth.token
+    : undefined;
+  const header = socket.handshake.headers.authorization;
+  const headerToken = typeof header === 'string' && header.startsWith('Bearer ')
+    ? header.slice('Bearer '.length)
+    : undefined;
+
+  try {
+    socket.data.user = verifyAccessToken(authToken || headerToken || '');
+    next();
+  } catch {
+    next(new Error('Authentication required'));
+  }
 });
 
 // Farm View real-time handlers
@@ -239,6 +278,10 @@ io.on('connection', (socket) => {
   });
 
   socket.on('control_action', async (data) => {
+    if (!['Admin', 'Operator'].includes(socket.data.user.role)) {
+      socket.emit('authorization_error', { error: 'FORBIDDEN' });
+      return;
+    }
     if (rejectDisabledAutomation()) return;
     // set_mode needs the live socket reference — handle it here
     if (data.action === 'set_mode') {
