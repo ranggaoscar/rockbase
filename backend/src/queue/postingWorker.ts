@@ -11,8 +11,11 @@ import { logger } from '../services/logger';
 import { sessionHealthService } from '../services/SessionHealthService';
 import { categorizeError } from '../utils/errorClassifier';
 import { PostJobData } from './jobTypes';
+import { DurableIdempotencyService, IdempotencyConflictError } from '../services/DurableIdempotencyService';
+import { postingWorkerDeliveryIdentity } from '../utils/socialPostingIdempotency';
 
 const prisma = new PrismaClient();
+const durableIdempotency = new DurableIdempotencyService(prisma);
 const connection = {
   host: process.env.REDIS_HOST || '127.0.0.1',
   port: parseInt(process.env.REDIS_PORT || '6379'),
@@ -227,6 +230,29 @@ export const postingWorker = new Worker<PostJobData>(
 
     let account: any = null;
     let reachedPendingVerify = false;
+    let deliveryOperationKey: string | undefined;
+    let deliveryOperationAcquired = false;
+    let deliveryOperationCompleted = false;
+
+    const beginExternalDelivery = async () => {
+      const identity = postingWorkerDeliveryIdentity({
+        postId,
+        accountId,
+        content,
+        mediaUrls: mediaUrls || [],
+        postIdempotencyKey: post.idempotencyKey,
+      });
+      try {
+        const begun = await durableIdempotency.beginOperation(identity);
+        if (!begun.acquired) return { shouldExecute: false, reason: `durable_operation_${begun.operation.status.toLowerCase()}` };
+        deliveryOperationKey = identity.key;
+        deliveryOperationAcquired = true;
+        return { shouldExecute: true };
+      } catch (error) {
+        if (error instanceof IdempotencyConflictError) return { shouldExecute: false, reason: 'idempotency_conflict' };
+        throw error;
+      }
+    };
 
     try {
       account = await prisma.socialAccount.findUnique({ where: { id: accountId } });
@@ -278,6 +304,9 @@ export const postingWorker = new Worker<PostJobData>(
         // narrowed: resolvedMediaPath is string from here
         const mediaPath: string = resolvedMediaPath;
 
+        const delivery = await beginExternalDelivery();
+        if (!delivery.shouldExecute) return { status: 'skipped', reason: delivery.reason };
+
         await prisma.post.update({
           where: { id: postId },
           data: {
@@ -291,6 +320,13 @@ export const postingWorker = new Worker<PostJobData>(
         const result = await instagramPostingService.postToInstagram(accountId, content, mediaPath);
 
         if (result.status !== 'success') throw new Error(result.error || 'Instagram posting failed');
+
+        await durableIdempotency.markCompleted('posting-worker.delivery', deliveryOperationKey!, {
+          resourceType: 'post-delivery',
+          resourceId: postId,
+          resultReference: { accountId, platform: account.platform, postedAt: result.postedAt || null },
+        });
+        deliveryOperationCompleted = true;
 
         await prisma.post.update({
           where: { id: postId },
@@ -335,6 +371,9 @@ export const postingWorker = new Worker<PostJobData>(
         // narrowed: resolvedMediaPath is string from here
         const mediaPath: string = resolvedMediaPath;
 
+        const delivery = await beginExternalDelivery();
+        if (!delivery.shouldExecute) return { status: 'skipped', reason: delivery.reason };
+
         await prisma.post.update({
           where: { id: postId },
           data: {
@@ -348,6 +387,13 @@ export const postingWorker = new Worker<PostJobData>(
         const result = await tiktokPostingService.postToTikTok(accountId, content, mediaPath);
 
         if (result.status !== 'success') throw new Error(result.error || 'TikTok posting failed');
+
+        await durableIdempotency.markCompleted('posting-worker.delivery', deliveryOperationKey!, {
+          resourceType: 'post-delivery',
+          resourceId: postId,
+          resultReference: { accountId, platform: account.platform, postedAt: result.postedAt || null },
+        });
+        deliveryOperationCompleted = true;
 
         await prisma.post.update({
           where: { id: postId },
@@ -427,6 +473,9 @@ export const postingWorker = new Worker<PostJobData>(
       }
 
     } catch (error: any) {
+      if (deliveryOperationAcquired && !deliveryOperationCompleted && deliveryOperationKey) {
+        await durableIdempotency.markUnknown('posting-worker.delivery', deliveryOperationKey, 'POSTING_OUTCOME_UNCERTAIN').catch(() => {});
+      }
       console.error(`[Worker] Job ${job.id} failed:`, error.message);
       const categorized = categorizeError(error.message);
       logger.error('Posting job error', {

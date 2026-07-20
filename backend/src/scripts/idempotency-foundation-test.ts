@@ -14,6 +14,11 @@ import {
   CanonicalPayloadError,
   canonicalRequestHash,
 } from '../utils/canonicalRequestHash';
+import {
+  ROCK_SOCIAL_POST_SCOPE,
+  postingWorkerDeliveryIdentity,
+  rockSocialPostRequestHash,
+} from '../utils/socialPostingIdempotency';
 
 const BACKEND_ROOT = path.resolve(__dirname, '../..');
 const PRISMA_ROOT = path.join(BACKEND_ROOT, 'prisma');
@@ -226,6 +231,72 @@ async function testService(root: string, schemaPath: string): Promise<void> {
     });
     assert.equal(unknownRetry.acquired, false);
     assert.equal(unknownRetry.operation.status, IdempotencyStatus.UNKNOWN);
+    const controllerKey = 'rock-social-controller-operation';
+    const controllerHash = rockSocialPostRequestHash({
+      imageUrl: 'https://media.example.invalid/post.jpg',
+      caption: 'controller duplicate fixture',
+      accountIds: ['account-a'],
+      scheduledTime: null,
+    });
+    const controllerCreated = await firstService.beginOperation({
+      scope: ROCK_SOCIAL_POST_SCOPE,
+      key: controllerKey,
+      requestHash: controllerHash,
+    });
+    assert.equal(controllerCreated.acquired, true);
+    const controllerDuplicate = await secondService.beginOperation({
+      scope: ROCK_SOCIAL_POST_SCOPE,
+      key: controllerKey,
+      requestHash: controllerHash,
+    });
+    assert.equal(controllerDuplicate.acquired, false);
+    await assert.rejects(
+      secondService.beginOperation({
+        scope: ROCK_SOCIAL_POST_SCOPE,
+        key: controllerKey,
+        requestHash: rockSocialPostRequestHash({
+          imageUrl: 'https://media.example.invalid/post.jpg',
+          caption: 'different controller payload',
+          accountIds: ['account-a'],
+          scheduledTime: null,
+        }),
+      }),
+      IdempotencyConflictError,
+    );
+
+    const delivery = postingWorkerDeliveryIdentity({
+      postId: 'post-worker-fixture',
+      accountId: 'account-worker-fixture',
+      content: 'worker duplicate fixture',
+      mediaUrls: ['https://media.example.invalid/post.jpg'],
+      postIdempotencyKey: 'post-key-fixture',
+    });
+    const deliveryCreated = await firstService.beginOperation(delivery);
+    assert.equal(deliveryCreated.acquired, true);
+    await firstService.markCompleted(delivery.scope, delivery.key, {
+      resourceType: 'post-delivery',
+      resourceId: 'post-worker-fixture',
+      resultReference: { accountId: 'account-worker-fixture' },
+    });
+    const deliveryDuplicate = await secondService.beginOperation(delivery);
+    assert.equal(deliveryDuplicate.acquired, false);
+    assert.equal(deliveryDuplicate.operation.status, IdempotencyStatus.COMPLETED);
+    await assert.rejects(
+      secondService.beginOperation({ ...delivery, requestHash: canonicalRequestHash({ content: 'different worker payload' }) }),
+      IdempotencyConflictError,
+    );
+
+    const unknownDelivery = postingWorkerDeliveryIdentity({
+      postId: 'post-worker-unknown-fixture',
+      accountId: 'account-worker-fixture',
+      content: 'worker unknown fixture',
+      mediaUrls: ['https://media.example.invalid/post.jpg'],
+    });
+    await firstService.beginOperation(unknownDelivery);
+    await firstService.markUnknown(unknownDelivery.scope, unknownDelivery.key, 'POSTING_OUTCOME_UNCERTAIN');
+    const unknownDeliveryRetry = await secondService.beginOperation(unknownDelivery);
+    assert.equal(unknownDeliveryRetry.acquired, false);
+    assert.equal(unknownDeliveryRetry.operation.status, IdempotencyStatus.UNKNOWN);
 
     await assert.rejects(
       firstService.beginOperation({

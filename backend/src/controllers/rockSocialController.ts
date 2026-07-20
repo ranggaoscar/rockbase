@@ -8,8 +8,11 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
 import { generateRequestPayloadHash, acquireRequestLock } from '../utils/idempotency';
+import { DurableIdempotencyService, IdempotencyConflictError, IdempotencyValidationError } from '../services/DurableIdempotencyService';
+import { ROCK_SOCIAL_POST_SCOPE, rockSocialPostRequestHash } from '../utils/socialPostingIdempotency';
 
 const prisma = new PrismaClient();
+const durableIdempotency = new DurableIdempotencyService(prisma);
 
 const redisConnection = new IORedis({
   host: process.env.REDIS_HOST || 'localhost',
@@ -51,6 +54,8 @@ function downloadImage(url: string, destPath: string): Promise<void> {
 // ── POST /api/rock-social/post ──────────────────────────────────────────────
 
 export const createSocialPost = async (req: Request, res: Response) => {
+  const idempotencyKey = typeof req.header('Idempotency-Key') === 'string' ? req.header('Idempotency-Key')!.trim() : '';
+  let durableOperationAcquired = false;
   try {
     const { image_url, caption, account_ids, scheduled_time } = req.body;
 
@@ -67,12 +72,24 @@ export const createSocialPost = async (req: Request, res: Response) => {
     }
 
     // ── Request-level duplicate prevention ──
-    const reqLockKey = generateRequestPayloadHash(req.body, req.files);
-    if (!acquireRequestLock(reqLockKey)) {
-      return res.status(429).json({
-        message: 'Duplicate request detected. Please wait a moment before retrying.',
-        retryAfterMs: 15000,
+    if (idempotencyKey) {
+      const begun = await durableIdempotency.beginOperation({
+        scope: ROCK_SOCIAL_POST_SCOPE,
+        key: idempotencyKey,
+        requestHash: rockSocialPostRequestHash({ imageUrl: image_url, caption, accountIds: account_ids, scheduledTime: scheduled_time || null }),
       });
+      if (!begun.acquired) {
+        return res.status(200).json({ message: 'Existing social post operation returned for this idempotency key.', operation: begun.operation });
+      }
+      durableOperationAcquired = true;
+    } else {
+      const reqLockKey = generateRequestPayloadHash(req.body, req.files);
+      if (!acquireRequestLock(reqLockKey)) {
+        return res.status(429).json({
+          message: 'Duplicate request detected. Please wait a moment before retrying.',
+          retryAfterMs: 15000,
+        });
+      }
     }
 
     // ── Fix #3: Validate account status, session health, and rate limits ──────
@@ -183,6 +200,14 @@ export const createSocialPost = async (req: Request, res: Response) => {
     }
     const resolvedJobs = await Promise.all(jobs);
 
+    if (durableOperationAcquired) {
+      await durableIdempotency.markCompleted(ROCK_SOCIAL_POST_SCOPE, idempotencyKey, {
+        resourceType: 'post-submission',
+        resourceId: newPost.id,
+        resultReference: { postId: newPost.id, jobIds: resolvedJobs.map((job) => String(job.id)) },
+      });
+    }
+
     return res.status(202).json({
       message: 'Social post jobs successfully added to queue.',
       jobIds: resolvedJobs.map((j) => j.id),
@@ -193,6 +218,11 @@ export const createSocialPost = async (req: Request, res: Response) => {
     });
 
   } catch (error) {
+    if (durableOperationAcquired) {
+      await durableIdempotency.markUnknown(ROCK_SOCIAL_POST_SCOPE, idempotencyKey, 'SUBMISSION_OUTCOME_UNCERTAIN').catch(() => {});
+    }
+    if (error instanceof IdempotencyConflictError) return res.status(409).json({ message: error.message });
+    if (error instanceof IdempotencyValidationError) return res.status(400).json({ message: error.message });
     return res.status(500).json({
       message: 'Internal server error.',
       error: error instanceof Error ? error.message : String(error),
