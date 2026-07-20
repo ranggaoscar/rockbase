@@ -14,6 +14,7 @@ import { PostJobData } from './jobTypes';
 import { DurableIdempotencyService, IdempotencyConflictError } from '../services/DurableIdempotencyService';
 import { postingWorkerDeliveryIdentity } from '../utils/socialPostingIdempotency';
 import { AccountExecutionLease, accountExecutionLockService } from '../services/AccountExecutionLockService';
+import { AccountPostingBudgetReservation, accountPostingBudgetService } from '../services/AccountPostingBudgetService';
 
 const prisma = new PrismaClient();
 const durableIdempotency = new DurableIdempotencyService(prisma);
@@ -235,15 +236,18 @@ export const postingWorker = new Worker<PostJobData>(
     let deliveryOperationAcquired = false;
     let deliveryOperationCompleted = false;
     let accountExecutionLock: AccountExecutionLease | null = null;
+    let postingBudgetReservation: AccountPostingBudgetReservation | null = null;
+
+    const deliveryIdentity = () => postingWorkerDeliveryIdentity({
+      postId,
+      accountId,
+      content,
+      mediaUrls: mediaUrls || [],
+      postIdempotencyKey: post.idempotencyKey,
+    });
 
     const beginExternalDelivery = async () => {
-      const identity = postingWorkerDeliveryIdentity({
-        postId,
-        accountId,
-        content,
-        mediaUrls: mediaUrls || [],
-        postIdempotencyKey: post.idempotencyKey,
-      });
+      const identity = deliveryIdentity();
       try {
         const begun = await durableIdempotency.beginOperation(identity);
         if (!begun.acquired) return { shouldExecute: false, reason: `durable_operation_${begun.operation.status.toLowerCase()}` };
@@ -308,6 +312,8 @@ export const postingWorker = new Worker<PostJobData>(
 
         accountExecutionLock = await accountExecutionLockService.acquire(accountId);
         if (!accountExecutionLock) throw new Error('ACCOUNT_EXECUTION_LOCK_UNAVAILABLE');
+        postingBudgetReservation = await accountPostingBudgetService.reserve(accountId, deliveryIdentity().key, HUMAN_CONFIG.maxBatchSize);
+        if (!postingBudgetReservation) throw new Error('ACCOUNT_DAILY_POSTING_BUDGET_EXHAUSTED');
         const delivery = await beginExternalDelivery();
         if (!delivery.shouldExecute) return { status: 'skipped', reason: delivery.reason };
 
@@ -321,10 +327,12 @@ export const postingWorker = new Worker<PostJobData>(
         reachedPendingVerify = true;
         console.log(`[Worker] @${account.username} marked PENDING_VERIFY before Instagram publish verification`);
 
+        if (!await postingBudgetReservation.startExecution()) throw new Error('POSTING_BUDGET_RESERVATION_LOST');
         const result = await instagramPostingService.postToInstagram(accountId, content, mediaPath);
 
         if (result.status !== 'success') throw new Error(result.error || 'Instagram posting failed');
 
+        await postingBudgetReservation.complete();
         await durableIdempotency.markCompleted('posting-worker.delivery', deliveryOperationKey!, {
           resourceType: 'post-delivery',
           resourceId: postId,
@@ -377,6 +385,8 @@ export const postingWorker = new Worker<PostJobData>(
 
         accountExecutionLock = await accountExecutionLockService.acquire(accountId);
         if (!accountExecutionLock) throw new Error('ACCOUNT_EXECUTION_LOCK_UNAVAILABLE');
+        postingBudgetReservation = await accountPostingBudgetService.reserve(accountId, deliveryIdentity().key, HUMAN_CONFIG.maxBatchSize);
+        if (!postingBudgetReservation) throw new Error('ACCOUNT_DAILY_POSTING_BUDGET_EXHAUSTED');
         const delivery = await beginExternalDelivery();
         if (!delivery.shouldExecute) return { status: 'skipped', reason: delivery.reason };
 
@@ -390,10 +400,12 @@ export const postingWorker = new Worker<PostJobData>(
         reachedPendingVerify = true;
         console.log(`[Worker] @${account.username} marked PENDING_VERIFY before TikTok publish verification`);
 
+        if (!await postingBudgetReservation.startExecution()) throw new Error('POSTING_BUDGET_RESERVATION_LOST');
         const result = await tiktokPostingService.postToTikTok(accountId, content, mediaPath);
 
         if (result.status !== 'success') throw new Error(result.error || 'TikTok posting failed');
 
+        await postingBudgetReservation.complete();
         await durableIdempotency.markCompleted('posting-worker.delivery', deliveryOperationKey!, {
           resourceType: 'post-delivery',
           resourceId: postId,
@@ -610,6 +622,9 @@ export const postingWorker = new Worker<PostJobData>(
       }
       throw error; // Re-throw so BullMQ handles retries
     } finally {
+      await postingBudgetReservation?.releaseIfPending().catch((releaseError) => {
+        logger.warn('Posting budget reservation release failed', { accountId, error: releaseError.message });
+      });
       await accountExecutionLock?.release().catch((releaseError) => {
         logger.warn('Account execution lock release failed', { accountId, error: releaseError.message });
       });
