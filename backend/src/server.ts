@@ -8,6 +8,7 @@ import { Queue } from 'bullmq';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import * as path from 'path';
 import { AUTOMATION_DISABLED_MESSAGE, isAutomationEnabled } from './middleware/automation';
+import { getWorkerMode, getWorkerStartupPlan } from './utils/workerMode';
 import { authenticateToken } from './middleware/auth';
 import { assertJwtConfiguration, verifyAccessToken } from './middleware/security';
 
@@ -194,9 +195,12 @@ app.get('/api/health', async (req, res) => {
 });
 
 // Initialize Workers
-if (!isAutomationEnabled()) {
+const workerMode = getWorkerMode();
+const workerStartupPlan = getWorkerStartupPlan(isAutomationEnabled(), workerMode);
+console.log(`[Server] Worker mode: ${workerMode}`);
+if (workerStartupPlan === 'disabled') {
   console.log('[Server] Automation disabled; workers will not start.');
-} else if (process.env.RUN_WORKERS_SEPARATELY !== 'true') {
+} else if (workerStartupPlan === 'internal') {
   console.log('[Server] Initializing workers in-process...');
   require('./queue/postingWorker');
   require('./queue/analyticsWorker');
@@ -308,33 +312,6 @@ io.on('connection', (socket) => {
 // ── Startup: auto-clean stale BullMQ jobs ──────────────────────────────────
 const STARTUP_SESSION_ID = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-async function cleanStaleQueueOnStartup() {
-  try {
-    // Preserve 'delayed' jobs — these are user-scheduled posts waiting for their
-    // scheduled time. Wiping them on restart loses user intent.
-    // Only clean 'wait' (queued but not delayed) and 'failed' (terminal failures).
-    const states = ['wait', 'failed'] as const;
-    const counts = await automationQueue.getJobCounts(...states);
-    const delayedCount = (await automationQueue.getJobCounts('delayed')).delayed || 0;
-    const totalStale = (counts.wait || 0) + (counts.failed || 0);
-
-    if (totalStale > 0) {
-      console.log(`[Startup] Cleaning ${totalStale} stale jobs from previous session (preserving ${delayedCount} delayed job(s))...`);
-      for (const state of states) {
-        const removed = await automationQueue.clean(0, 10000, state);
-        if (removed.length > 0) {
-          console.log(`[Startup] Removed ${removed.length} ${state} job(s).`);
-        }
-      }
-      console.log(`[Startup] Stale queue cleaned. ${delayedCount} delayed job(s) preserved.`);
-    } else {
-      console.log(`[Startup] Queue is clean. No stale jobs. ${delayedCount} delayed job(s) preserved.`);
-    }
-  } catch (err: any) {
-    console.warn('[Startup] Could not clean queue (Redis may not be running):', err.message);
-  }
-}
-
 // Export session ID so workers/controllers can tag jobs
 export { STARTUP_SESSION_ID };
 
@@ -344,11 +321,11 @@ server.listen(port, async () => {
   console.log(`Session ID: ${STARTUP_SESSION_ID}`);
   console.log(`Frontend expected at: ${process.env.FRONTEND_URL || 'http://localhost:5173'}`);
 
-  // Clean stale queue on every server start
-  if (isAutomationEnabled()) {
-    await cleanStaleQueueOnStartup();
-  } else {
-    console.log('[Server] Automation disabled; startup queue cleanup skipped.');
+  try {
+    const counts = await automationQueue.getJobCounts('wait', 'active', 'delayed', 'failed', 'paused', 'completed');
+    console.log('[Server] Queue startup summary (non-destructive):', { queue: 'automationQueue', counts });
+  } catch (error) {
+    console.warn('[Server] Queue startup summary unavailable:', error instanceof Error ? error.message : error);
   }
 });
 server.timeout = 300000; // 5 minutes
