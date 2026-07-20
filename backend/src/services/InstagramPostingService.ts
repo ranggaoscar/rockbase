@@ -6,6 +6,7 @@ import * as os from 'os';
 import { browserManager } from './BrowserManager';
 import { PrismaClient } from '@prisma/client';
 import { HumanBehavior } from './HumanBehavior';
+import { assertAutomationEnabled } from '../middleware/automation';
 
 const prisma = new PrismaClient();
 
@@ -48,6 +49,7 @@ export class InstagramPostingService {
     caption: string,
     mediaPath: string,
   ): Promise<PostResult> {
+    assertAutomationEnabled();
     const account = await prisma.socialAccount.findUnique({ where: { id: accountId } });
     if (!account) return { accountId, username: 'unknown', platform: 'Instagram', status: 'failed', error: 'Account not found' };
     if (!account.cookies) return { accountId, username: account.username, platform: 'Instagram', status: 'skipped', error: 'No saved session — login via Farm View first' };

@@ -3,6 +3,7 @@
  */
 import { Router, Response } from 'express';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { automationGuard } from '../middleware/automation';
 import { campaignService } from '../services/CampaignService';
 import multer from 'multer';
 import * as fs from 'fs';
@@ -291,7 +292,7 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
 });
 
 // ── POST /api/campaigns/:id/start — Start a campaign ─────────────────────
-router.post('/:id/start', async (req: AuthRequest, res: Response) => {
+router.post('/:id/start', automationGuard, async (req: AuthRequest, res: Response) => {
   try {
     await campaignService.startCampaign(String(req.params.id));
     res.json({ success: true, message: 'Campaign started' });
@@ -311,7 +312,7 @@ router.post('/:id/pause', async (req: AuthRequest, res: Response) => {
 });
 
 // ── POST /api/campaigns/:id/resume — Resume a campaign ───────────────────
-router.post('/:id/resume', async (req: AuthRequest, res: Response) => {
+router.post('/:id/resume', automationGuard, async (req: AuthRequest, res: Response) => {
   try {
     await campaignService.resumeCampaign(String(req.params.id));
     res.json({ success: true, message: 'Campaign resumed' });

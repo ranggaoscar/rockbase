@@ -11,6 +11,7 @@ import { resolveAccountSelection, ResolvedAccountSummary } from './AccountSelect
 import { sessionHealthService } from './SessionHealthService';
 import { logActivity } from './ActivityLogService';
 import { aiService, CampaignAiPlan } from './AiService';
+import { assertAutomationEnabled } from '../middleware/automation';
 
 const prisma = new PrismaClient();
 const DEFAULT_WORKSPACE_ID = 'workspace-default';
@@ -325,6 +326,7 @@ export class CampaignService {
    * Start a campaign — processes actions with staggered timing.
    */
   public async startCampaign(campaignId: string): Promise<void> {
+    assertAutomationEnabled();
     const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
     if (!campaign) throw new Error('Campaign not found');
     if (campaign.status === 'running') throw new Error('Campaign is already running');
@@ -364,6 +366,7 @@ export class CampaignService {
    * Resume a paused campaign.
    */
   public async resumeCampaign(campaignId: string): Promise<void> {
+    assertAutomationEnabled();
     const control = runningCampaigns.get(campaignId);
     if (control) {
       control.paused = false;

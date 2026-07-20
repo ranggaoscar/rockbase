@@ -7,6 +7,7 @@ import { Server } from 'socket.io';
 import { Queue } from 'bullmq';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import * as path from 'path';
+import { AUTOMATION_DISABLED_MESSAGE, isAutomationEnabled } from './middleware/automation';
 
 dotenv.config();
 
@@ -149,6 +150,7 @@ app.get('/api/health', async (req, res) => {
     status: isHealthy ? 'ok' : 'unhealthy',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
+    automationEnabled: isAutomationEnabled(),
     workerMode: process.env.RUN_WORKERS_SEPARATELY === 'true' ? 'separate' : 'in-process',
     database: {
       status: dbStatus,
@@ -169,7 +171,9 @@ app.get('/api/health', async (req, res) => {
 });
 
 // Initialize Workers
-if (process.env.RUN_WORKERS_SEPARATELY !== 'true') {
+if (!isAutomationEnabled()) {
+  console.log('[Server] Automation disabled; workers will not start.');
+} else if (process.env.RUN_WORKERS_SEPARATELY !== 'true') {
   console.log('[Server] Initializing workers in-process...');
   require('./queue/postingWorker');
   require('./queue/analyticsWorker');
@@ -201,12 +205,26 @@ backupService.init();
 backupService.createBackup();
 logRetentionService.init();
 campaignSchedulerService.init();
-sessionHealthScheduler.init();
+if (isAutomationEnabled()) {
+  sessionHealthScheduler.init();
+} else {
+  console.log('[Server] Automation disabled; session health scheduler will not start.');
+}
 
 io.on('connection', (socket) => {
   console.log('Client connected to WebSocket:', socket.id);
 
+  const rejectDisabledAutomation = () => {
+    if (isAutomationEnabled()) return false;
+    socket.emit('automation_disabled', {
+      error: 'AUTOMATION_DISABLED',
+      message: AUTOMATION_DISABLED_MESSAGE,
+    });
+    return true;
+  };
+
   socket.on('join_farm', () => {
+    if (rejectDisabledAutomation()) return;
     farmService.startStreaming(socket);
   });
 
@@ -215,11 +233,13 @@ io.on('connection', (socket) => {
   });
 
   socket.on('farm_visible_accounts', (data) => {
+    if (rejectDisabledAutomation()) return;
     const accountIds = Array.isArray(data?.accountIds) ? data.accountIds.map(String) : [];
     farmService.updateVisibleAccounts(socket, accountIds);
   });
 
   socket.on('control_action', async (data) => {
+    if (rejectDisabledAutomation()) return;
     // set_mode needs the live socket reference — handle it here
     if (data.action === 'set_mode') {
       await farmService.setControlMode(
@@ -282,18 +302,26 @@ server.listen(port, async () => {
   console.log(`Frontend expected at: ${process.env.FRONTEND_URL || 'http://localhost:5173'}`);
 
   // Clean stale queue on every server start
-  await cleanStaleQueueOnStartup();
+  if (isAutomationEnabled()) {
+    await cleanStaleQueueOnStartup();
+  } else {
+    console.log('[Server] Automation disabled; startup queue cleanup skipped.');
+  }
 });
 server.timeout = 300000; // 5 minutes
 
 // Initialize Browser Manager
 import { browserManager } from './services/BrowserManager';
 
-browserManager.initBrowser().then(() => {
-  console.log('Playwright Browser Manager initialized.');
-}).catch((err: any) => {
-  console.error('Failed to initialize Playwright:', err);
-});
+if (isAutomationEnabled()) {
+  browserManager.initBrowser().then(() => {
+    console.log('Playwright Browser Manager initialized.');
+  }).catch((err: any) => {
+    console.error('Failed to initialize Playwright:', err);
+  });
+} else {
+  console.log('[Server] Automation disabled; Playwright browser will not start.');
+}
 
 // ── Graceful Shutdown ──────────────────────────────────────────────
 function gracefulShutdown(signal: string) {

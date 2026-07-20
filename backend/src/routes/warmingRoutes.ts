@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { automationGuard } from '../middleware/automation';
 import { instagramWarmingService } from '../services/InstagramWarmingService';
 
 const router = Router();
@@ -56,7 +57,7 @@ router.get('/', async (_req: AuthRequest, res: Response) => {
 });
 
 // ── POST /api/warming/:accountId/run — start a real Playwright warming session
-router.post('/:accountId/run', async (req: AuthRequest, res: Response) => {
+router.post('/:accountId/run', automationGuard, async (req: AuthRequest, res: Response) => {
   const accountId = String(req.params.accountId);
 
   try {
@@ -111,7 +112,7 @@ router.post('/:accountId/run', async (req: AuthRequest, res: Response) => {
 });
 
 // ── POST /api/warming/:accountId/run-task — run a single specific task ───
-router.post('/:accountId/run-task', async (req: AuthRequest, res: Response) => {
+router.post('/:accountId/run-task', automationGuard, async (req: AuthRequest, res: Response) => {
   const accountId = String(req.params.accountId);
   const { task, count } = req.body as { task: 'follow' | 'like' | 'watch_reel' | 'explore' | 'comment' | 'view_story' | 'save_post'; count?: number };
 
@@ -159,7 +160,7 @@ router.get('/status', async (_req: AuthRequest, res: Response) => {
 });
 
 // ── POST /api/warming/:accountId/advance-day — manually advance warming day
-router.post('/:accountId/advance-day', async (req: AuthRequest, res: Response) => {
+router.post('/:accountId/advance-day', automationGuard, async (req: AuthRequest, res: Response) => {
   const accountId = String(req.params.accountId);
   try {
     const account = await prisma.socialAccount.findUnique({ where: { id: accountId } });

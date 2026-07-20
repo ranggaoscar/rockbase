@@ -1,5 +1,13 @@
 import dotenv from 'dotenv';
+import { PrismaClient } from '@prisma/client';
+import { Queue } from 'bullmq';
+import { AUTOMATION_DISABLED_MESSAGE, isAutomationEnabled } from './middleware/automation';
 dotenv.config();
+
+if (!isAutomationEnabled()) {
+  console.error('[Worker Process] ' + AUTOMATION_DISABLED_MESSAGE);
+  process.exit(1);
+}
 
 console.log('================================================');
 console.log('         ROCK BASE QUEUE WORKER SYSTEM          ');
@@ -7,11 +15,9 @@ console.log('================================================');
 console.log(`[Worker Process] Starting at: ${new Date().toISOString()}`);
 
 // Load workers
-import './queue/postingWorker';
-import './queue/analyticsWorker';
-import './queue/engagementWorker';
-import { PrismaClient } from '@prisma/client';
-import { Queue } from 'bullmq';
+require('./queue/postingWorker');
+require('./queue/analyticsWorker');
+require('./queue/engagementWorker');
 
 const prisma = new PrismaClient();
 const connection = {

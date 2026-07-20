@@ -4,6 +4,7 @@ import { Browser, BrowserContext, Page } from 'playwright';
 import stealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { PrismaClient } from '@prisma/client';
 import { encrypt, decrypt } from '../utils/encryption';
+import { assertAutomationEnabled } from '../middleware/automation';
 
 chromium.use(stealthPlugin());
 
@@ -22,6 +23,7 @@ export class BrowserManager {
    * Initializes the shared browser instance.
    */
   public async initBrowser() {
+    assertAutomationEnabled();
     if (!this.browser) {
       console.log('Launching Playwright browser...');
       this.browser = await chromium.launch({
@@ -41,6 +43,7 @@ export class BrowserManager {
    * Creates or retrieves an isolated BrowserContext for a specific social account.
    */
   public async getContext(accountId: string): Promise<BrowserContext> {
+    assertAutomationEnabled();
     if (!this.browser) await this.initBrowser();
     
     if (this.activeContexts.has(accountId)) {

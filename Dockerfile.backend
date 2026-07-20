@@ -1,9 +1,25 @@
 # ── ROCK BASE Backend ───────────────────────────────────────────────
-FROM node:20-slim AS base
+FROM node:20-slim AS build
 
-# Install Playwright system dependencies + Chromium
+WORKDIR /app/backend
+
+COPY backend/package.json backend/package-lock.json ./
+RUN npm ci
+
+COPY backend/prisma ./prisma
+RUN npx prisma generate
+
+COPY backend/tsconfig.json ./
+COPY backend/src ./src
+RUN npx tsc -p tsconfig.json
+
+FROM node:20-slim AS production
+
+ENV NODE_ENV=production \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
 RUN apt-get update && apt-get install -y \
-    wget curl gnupg ca-certificates \
+    ca-certificates \
     libnss3 libnspr4 libatk-bridge2.0-0 libdrm2 \
     libxkbcommon0 libxcomposite1 libxdamage1 \
     libxrandr2 libgbm1 libpango-1.0-0 libcairo2 \
@@ -14,19 +30,20 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app/backend
 
-# Install backend dependencies
 COPY backend/package.json backend/package-lock.json ./
-RUN npm ci --only=production || npm install
+RUN npm ci --omit=dev && \
+    mkdir -p /ms-playwright && \
+    npx playwright install chromium
 
-# Install Playwright Chromium
-RUN npx playwright install chromium
+COPY --chown=node:node --from=build /app/backend/dist ./dist
+COPY --chown=node:node --from=build /app/backend/node_modules/.prisma ./node_modules/.prisma
+COPY --chown=node:node backend/prisma ./prisma
 
-# Copy backend source
-COPY backend/ ./
+RUN mkdir -p uploads backups logs && \
+    chown -R node:node /app/backend /ms-playwright
 
-# Generate Prisma client
-RUN npx prisma generate
+USER node
 
 EXPOSE 3010
 
-CMD ["npm", "run", "dev"]
+CMD ["node", "dist/server.js"]

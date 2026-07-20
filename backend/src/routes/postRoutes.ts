@@ -14,6 +14,7 @@ import {
   acquireRequestLock,
   releaseRequestLock,
 } from '../utils/idempotency';
+import { automationGuard } from '../middleware/automation';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -153,7 +154,7 @@ const upload = multer({
 
 // ── POST /api/posts/bulk — Bulk post with AI caption spinning ─────────────
 // multipart/form-data: image file + JSON fields
-router.post('/bulk', upload.single('media'), async (req: Request, res: Response) => {
+router.post('/bulk', automationGuard, upload.single('media'), async (req: Request, res: Response) => {
   let payloadHash = '';
   try {
     const {
@@ -441,7 +442,7 @@ router.post('/bulk', upload.single('media'), async (req: Request, res: Response)
 });
 
 // ── POST /api/posts/bulk-multi — Multi-media bulk post (Assignment Mode support) ───────────
-router.post('/bulk-multi', upload.array('media', 20), async (req: Request, res: Response) => {
+router.post('/bulk-multi', automationGuard, upload.array('media', 20), async (req: Request, res: Response) => {
   let payloadHash = '';
   try {
     const {
@@ -812,7 +813,7 @@ router.post('/spin-preview', async (req: Request, res: Response) => {
 });
 
 // ── POST /api/posts — Legacy single-account post (kept for backwards compatibility)
-router.post('/', async (req: Request, res: Response) => {
+router.post('/', automationGuard, async (req: Request, res: Response) => {
   try {
     const { workspaceId = 'workspace-default', content, mediaUrls, accountIds, scheduleAt } = req.body;
 
