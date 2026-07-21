@@ -9,6 +9,7 @@ import { campaignService } from '../services/CampaignService';
 import { DurableIdempotencyService, IdempotencyConflictError, IdempotencyValidationError } from '../services/DurableIdempotencyService';
 import { canonicalRequestHash } from '../utils/canonicalRequestHash';
 import { Queue } from 'bullmq';
+import { HermesReelCampaignService } from '../services/HermesReelCampaignService';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -50,6 +51,8 @@ function campaignInput(body: any) {
     dailyCommentLimit: body.dailyCommentLimit === undefined ? undefined : Number(body.dailyCommentLimit),
     activeHoursStart: body.activeHoursStart === undefined ? undefined : String(body.activeHoursStart),
     activeHoursEnd: body.activeHoursEnd === undefined ? undefined : String(body.activeHoursEnd),
+    items: Array.isArray(body.items) ? body.items.map((item: any) => ({ mediaUrl: item.mediaUrl ? String(item.mediaUrl) : undefined, mediaId: item.mediaId ? String(item.mediaId) : undefined, caption: String(item.caption || ''), postType: String(item.postType || ''), metadata: item.metadata || undefined })) : [],
+    metadata: body.metadata || undefined,
   };
 }
 
@@ -98,7 +101,9 @@ router.post('/shadow-campaigns', async (req, res) => {
       acquired = true;
     }
     try {
-      const campaign = await campaignService.createCampaign(input);
+      const reelService = input.items.length ? new HermesReelCampaignService(prisma) : null;
+      const campaign = reelService ? await reelService.submit(input) : await campaignService.createCampaign(input);
+      await reelService?.close();
       if (key) await durableIdempotency.markCompleted(scope, key, { resourceType: 'campaign', resourceId: campaign.id, resultReference: { campaignId: campaign.id } });
       res.status(201).json({ campaign, mode: 'shadow' });
     } catch (error) {

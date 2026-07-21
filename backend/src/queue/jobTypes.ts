@@ -1,6 +1,7 @@
 export interface PostJobData {
   postId: string;
   accountId: string;
+  campaignId?: string;
   content: string;
   mediaLocalPath?: string;
   mediaUrls: string[];
@@ -14,3 +15,4 @@ export interface SocialPostingJob {
   account_ids: string[];
   scheduled_time?: string;
 }
+
