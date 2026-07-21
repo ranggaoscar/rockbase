@@ -38,6 +38,8 @@ export function hermesSafeResult(action: any) {
     result, scheduledAt: action.scheduledAt ?? null, executedAt: action.executedAt ?? null };
 }
 
+export const campaignPostCancellationData = { status: 'failed', results: JSON.stringify({ status: 'failed', error: 'CAMPAIGN_CANCELLED' }) };
+
 export function campaignCancellationAllowed(status: string, actionStatuses: string[]) { return (status === 'pending' || status === 'paused' || status === 'cancelled') && !actionStatuses.some((value) => value === 'running' || value === 'executing' || value === 'completed'); }
 async function removeCampaignQueueJobs(campaignId: string) { const connection = { host: process.env.REDIS_HOST || '127.0.0.1', port: Number(process.env.REDIS_PORT || 6379) }; let removed = 0; for (const name of ['automationQueue', 'engagementQueue', 'scheduledPosts']) { const queue = new Queue(name, { connection }); try { const active = await queue.getJobs(['active']); if (active.some((job) => job.data?.campaignId === campaignId)) throw new Error('Campaign has an executing queue job'); for (const job of await queue.getJobs(['wait', 'delayed', 'paused', 'prioritized'])) if (job.data?.campaignId === campaignId) { await job.remove(); removed++; } } finally { await queue.close(); } } return removed; }
 
