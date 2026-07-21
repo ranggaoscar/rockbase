@@ -15,6 +15,7 @@ import { DurableIdempotencyService, IdempotencyConflictError } from '../services
 import { postingWorkerDeliveryIdentity } from '../utils/socialPostingIdempotency';
 import { AccountExecutionLease, accountExecutionLockService } from '../services/AccountExecutionLockService';
 import { AccountPostingBudgetReservation, accountPostingBudgetService } from '../services/AccountPostingBudgetService';
+import { ResolvedReelMedia, resolveReelMedia } from '../services/ReelMediaResolver';
 
 const prisma = new PrismaClient();
 const durableIdempotency = new DurableIdempotencyService(prisma);
@@ -237,6 +238,7 @@ export const postingWorker = new Worker<PostJobData>(
     let deliveryOperationCompleted = false;
     let accountExecutionLock: AccountExecutionLease | null = null;
     let postingBudgetReservation: AccountPostingBudgetReservation | null = null;
+    let resolvedReelMedia: ResolvedReelMedia | null = null;
 
     const deliveryIdentity = () => postingWorkerDeliveryIdentity({
       postId,
@@ -274,7 +276,7 @@ export const postingWorker = new Worker<PostJobData>(
             parsed = new URL(first);
           } catch {}
 
-          if (parsed) {
+          if (parsed && postType !== 'reel') {
             const uploadPrefix = '/uploads/';
             if (parsed.pathname.startsWith(uploadPrefix)) {
               resolvedMediaPath = path.join(process.cwd(), 'uploads', path.basename(parsed.pathname));
@@ -303,7 +305,10 @@ export const postingWorker = new Worker<PostJobData>(
 
       if (account.platform === 'Instagram') {
         // Real Playwright automation
-        if (!resolvedMediaPath || !fs.existsSync(resolvedMediaPath)) {
+        if (postType === 'reel') {
+          resolvedReelMedia = await resolveReelMedia(resolvedMediaPath || mediaUrls?.[0] || '');
+          resolvedMediaPath = resolvedReelMedia.localPath;
+        } else if (!resolvedMediaPath || !fs.existsSync(resolvedMediaPath)) {
           throw new Error(postType === 'reel' ? 'No valid video file path provided for Instagram Reel.' : 'No valid media file path provided. Instagram posts require an image.');
         }
 
@@ -630,6 +635,9 @@ export const postingWorker = new Worker<PostJobData>(
       });
       await accountExecutionLock?.release().catch((releaseError) => {
         logger.warn('Account execution lock release failed', { accountId, error: releaseError.message });
+      });
+      await resolvedReelMedia?.cleanup().catch((cleanupError) => {
+        logger.warn('Reel temporary media cleanup failed', { postId, error: cleanupError.message });
       });
     }
   },
