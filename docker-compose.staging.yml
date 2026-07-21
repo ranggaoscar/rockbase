@@ -37,7 +37,7 @@ services:
       migrate:
         condition: service_completed_successfully
     environment:
-      AUTOMATION_ENABLED: "false"
+      AUTOMATION_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       BOOTSTRAP_ADMIN_ENABLED: ${BOOTSTRAP_ADMIN_ENABLED:?BOOTSTRAP_ADMIN_ENABLED is required}
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:?BOOTSTRAP_ADMIN_EMAIL is required}
@@ -105,7 +105,7 @@ services:
     profiles: ["tools"]
     restart: "no"
     environment:
-      AUTOMATION_ENABLED: "false"
+      AUTOMATION_ENABLED: "true"
       RESTORE_TARGET_ROOT: /restore
     volumes:
       - staging-backups:/backups:ro
@@ -166,5 +166,4 @@ networks:
     name: rockbase-hermes-staging-network
     driver: bridge
     internal: true
-
 
