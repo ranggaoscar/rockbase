@@ -51,7 +51,7 @@ function campaignInput(body: any) {
     dailyCommentLimit: body.dailyCommentLimit === undefined ? undefined : Number(body.dailyCommentLimit),
     activeHoursStart: body.activeHoursStart === undefined ? undefined : String(body.activeHoursStart),
     activeHoursEnd: body.activeHoursEnd === undefined ? undefined : String(body.activeHoursEnd),
-    items: Array.isArray(body.items) ? body.items.map((item: any) => ({ mediaUrl: item.mediaUrl ? String(item.mediaUrl) : undefined, mediaId: item.mediaId ? String(item.mediaId) : undefined, caption: String(item.caption || ''), postType: String(item.postType || ''), metadata: item.metadata || undefined })) : [],
+    items: Array.isArray(body.items) ? body.items.map((item: any) => ({ mediaUrl: item.mediaUrl ? String(item.mediaUrl) : undefined, mediaId: item.mediaId ? String(item.mediaId) : undefined, caption: String(item.caption || ''), postType: String(item.postType || 'reel'), platform: String(item.platform || 'instagram'), metadata: item.metadata || undefined })) : [],
     metadata: body.metadata || undefined,
   };
 }

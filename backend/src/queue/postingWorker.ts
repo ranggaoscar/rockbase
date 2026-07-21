@@ -130,7 +130,7 @@ async function resolveRemoteMediaPath(mediaUrl: string): Promise<string> {
 export const postingWorker = new Worker<PostJobData>(
   'automationQueue',
   async (job: Job<PostJobData>) => {
-    const { postId, accountId, content, mediaLocalPath: rawMediaPath, mediaUrls } = job.data;
+    const { postId, accountId, content, mediaLocalPath: rawMediaPath, mediaUrls, campaignActionId, postType } = job.data;
     console.log(`[Worker] Processing job ${job.id} | post ${postId} | account ${accountId}`);
 
     // Fetch the post from database
@@ -304,7 +304,7 @@ export const postingWorker = new Worker<PostJobData>(
       if (account.platform === 'Instagram') {
         // Real Playwright automation
         if (!resolvedMediaPath || !fs.existsSync(resolvedMediaPath)) {
-          throw new Error('No valid media file path provided. Instagram posts require an image.');
+          throw new Error(postType === 'reel' ? 'No valid video file path provided for Instagram Reel.' : 'No valid media file path provided. Instagram posts require an image.');
         }
 
         // narrowed: resolvedMediaPath is string from here
@@ -349,6 +349,7 @@ export const postingWorker = new Worker<PostJobData>(
           },
         });
 
+        if (campaignActionId) await prisma.campaignAction.update({ where: { id: campaignActionId }, data: { status: 'completed', executedAt: new Date() } }).catch(() => {});
         logActivity({
           workspaceId: account.workspaceId,
           type: 'posting',
@@ -422,6 +423,7 @@ export const postingWorker = new Worker<PostJobData>(
           },
         });
 
+        if (campaignActionId) await prisma.campaignAction.update({ where: { id: campaignActionId }, data: { status: 'completed', executedAt: new Date() } }).catch(() => {});
         logActivity({
           workspaceId: account.workspaceId,
           type: 'posting',
@@ -530,6 +532,7 @@ export const postingWorker = new Worker<PostJobData>(
         const isFailedVerify = error.message?.includes('FAILED_VERIFY');
         const postStatus = isFailedVerify ? 'published' : 'failed';
         const resultStatus = isFailedVerify ? 'FAILED_VERIFY' : 'failed';
+        if (campaignActionId && !isFailedVerify) await prisma.campaignAction.update({ where: { id: campaignActionId }, data: { status: 'failed', result: JSON.stringify({ category: categorized.category, message: categorized.humanReadable }), executedAt: new Date() } }).catch(() => {});
 
         await prisma.post.update({
           where: { id: postId },
@@ -683,3 +686,4 @@ postingWorker.on('stalled', (jobId) => {
   console.warn(`[Worker] ⚠️ STALLED: job ${jobId}`);
   logger.warn('Posting job stalled — lock expired', { jobId });
 });
+

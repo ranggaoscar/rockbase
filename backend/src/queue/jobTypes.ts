@@ -2,6 +2,8 @@ export interface PostJobData {
   postId: string;
   accountId: string;
   campaignId?: string;
+  campaignActionId?: string;
+  postType?: 'reel';
   content: string;
   mediaLocalPath?: string;
   mediaUrls: string[];
