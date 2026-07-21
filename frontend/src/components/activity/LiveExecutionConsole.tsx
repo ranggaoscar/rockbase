@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import {
+  Activity,
   ArrowDown,
   CheckCircle2,
   ChevronDown,

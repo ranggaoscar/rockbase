@@ -145,7 +145,8 @@ export default function ActivityTimeline() {
 
   // Load recent execution events from REST on mount (for page refresh)
   useEffect(() => {
-    activityApi.executionEvents({ limit: 50 }).then(({ data }: any) => {
+    const campaignId = postingConsole.filterCampaign || undefined
+    activityApi.executionEvents({ limit: 50, campaignId }).then(({ data }: any) => {
       if (data?.events?.length) {
         postingConsole.clear()
         // Events come most-recent-first, reverse to chronological order
@@ -283,26 +284,6 @@ export default function ActivityTimeline() {
         </div>
       </div>
 
-      <LiveExecutionConsole
-        events={postingConsole.events}
-        connected={postingConsole.connected}
-        autoScroll={postingConsole.autoScroll}
-        onToggleAutoScroll={() => postingConsole.setAutoScroll(!postingConsole.autoScroll)}
-        filterCampaign={postingConsole.filterCampaign}
-        onFilterCampaignChange={postingConsole.setFilterCampaign}
-        filterUsername={postingConsole.filterUsername}
-        onFilterUsernameChange={postingConsole.setFilterUsername}
-        onClear={() => postingConsole.clear()}
-        onRefresh={() => {
-          postingConsole.clear()
-          activityApi.executionEvents({ limit: 50 }).then(({ data }: any) => {
-            if (data?.events?.length) {
-              postingConsole.loadFromRest([...data.events].reverse())
-            }
-          }).catch(() => {})
-        }}
-      />
-
       <Card className={cn('border-blue-500/20', queueRunning && 'border-green-500/30 bg-green-500/[0.03]')}>
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center justify-between gap-2">
@@ -392,6 +373,27 @@ export default function ActivityTimeline() {
               </div>
             ))}
           </div>
+
+          <LiveExecutionConsole
+            events={postingConsole.events}
+            connected={postingConsole.connected}
+            autoScroll={postingConsole.autoScroll}
+            onToggleAutoScroll={() => postingConsole.setAutoScroll(!postingConsole.autoScroll)}
+            filterCampaign={postingConsole.filterCampaign}
+            onFilterCampaignChange={postingConsole.setFilterCampaign}
+            filterUsername={postingConsole.filterUsername}
+            onFilterUsernameChange={postingConsole.setFilterUsername}
+            onClear={() => postingConsole.clear()}
+            onRefresh={() => {
+              const campaignId = postingConsole.filterCampaign || undefined
+              postingConsole.clear()
+              activityApi.executionEvents({ limit: 50, campaignId }).then(({ data }: any) => {
+                if (data?.events?.length) {
+                  postingConsole.loadFromRest([...data.events].reverse())
+                }
+              }).catch(() => {})
+            }}
+          />
 
           <div className="rounded-lg border border-border bg-secondary/20 p-3">
             <div className="mb-2 flex items-center justify-between">

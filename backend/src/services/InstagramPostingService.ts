@@ -50,6 +50,7 @@ export class InstagramPostingService {
     accountId: string,
     caption: string,
     mediaPath: string,
+    campaignId?: string,
   ): Promise<PostResult> {
     assertAutomationEnabled();
     const account = await prisma.socialAccount.findUnique({ where: { id: accountId } });
@@ -67,6 +68,7 @@ export class InstagramPostingService {
         timestamp: new Date().toISOString(),
         accountId,
         username: account.username,
+        campaignId: campaignId || undefined,
         stage: 'browser_launching',
         level: 'info',
         message: `Starting Instagram post for @${account.username}`,
@@ -81,6 +83,7 @@ export class InstagramPostingService {
         timestamp: new Date().toISOString(),
         accountId,
         username: account.username,
+        campaignId: campaignId || undefined,
         stage: 'instagram_opened',
         level: 'info',
         message: `Instagram opened for @${account.username}`,
@@ -90,15 +93,16 @@ export class InstagramPostingService {
       // 2. Check we're still logged in
       const loginForm = await page.$('input[name="username"]');
       if (loginForm) {
-        postingEventEmitter.emit({
-          timestamp: new Date().toISOString(),
-          accountId,
-          username: account.username,
-          stage: 'failed',
-          level: 'error',
-          message: 'Session expired — please re-login via Farm View',
-          metadata: { platform: 'Instagram', reason: 'session_expired' },
-        });
+      postingEventEmitter.emit({
+        timestamp: new Date().toISOString(),
+        accountId,
+        username: account.username,
+        campaignId: campaignId || undefined,
+        stage: 'failed',
+        level: 'error',
+        message: 'Session expired — please re-login via Farm View',
+        metadata: { platform: 'Instagram', reason: 'session_expired' },
+      });
         return { accountId, username: account.username, platform: 'Instagram', status: 'failed', error: 'Session expired — please re-login via Farm View' };
       }
 
@@ -114,6 +118,18 @@ export class InstagramPostingService {
       // Ensure we are back on the home feed and stable before clicking Create
       await page.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
       await HumanBehavior.shortPause();
+
+      postingEventEmitter.emit({
+        timestamp: new Date().toISOString(),
+        accountId,
+        username: account.username,
+        campaignId: campaignId || undefined,
+        stage: 'browser_ready',
+        level: 'info',
+        message: `Browser ready for posting with @${account.username}`,
+        progress: 15,
+        metadata: { platform: 'Instagram' },
+      });
 
       // 3. Click the "Create" / "+" button in the sidebar
       const createSelectors = [
@@ -159,6 +175,7 @@ export class InstagramPostingService {
         timestamp: new Date().toISOString(),
         accountId,
         username: account.username,
+        campaignId: campaignId || undefined,
         stage: 'media_selected',
         level: 'info',
         message: `Selecting media for @${account.username}`,
@@ -201,6 +218,7 @@ export class InstagramPostingService {
         timestamp: new Date().toISOString(),
         accountId,
         username: account.username,
+        campaignId: campaignId || undefined,
         stage: 'upload_started',
         level: 'info',
         message: `Upload started for @${account.username}`,
@@ -217,6 +235,7 @@ export class InstagramPostingService {
         timestamp: new Date().toISOString(),
         accountId,
         username: account.username,
+        campaignId: campaignId || undefined,
         stage: 'upload_completed',
         level: 'success',
         message: `Upload completed for @${account.username}`,
@@ -233,13 +252,14 @@ export class InstagramPostingService {
         const beforeReelsScreenshot = await this.captureShareScreenshot(page, account.username, 'before_reels_next');
         console.log(`[Instagram] @${account.username} before Reels Next screenshot saved to ${beforeReelsScreenshot}`);
         // Check for upload rejection dialog before proceeding
-        await this.checkUploadRejected(page, account.username, accountId);
+        await this.checkUploadRejected(page, account.username, accountId, campaignId);
         await this.clickNext(page, 'Reels step');
 
         postingEventEmitter.emit({
           timestamp: new Date().toISOString(),
           accountId,
           username: account.username,
+          campaignId: campaignId || undefined,
           stage: 'next_clicked',
           level: 'info',
           message: `Next clicked (Reels step) for @${account.username}`,
@@ -256,6 +276,7 @@ export class InstagramPostingService {
           timestamp: new Date().toISOString(),
           accountId,
           username: account.username,
+          campaignId: campaignId || undefined,
           stage: 'cover_next_clicked',
           level: 'info',
           message: `Cover Next clicked for @${account.username}`,
@@ -275,6 +296,7 @@ export class InstagramPostingService {
           timestamp: new Date().toISOString(),
           accountId,
           username: account.username,
+          campaignId: campaignId || undefined,
           stage: 'next_clicked',
           level: 'info',
           message: `Next clicked (Crop step) for @${account.username}`,
@@ -291,6 +313,7 @@ export class InstagramPostingService {
           timestamp: new Date().toISOString(),
           accountId,
           username: account.username,
+          campaignId: campaignId || undefined,
           stage: 'next_clicked',
           level: 'info',
           message: `Next clicked (Filter step) for @${account.username}`,
@@ -310,6 +333,7 @@ export class InstagramPostingService {
             timestamp: new Date().toISOString(),
             accountId,
             username: account.username,
+            campaignId: campaignId || undefined,
             stage: 'caption_inserted',
             level: 'success',
             message: `Caption inserted for @${account.username} (${captionInsert.length} chars)`,
@@ -344,6 +368,7 @@ export class InstagramPostingService {
         timestamp: new Date().toISOString(),
         accountId,
         username: account.username,
+        campaignId: campaignId || undefined,
         stage: 'share_clicked',
         level: 'info',
         message: `Share clicked for @${account.username}`,
@@ -356,6 +381,7 @@ export class InstagramPostingService {
         timestamp: new Date().toISOString(),
         accountId,
         username: account.username,
+        campaignId: campaignId || undefined,
         stage: 'verification_started',
         level: 'info',
         message: `Verifying publish for @${account.username}`,
@@ -368,6 +394,7 @@ export class InstagramPostingService {
         timestamp: new Date().toISOString(),
         accountId,
         username: account.username,
+        campaignId: campaignId || undefined,
         stage: 'verification_poll',
         level: verification.verified ? 'success' : 'warning',
         message: verification.verified
@@ -409,6 +436,7 @@ export class InstagramPostingService {
         timestamp: new Date().toISOString(),
         accountId,
         username: account.username,
+        campaignId: campaignId || undefined,
         stage: 'published',
         level: 'success',
         message: `Published successfully for @${account.username}`,
@@ -434,6 +462,7 @@ export class InstagramPostingService {
         timestamp: new Date().toISOString(),
         accountId,
         username: account.username,
+        campaignId: campaignId || undefined,
         stage: 'failed',
         level: 'error',
         message: `Posting failed for @${account.username}: ${err.message}`,
@@ -448,6 +477,7 @@ export class InstagramPostingService {
         timestamp: new Date().toISOString(),
         accountId,
         username: account.username,
+        campaignId: campaignId || undefined,
         stage: 'cleanup_completed',
         level: 'info',
         message: `Cleanup completed for @${account.username}`,
@@ -1596,7 +1626,7 @@ export class InstagramPostingService {
   }
 
   /** Check if Instagram rejected the uploaded file — throws REEL_UPLOAD_REJECTED if any rejection dialog is visible */
-  private async checkUploadRejected(page: Page, username: string, accountId: string): Promise<void> {
+  private async checkUploadRejected(page: Page, username: string, accountId: string, campaignId?: string): Promise<void> {
     const rejectionTexts = [
       'File couldn\'t be uploaded',
       'Couldn\'t upload video',
@@ -1617,6 +1647,7 @@ export class InstagramPostingService {
             timestamp: new Date().toISOString(),
             accountId,
             username,
+            campaignId: campaignId || undefined,
             stage: 'upload_rejected',
             level: 'error',
             message: `Upload rejected for @${username}: ${text}`,
