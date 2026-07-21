@@ -35,11 +35,11 @@ export async function resolveReelMedia(source: string): Promise<ResolvedReelMedi
   let url: URL | undefined; try { url = new URL(source); } catch {}
   if (!url || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
     const normalized = source.replace(/\\/g, '/'); const uploadsIndex = normalized.lastIndexOf('/uploads/');
-    const localPath = uploadsIndex >= 0 ? path.join(process.cwd(), 'uploads', path.basename(normalized)) : path.isAbsolute(source) ? source : path.join(process.cwd(), 'uploads', path.basename(source));
+    const localPath = uploadsIndex >= 0 ? path.join(process.cwd(), normalized.slice(uploadsIndex + 1)) : path.isAbsolute(source) ? source : path.join(process.cwd(), 'uploads', path.basename(source));
     await ensureReadableVideo(localPath); return { localPath, cleanup: async () => {} };
   }
   if (url.pathname.startsWith('/uploads/')) {
-    const localPath = path.join(process.cwd(), 'uploads', path.basename(url.pathname));
+    const localPath = path.join(process.cwd(), url.pathname.replace(/^\//, ''));
     await ensureReadableVideo(localPath); return { localPath, cleanup: async () => {} };
   }
   const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'rockbase-reel-'));

@@ -279,7 +279,7 @@ export const postingWorker = new Worker<PostJobData>(
           if (parsed && postType !== 'reel') {
             const uploadPrefix = '/uploads/';
             if (parsed.pathname.startsWith(uploadPrefix)) {
-              resolvedMediaPath = path.join(process.cwd(), 'uploads', path.basename(parsed.pathname));
+              resolvedMediaPath = path.join(process.cwd(), parsed.pathname.replace(/^\//, ''));
             } else if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
               resolvedMediaPath = await resolveRemoteMediaPath(first);
             }
@@ -291,7 +291,7 @@ export const postingWorker = new Worker<PostJobData>(
               : normalized;
             resolvedMediaPath = path.isAbsolute(filename)
               ? filename
-              : path.join(process.cwd(), 'uploads', path.basename(filename));
+              : path.join(process.cwd(), 'uploads', filename);
           }
         }
       }
