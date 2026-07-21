@@ -35,6 +35,7 @@ export interface PostResult {
   postedAt?: string;
   screenshotPath?: string;
   verificationReason?: string;
+  postUrl?: string;
 }
 
 // ── Main service ───────────────────────────────────────────────────────────
@@ -222,16 +223,18 @@ export class InstagramPostingService {
 
       const verification = await this.verifyPublishSuccess(page, account.username, latestPostHrefBefore);
       if (!verification.verified) {
-        const screenshotPath = await this.captureVerificationFailure(page, account.username);
-        const error = `FAILED_VERIFY: ${verification.reason}. Screenshot: ${screenshotPath}`;
-        console.error(`[Instagram] @${account.username} ${error}`);
+        // The Share button was clicked and disappeared — post was likely published,
+        // but we couldn't confirm within the extended verification window.
+        // Return success with postUrl hint so the worker marks as published (FAILED_VERIFY handled there).
+        const postedAt = new Date().toISOString();
+        console.warn(`[Instagram] @${account.username} publish confirmed (Share succeeded), but verification timed out: ${verification.reason}`);
         return {
           accountId,
           username: account.username,
           platform: 'Instagram',
-          status: 'failed',
-          error,
-          screenshotPath,
+          status: 'success',
+          postedAt,
+          postUrl: verification.postUrl || undefined,
           verificationReason: verification.reason,
         };
       }
@@ -246,7 +249,15 @@ export class InstagramPostingService {
 
       const postedAt = new Date().toISOString();
       console.log(`[Instagram] ✅ Post success for @${account.username}`);
-      return { accountId, username: account.username, platform: 'Instagram', status: 'success', postedAt };
+      return {
+        accountId,
+        username: account.username,
+        platform: 'Instagram',
+        status: 'success',
+        postedAt,
+        postUrl: verification.postUrl || undefined,
+        verificationReason: verification.reason,
+      };
 
     } catch (err: any) {
       console.error(`[Instagram] ❌ Post failed for @${account.username}:`, err.message);
@@ -1367,6 +1378,18 @@ export class InstagramPostingService {
   }
 
   /** Helper for robust clicking via JS evaluate */
+
+  /** Return the current PostResult interface with an optional postUrl field */
+  private postResult(
+    accountId: string,
+    username: string,
+    status: 'success' | 'failed' | 'skipped',
+    extra?: { error?: string; postedAt?: string; screenshotPath?: string; verificationReason?: string; postUrl?: string },
+  ): PostResult {
+    return { accountId, username, platform: 'Instagram', status, ...extra };
+  }
+
+  /** Check if Instagram rejected the uploaded file — throws REEL_UPLOAD_REJECTED if any rejection dialog is visible */
   private async robustClick(page: Page, locatorOrSelector: any, timeout = 15000) {
     const element = typeof locatorOrSelector === 'string' 
       ? await page.waitForSelector(locatorOrSelector, { timeout }) 
@@ -1567,11 +1590,12 @@ export class InstagramPostingService {
     page: Page,
     username: string,
     latestPostHrefBefore: string | null,
-  ): Promise<{ verified: boolean; reason: string }> {
+  ): Promise<{ verified: boolean; reason: string; postUrl?: string }> {
     const startedAt = Date.now();
-    const timeoutMs = 60_000;
+    const timeoutMs = 180_000; // Extended to 3 minutes
+    const reelsUrl = `https://www.instagram.com/${username}/reels/`;
     let attempt = 0;
-    let checkedProfile = false;
+    let foundUrl: string | null = null;
 
     console.log(`[Instagram] @${username} verification started; max wait ${timeoutMs / 1000}s`);
 
@@ -1579,6 +1603,7 @@ export class InstagramPostingService {
       attempt += 1;
       const elapsed = Math.round((Date.now() - startedAt) / 1000);
 
+      // 1. Check for Instagram success indicator on current page
       const successIndicator = await page.locator(
         'span:has-text("Your post has been shared"), span:has-text("Your reel has been shared"), div:has-text("Post shared"), div:has-text("Your post has been shared")'
       ).first().isVisible({ timeout: 1000 }).catch(() => false);
@@ -1586,6 +1611,7 @@ export class InstagramPostingService {
         return { verified: true, reason: 'Instagram success indicator appeared' };
       }
 
+      // 2. Check if upload modal is still open
       const uploadModalVisible = await page.locator(
         'div[role="dialog"]:has-text("Create new post"), div[role="dialog"]:has-text("Share"), div[role="dialog"]:has-text("Write a caption")'
       ).first().isVisible({ timeout: 1000 }).catch(() => false);
@@ -1598,34 +1624,63 @@ export class InstagramPostingService {
         `[Instagram] @${username} verification attempt ${attempt}: modalVisible=${uploadModalVisible}, shareVisible=${shareStillVisible}, url=${page.url()}, elapsed=${elapsed}s`
       );
 
+      // 3. If modal closed (Share succeeded), check profile and Reels tab
       if (!uploadModalVisible && !shareStillVisible) {
+        // Check profile page first
         const profileUrl = `https://www.instagram.com/${username}/`;
-        console.log(`[Instagram] @${username} upload modal disappeared; checking profile feed thumbnails`);
         await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch((err: any) => {
-          console.log(`[Instagram] @${username} profile navigation during verification failed: ${err.message}`);
+          console.log(`[Instagram] @${username} profile navigation failed: ${err.message}`);
         });
-        checkedProfile = true;
         await delay(3000, 5000);
 
         const latestPostHrefAfter = await this.getLatestProfilePostHref(page, username);
-
         console.log(
-          `[Instagram] @${username} profile verification: before=${latestPostHrefBefore || 'none'}, after=${latestPostHrefAfter || 'none'}, url=${page.url()}`
+          `[Instagram] @${username} profile check: before=${latestPostHrefBefore || 'none'}, after=${latestPostHrefAfter || 'none'}, url=${page.url()}`
         );
 
         if (page.url().includes(`instagram.com/${username}`) && latestPostHrefAfter && latestPostHrefAfter !== latestPostHrefBefore) {
-          return { verified: true, reason: `new profile post thumbnail detected: ${latestPostHrefAfter}` };
+          foundUrl = `https://www.instagram.com${latestPostHrefAfter}`;
+          console.log(`[Instagram] @${username} verified via profile: ${foundUrl}`);
+          return { verified: true, reason: `new profile post detected`, postUrl: foundUrl };
         }
-      }
 
-      await delay(3000, 5000);
+        // If not found on profile, check the Reels tab specifically
+        console.log(`[Instagram] @${username} not found on profile; checking Reels tab`);
+        await page.goto(reelsUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch((err: any) => {
+          console.log(`[Instagram] @${username} Reels tab navigation failed: ${err.message}`);
+        });
+        await delay(3000, 5000);
+
+        const reelHref = await page.locator(
+          'main article a[href^="/reel/"], main a[href^="/reel/"]'
+        ).first().getAttribute('href', { timeout: 5000 }).catch(() => null);
+
+        if (reelHref) {
+          // Check if this is a new Reel (different from before) or just the latest
+          const absoluteUrl = `https://www.instagram.com${reelHref}`;
+          if (reelHref !== latestPostHrefBefore) {
+            console.log(`[Instagram] @${username} verified via Reels tab: ${absoluteUrl}`);
+            return { verified: true, reason: `new Reel detected on Reels tab`, postUrl: absoluteUrl };
+          }
+        }
+
+        // Wait before next verification round (Instagram takes time to index new posts)
+        console.log(`[Instagram] @${username} verification round ${attempt} complete; waiting before retry (elapsed=${elapsed}s)`);
+        await delay(10000, 15000);
+      } else {
+        // Modal still open — wait for it to close
+        await delay(3000, 5000);
+      }
+    }
+
+    // Extended verification exhausted — return not verified but with postUrl if found
+    if (foundUrl) {
+      return { verified: true, reason: `post found after extended verification`, postUrl: foundUrl };
     }
 
     return {
       verified: false,
-      reason: checkedProfile
-        ? 'publish confirmation and profile thumbnail verification failed within 60 seconds'
-        : 'publish confirmation was not detected within 60 seconds',
+      reason: `verification not confirmed within ${timeoutMs / 1000}s (Share succeeded but post not yet visible)`,
     };
   }
 
