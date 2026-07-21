@@ -168,6 +168,8 @@ export class InstagramPostingService {
         await this.waitForUploadProcessingToStabilize(page, account.username, 'before reels Next');
         const beforeReelsScreenshot = await this.captureShareScreenshot(page, account.username, 'before_reels_next');
         console.log(`[Instagram] @${account.username} before Reels Next screenshot saved to ${beforeReelsScreenshot}`);
+        // Check for upload rejection dialog before proceeding
+        await this.checkUploadRejected(page, account.username);
         await this.clickNext(page, 'Reels step');
         await medium();
 
@@ -1379,6 +1381,62 @@ export class InstagramPostingService {
     await short();
   }
 
+  /** Check if Instagram rejected the uploaded file — throws REEL_UPLOAD_REJECTED if any rejection dialog is visible */
+  private async checkUploadRejected(page: Page, username: string): Promise<void> {
+    const rejectionTexts = [
+      'File couldn\'t be uploaded',
+      'Couldn\'t upload video',
+      'Video couldn\'t be uploaded',
+      'Video can\'t be uploaded',
+      'This video can\'t be played',
+      'File can\'t be uploaded',
+    ];
+
+    for (const text of rejectionTexts) {
+      try {
+        const rejected = await page.locator(`:has-text("${text}")`).first().isVisible({ timeout: 1000 }).catch(() => false);
+        if (rejected) {
+          const screenshotPath = await this.captureShareScreenshot(page, username, 'upload_rejected');
+          console.log(`[Instagram] @${username} upload rejected dialog detected: "${text}". Screenshot: ${screenshotPath}`);
+          throw new Error(`REEL_UPLOAD_REJECTED: Instagram rejected the uploaded video file`);
+        }
+      } catch (err: any) {
+        if (err.message?.startsWith('REEL_UPLOAD_REJECTED:')) throw err;
+        // continue checking other texts
+      }
+    }
+
+    // Also check via evaluate for any visible dialog with rejection keywords
+    try {
+      const hasRejectionDialog = await page.evaluate(() => {
+        const rejectionKeywords = ['couldn\'t be uploaded', 'can\'t be uploaded', 'couldn\'t upload', 'could not be uploaded'];
+        const dialogs = Array.from(document.querySelectorAll('[role="dialog"], [role="alert"], [role="heading"]'))
+          .filter((el) => {
+            const htmlEl = el as HTMLElement;
+            const style = window.getComputedStyle(htmlEl);
+            const rect = htmlEl.getBoundingClientRect();
+            return style.visibility !== 'hidden'
+              && style.display !== 'none'
+              && Number.parseFloat(style.opacity || '1') > 0
+              && rect.width > 0
+              && rect.height > 0;
+          });
+        return dialogs.some((dialog) => {
+          const text = (dialog.textContent || '').toLowerCase();
+          return rejectionKeywords.some((keyword) => text.includes(keyword));
+        });
+      }).catch(() => false);
+
+      if (hasRejectionDialog) {
+        const screenshotPath = await this.captureShareScreenshot(page, username, 'upload_rejected_eval');
+        console.log(`[Instagram] @${username} upload rejection dialog detected via evaluate. Screenshot: ${screenshotPath}`);
+        throw new Error(`REEL_UPLOAD_REJECTED: Instagram rejected the uploaded video file`);
+      }
+    } catch (err: any) {
+      if (err.message?.startsWith('REEL_UPLOAD_REJECTED:')) throw err;
+    }
+  }
+
   /** Click the Next button — Instagram uses a styled div/button */
   private async clickNext(page: Page, step: string) {
     console.log(`[Instagram] Clicking Next (${step})...`);
@@ -1421,7 +1479,7 @@ export class InstagramPostingService {
       const loc = page.locator(sel).first();
       if (await isVisibleAndEnabled(loc)) {
         console.log(`[Instagram] Clicking Next via priority1: ${label} (${step})`);
-        await loc.click({ timeout: 5000 });
+        await this.robustClick(page, loc);
         return;
       }
     }
@@ -1436,7 +1494,7 @@ export class InstagramPostingService {
       const loc = page.locator(sel).first();
       if (await isVisibleAndEnabled(loc)) {
         console.log(`[Instagram] Clicking Next via priority2: ${label} (${step})`);
-        await loc.click({ timeout: 5000 });
+        await this.robustClick(page, loc);
         return;
       }
     }
@@ -1455,7 +1513,7 @@ export class InstagramPostingService {
       const loc = page.locator(sel).first();
       if (await isVisibleAndEnabled(loc)) {
         console.log(`[Instagram] Clicking Next via priority3: ${label} (${step})`);
-        await loc.click({ timeout: 5000 });
+        await this.robustClick(page, loc);
         return;
       }
     }
@@ -1474,7 +1532,7 @@ export class InstagramPostingService {
       const target = loc.first();
       if (await isVisibleAndEnabled(target)) {
         console.log(`[Instagram] Clicking Next via priority4: ${label} (${step})`);
-        await target.click({ timeout: 5000 });
+        await this.robustClick(page, target);
         return;
       }
     }
