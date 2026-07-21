@@ -9,6 +9,7 @@
     "seed": "ts-node src/scripts/seed.ts",
     "admin:reset-staging": "node dist/scripts/reset-staging-admin.js",
     "accounts:import-legacy": "node dist/scripts/import-legacy-accounts.js",
+    "accounts:validate-sessions": "node dist/scripts/validate-imported-sessions.js",
     "queue:clear-posting": "ts-node --transpile-only src/scripts/clear-posting-queue.ts",
     "queue:requeue-pending": "ts-node --transpile-only src/scripts/requeue-pending-posts.ts",
     "queue:reconcile": "node dist/scripts/queue-reconcile.js",
