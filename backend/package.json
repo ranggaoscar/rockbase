@@ -7,6 +7,7 @@
     "dev": "nodemon --exec \"ts-node --transpile-only src/server.ts\"",
     "worker": "nodemon --exec \"ts-node --transpile-only src/worker.ts\"",
     "seed": "ts-node src/scripts/seed.ts",
+    "admin:reset-staging": "node dist/scripts/reset-staging-admin.js",
     "queue:clear-posting": "ts-node --transpile-only src/scripts/clear-posting-queue.ts",
     "queue:requeue-pending": "ts-node --transpile-only src/scripts/requeue-pending-posts.ts",
     "queue:reconcile": "node dist/scripts/queue-reconcile.js",
@@ -56,3 +57,4 @@
     "typescript": "^6.0.3"
   }
 }
+
