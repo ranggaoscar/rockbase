@@ -1383,49 +1383,103 @@ export class InstagramPostingService {
   private async clickNext(page: Page, step: string) {
     console.log(`[Instagram] Clicking Next (${step})...`);
 
-    // Multi-language fallback chain: English + Indonesian (Berikutnya)
-    const nextTexts = ['Next', 'Berikutnya'];
-    const selectors: string[] = [];
+    // Helper: check if a locator element is visible and enabled (not hidden/disabled)
+    const isVisibleAndEnabled = async (loc: any): Promise<boolean> => {
+      try {
+        const handle = await loc.elementHandle({ timeout: 2000 }).catch(() => null);
+        if (!handle) return false;
+        const visible = await handle.isVisible().catch(() => false);
+        if (!visible) return false;
+        const enabled = await handle.evaluate((el: HTMLElement) => {
+          const clickable = el.closest('button, a, [role="button"], [role="link"]') || el;
+          const htmlButton = clickable as HTMLButtonElement;
+          if (htmlButton.disabled === true) return false;
+          if (clickable.getAttribute('disabled') !== null) return false;
+          if (clickable.getAttribute('aria-disabled') === 'true') return false;
+          const style = window.getComputedStyle(clickable);
+          if (style.pointerEvents === 'none') return false;
+          if (Number.parseFloat(style.opacity || '1') < 0.5) return false;
+          const className = typeof clickable.className === 'string' ? clickable.className : '';
+          if (/disabled|inactive|loading/i.test(className)) return false;
+          return true;
+        }).catch(() => false);
+        return enabled;
+      } catch {
+        return false;
+      }
+    };
 
-    for (const text of nextTexts) {
-      selectors.push(
-        `button:has-text("${text}")`,
-        `div[role="button"]:has-text("${text}")`,
-        `[role="button"]:has-text("${text}")`,
-        `button[aria-label="${text}"]`,
-        `[aria-label="${text}"][role="button"]`,
-        `[aria-label="${text}"]`,
-      );
+    // ── Priority 1: role=button exact text (English + Indonesian) ──────────
+    const priority1Candidates = [
+      { sel: '[role="button"]:text-is("Next")', label: '[role=button] exact "Next"' },
+      { sel: 'div[role="button"]:text-is("Next")', label: 'div[role=button] exact "Next"' },
+      { sel: '[role="button"]:text-is("Berikutnya")', label: '[role=button] exact "Berikutnya"' },
+      { sel: 'div[role="button"]:text-is("Berikutnya")', label: 'div[role=button] exact "Berikutnya"' },
+    ];
+
+    for (const { sel, label } of priority1Candidates) {
+      const loc = page.locator(sel).first();
+      if (await isVisibleAndEnabled(loc)) {
+        console.log(`[Instagram] Clicking Next via priority1: ${label} (${step})`);
+        await loc.click({ timeout: 5000 });
+        return;
+      }
     }
 
-    for (const sel of selectors) {
-      const btn = await page.waitForSelector(sel, { state: 'attached', timeout: 2000 }).catch(() => null);
-      if (!btn) continue;
+    // ── Priority 2: button exact text (English + Indonesian) ───────────────
+    const priority2Candidates = [
+      { sel: 'button:text-is("Next")', label: 'button exact "Next"' },
+      { sel: 'button:text-is("Berikutnya")', label: 'button exact "Berikutnya"' },
+    ];
 
-      const visible = await btn.isVisible().catch(() => false);
-      if (!visible) continue;
-
-      const enabled = await btn.evaluate((el: HTMLElement) => {
-        const clickable = el.closest('button, a, [role="button"], [role="link"]') || el;
-        const htmlButton = clickable as HTMLButtonElement;
-        if (htmlButton.disabled === true) return false;
-        if (clickable.getAttribute('disabled') !== null) return false;
-        if (clickable.getAttribute('aria-disabled') === 'true') return false;
-        const style = window.getComputedStyle(clickable);
-        if (style.pointerEvents === 'none') return false;
-        if (Number.parseFloat(style.opacity || '1') < 0.5) return false;
-        const className = typeof clickable.className === 'string' ? clickable.className : '';
-        if (/disabled|inactive|loading/i.test(className)) return false;
-        return true;
-      }).catch(() => false);
-      if (!enabled) continue;
-
-      console.log(`[Instagram] Clicking Next via: ${sel} (${step})`);
-      await this.robustClick(page, btn);
-      return;
+    for (const { sel, label } of priority2Candidates) {
+      const loc = page.locator(sel).first();
+      if (await isVisibleAndEnabled(loc)) {
+        console.log(`[Instagram] Clicking Next via priority2: ${label} (${step})`);
+        await loc.click({ timeout: 5000 });
+        return;
+      }
     }
 
-    // Diagnostic capture on failure
+    // ── Priority 3: role=button partial text (English + Indonesian) ────────
+    const priority3Candidates = [
+      { sel: '[role="button"]:has-text("Next")', label: '[role=button] has-text "Next"' },
+      { sel: 'div[role="button"]:has-text("Next")', label: 'div[role=button] has-text "Next"' },
+      { sel: 'button:has-text("Next")', label: 'button has-text "Next"' },
+      { sel: '[role="button"]:has-text("Berikutnya")', label: '[role=button] has-text "Berikutnya"' },
+      { sel: 'div[role="button"]:has-text("Berikutnya")', label: 'div[role=button] has-text "Berikutnya"' },
+      { sel: 'button:has-text("Berikutnya")', label: 'button has-text "Berikutnya"' },
+    ];
+
+    for (const { sel, label } of priority3Candidates) {
+      const loc = page.locator(sel).first();
+      if (await isVisibleAndEnabled(loc)) {
+        console.log(`[Instagram] Clicking Next via priority3: ${label} (${step})`);
+        await loc.click({ timeout: 5000 });
+        return;
+      }
+    }
+
+    // ── Priority 4: Case-insensitive fallback using Playwright locators ────
+    const priority4Candidates = [
+      { loc: page.getByRole('button', { name: /^next$/i }), label: 'getByRole button /^next$/i' },
+      { loc: page.getByRole('button', { name: /^berikutnya$/i }), label: 'getByRole button /^berikutnya$/i' },
+      { loc: page.locator('button').filter({ hasText: /^next$/i }), label: 'button filter /^next$/i' },
+      { loc: page.locator('button').filter({ hasText: /^berikutnya$/i }), label: 'button filter /^berikutnya$/i' },
+      { loc: page.locator('[role="button"]').filter({ hasText: /^next$/i }), label: '[role=button] filter /^next$/i' },
+      { loc: page.locator('[role="button"]').filter({ hasText: /^berikutnya$/i }), label: '[role=button] filter /^berikutnya$/i' },
+    ];
+
+    for (const { loc, label } of priority4Candidates) {
+      const target = loc.first();
+      if (await isVisibleAndEnabled(target)) {
+        console.log(`[Instagram] Clicking Next via priority4: ${label} (${step})`);
+        await target.click({ timeout: 5000 });
+        return;
+      }
+    }
+
+    // ── All selectors exhausted — diagnostic capture on failure ─────────────
     try {
       const logsDir = path.join(process.cwd(), 'logs');
       if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
