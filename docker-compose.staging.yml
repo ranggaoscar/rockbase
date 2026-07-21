@@ -54,6 +54,7 @@ services:
       NODE_ENV: production
       LOG_DIR: /app/backend/logs
       ROCKBASE_BROWSER_HEADLESS: "true"
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
     volumes:
       - staging-db:/app/backend/prisma
       - staging-uploads:/app/backend/uploads
