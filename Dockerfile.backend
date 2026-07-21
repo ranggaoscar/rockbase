@@ -39,7 +39,7 @@ WORKDIR /app/backend
 COPY backend/package.json backend/package-lock.json ./
 RUN npm ci --omit=dev && \
     mkdir -p /ms-playwright && \
-    npx playwright install chromium
+    npx playwright install --with-deps chromium
 
 COPY --chown=node:node --from=build /app/backend/dist ./dist
 COPY --chown=node:node --from=build /app/backend/node_modules/.prisma ./node_modules/.prisma
@@ -53,3 +53,4 @@ USER node
 EXPOSE 3010
 
 CMD ["node", "dist/server.js"]
+
