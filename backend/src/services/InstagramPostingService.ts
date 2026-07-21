@@ -1382,17 +1382,72 @@ export class InstagramPostingService {
   /** Click the Next button — Instagram uses a styled div/button */
   private async clickNext(page: Page, step: string) {
     console.log(`[Instagram] Clicking Next (${step})...`);
-    const selectors = [
-      'div[role="button"]:has-text("Next")',
-      'button:has-text("Next")',
-    ];
-    for (const sel of selectors) {
-      const btn = await page.$(sel);
-      if (btn) { 
-        await this.robustClick(page, btn); 
-        return; 
-      }
+
+    // Multi-language fallback chain: English + Indonesian (Berikutnya)
+    const nextTexts = ['Next', 'Berikutnya'];
+    const selectors: string[] = [];
+
+    for (const text of nextTexts) {
+      selectors.push(
+        `button:has-text("${text}")`,
+        `div[role="button"]:has-text("${text}")`,
+        `[role="button"]:has-text("${text}")`,
+        `button[aria-label="${text}"]`,
+        `[aria-label="${text}"][role="button"]`,
+        `[aria-label="${text}"]`,
+      );
     }
+
+    for (const sel of selectors) {
+      const btn = await page.waitForSelector(sel, { state: 'attached', timeout: 2000 }).catch(() => null);
+      if (!btn) continue;
+
+      const visible = await btn.isVisible().catch(() => false);
+      if (!visible) continue;
+
+      const enabled = await btn.evaluate((el: HTMLElement) => {
+        const clickable = el.closest('button, a, [role="button"], [role="link"]') || el;
+        const htmlButton = clickable as HTMLButtonElement;
+        if (htmlButton.disabled === true) return false;
+        if (clickable.getAttribute('disabled') !== null) return false;
+        if (clickable.getAttribute('aria-disabled') === 'true') return false;
+        const style = window.getComputedStyle(clickable);
+        if (style.pointerEvents === 'none') return false;
+        if (Number.parseFloat(style.opacity || '1') < 0.5) return false;
+        const className = typeof clickable.className === 'string' ? clickable.className : '';
+        if (/disabled|inactive|loading/i.test(className)) return false;
+        return true;
+      }).catch(() => false);
+      if (!enabled) continue;
+
+      console.log(`[Instagram] Clicking Next via: ${sel} (${step})`);
+      await this.robustClick(page, btn);
+      return;
+    }
+
+    // Diagnostic capture on failure
+    try {
+      const logsDir = path.join(process.cwd(), 'logs');
+      if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
+      const safeStep = step.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const screenshotPath = path.join(logsDir, `next_failed_${safeStep}_${Date.now()}.png`);
+      await page.screenshot({ path: screenshotPath, fullPage: true });
+      console.log(`[Instagram] Next button diagnostic screenshot saved: ${screenshotPath}`);
+
+      const htmlSnippet = await page.evaluate(() => {
+        const dialogs = Array.from(document.querySelectorAll('[role="dialog"]'));
+        const modal = dialogs.filter((d) => {
+          const rect = (d as HTMLElement).getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        }).pop() as HTMLElement | null;
+        if (!modal) return 'NO_VISIBLE_DIALOG';
+        return (modal.innerHTML || '').replace(/\s+/g, ' ').trim().slice(0, 3000);
+      }).catch(() => 'HTML_READ_FAILED');
+      console.log(`[Instagram] Modal innerHTML at failure: ${htmlSnippet}`);
+    } catch (diagErr: any) {
+      console.log(`[Instagram] Diagnostic capture error: ${diagErr.message}`);
+    }
+
     throw new Error(`Could not find Next button at ${step}`);
   }
 
