@@ -7,6 +7,7 @@ import { browserManager } from './BrowserManager';
 import { PrismaClient } from '@prisma/client';
 import { HumanBehavior } from './HumanBehavior';
 import { assertAutomationEnabled } from '../middleware/automation';
+import { postingEventEmitter } from './PostingEventEmitter';
 
 const prisma = new PrismaClient();
 
@@ -62,13 +63,42 @@ export class InstagramPostingService {
     try {
       console.log(`[Instagram] Starting post for @${account.username} (Version: 2.0.3 - Scoped Publish Share)`);
 
+      postingEventEmitter.emit({
+        timestamp: new Date().toISOString(),
+        accountId,
+        username: account.username,
+        stage: 'browser_launching',
+        level: 'info',
+        message: `Starting Instagram post for @${account.username}`,
+        metadata: { platform: 'Instagram' },
+      });
+
       // 1. Navigate home
       await page.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
       await medium();
 
+      postingEventEmitter.emit({
+        timestamp: new Date().toISOString(),
+        accountId,
+        username: account.username,
+        stage: 'instagram_opened',
+        level: 'info',
+        message: `Instagram opened for @${account.username}`,
+        metadata: { platform: 'Instagram' },
+      });
+
       // 2. Check we're still logged in
       const loginForm = await page.$('input[name="username"]');
       if (loginForm) {
+        postingEventEmitter.emit({
+          timestamp: new Date().toISOString(),
+          accountId,
+          username: account.username,
+          stage: 'failed',
+          level: 'error',
+          message: 'Session expired — please re-login via Farm View',
+          metadata: { platform: 'Instagram', reason: 'session_expired' },
+        });
         return { accountId, username: account.username, platform: 'Instagram', status: 'failed', error: 'Session expired — please re-login via Farm View' };
       }
 
@@ -261,8 +291,31 @@ export class InstagramPostingService {
 
     } catch (err: any) {
       console.error(`[Instagram] ❌ Post failed for @${account.username}:`, err.message);
+
+      postingEventEmitter.emit({
+        timestamp: new Date().toISOString(),
+        accountId,
+        username: account.username,
+        stage: 'failed',
+        level: 'error',
+        message: `Posting failed for @${account.username}: ${err.message}`,
+        error: err.message,
+        progress: 0,
+        metadata: { platform: 'Instagram' },
+      });
+
       return { accountId, username: account.username, platform: 'Instagram', status: 'failed', error: err.message };
     } finally {
+      postingEventEmitter.emit({
+        timestamp: new Date().toISOString(),
+        accountId,
+        username: account.username,
+        stage: 'cleanup_completed',
+        level: 'info',
+        message: `Cleanup completed for @${account.username}`,
+        progress: 100,
+      });
+
       await browserManager.saveCookies(accountId).catch((err: any) => {
         console.error(`[Instagram] Failed to save cookies during cleanup for @${account.username}:`, err.message);
       });

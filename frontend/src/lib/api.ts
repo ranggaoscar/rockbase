@@ -169,6 +169,13 @@ export const activityApi = {
     limit?: number
   }) => api.get('/activity', { params }),
   queueSummary: () => api.get('/activity/queue-summary'),
+  executionEvents: (params?: {
+    limit?: number
+    campaignId?: string
+    accountId?: string
+    username?: string
+    stage?: string
+  }) => api.get('/activity/execution-events', { params }),
 }
 
 export const systemApi = {

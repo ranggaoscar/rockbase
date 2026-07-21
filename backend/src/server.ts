@@ -312,11 +312,23 @@ io.on('connection', (socket) => {
     socket.emit('pool_status', sessionPool.getStatus());
   });
 
+  // ── Live Execution Console ──────────────────────────────────────────
+  socket.on('join_execution_console', () => {
+    socket.join('execution_console');
+    console.log(`Client ${socket.id} joined execution_console room`);
+  });
+
+  socket.on('leave_execution_console', () => {
+    socket.leave('execution_console');
+    console.log(`Client ${socket.id} left execution_console room`);
+  });
+
   socket.on('disconnect', () => {
     farmService.stopStreaming(socket);
     console.log('Client disconnected:', socket.id);
   });
 });
+
 
 // ── Startup: auto-clean stale BullMQ jobs ──────────────────────────────────
 const STARTUP_SESSION_ID = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;

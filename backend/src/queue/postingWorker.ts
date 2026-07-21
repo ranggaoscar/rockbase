@@ -10,6 +10,7 @@ import { logActivity } from '../services/ActivityLogService';
 import { logger } from '../services/logger';
 import { sessionHealthService } from '../services/SessionHealthService';
 import { categorizeError } from '../utils/errorClassifier';
+import { postingEventEmitter } from '../services/PostingEventEmitter';
 import { PostJobData } from './jobTypes';
 import { DurableIdempotencyService, IdempotencyConflictError } from '../services/DurableIdempotencyService';
 import { postingWorkerDeliveryIdentity } from '../utils/socialPostingIdempotency';
@@ -131,8 +132,26 @@ async function resolveRemoteMediaPath(mediaUrl: string): Promise<string> {
 export const postingWorker = new Worker<PostJobData>(
   'automationQueue',
   async (job: Job<PostJobData>) => {
-    const { postId, accountId, content, mediaLocalPath: rawMediaPath, mediaUrls, campaignActionId, postType } = job.data;
+    const { postId, accountId, content, mediaLocalPath: rawMediaPath, mediaUrls, campaignActionId, postType, campaignId } = job.data;
     console.log(`[Worker] Processing job ${job.id} | post ${postId} | account ${accountId}`);
+
+    const emitBase = (accountUsername?: string) => ({
+      timestamp: new Date().toISOString(),
+      accountId,
+      username: accountUsername || 'unknown',
+      postId,
+      campaignId: campaignId || undefined,
+    });
+
+    postingEventEmitter.emit({
+      ...emitBase(),
+      stage: 'campaign_received' as const,
+      level: 'info' as const,
+      message: `Job ${job.id} received for account ${accountId}`,
+      attempt: job.attemptsMade + 1,
+      progress: 5,
+      metadata: { jobId: job.id, postType, hasMedia: !!rawMediaPath || (mediaUrls?.length ?? 0) > 0 },
+    });
 
     // Fetch the post from database
     const post = await prisma.post.findUnique({ where: { id: postId } });
@@ -265,6 +284,16 @@ export const postingWorker = new Worker<PostJobData>(
     try {
       account = await prisma.socialAccount.findUnique({ where: { id: accountId } });
       if (!account) throw new Error(`Account ${accountId} not found`);
+
+      postingEventEmitter.emit({
+        ...emitBase(account?.username),
+        stage: 'account_selected',
+        level: 'info',
+        message: `Account @${account?.username || accountId} selected for posting`,
+        attempt: job.attemptsMade + 1,
+        progress: 10,
+        metadata: { platform: account?.platform, postType },
+      });
 
       // Resolve media path: use explicit path, or fall back to an uploads filename/URL in mediaUrls.
       let resolvedMediaPath: string | undefined = rawMediaPath;
@@ -515,6 +544,16 @@ export const postingWorker = new Worker<PostJobData>(
       const isPrePublishFailure = !reachedPendingVerify;
 
       if (isPrePublishFailure && job.attemptsMade < (job.opts.attempts || 3) - 1) {
+        postingEventEmitter.emit({
+          ...emitBase(account?.username),
+          stage: 'retry_scheduled',
+          level: 'warning',
+          message: `Retry scheduled for @${account?.username || accountId} (attempt ${job.attemptsMade + 1}/${job.opts.attempts || 3})`,
+          attempt: job.attemptsMade + 1,
+          progress: 0,
+          error: error.message,
+        });
+
         await prisma.post.update({
           where: { id: postId },
           data: {
@@ -535,6 +574,19 @@ export const postingWorker = new Worker<PostJobData>(
       // On final retry, update post in DB
       if (job.attemptsMade >= (job.opts.attempts || 3) - 1) {
         const isFailedVerify = error.message?.includes('FAILED_VERIFY');
+
+        postingEventEmitter.emit({
+          ...emitBase(account?.username),
+          stage: 'failed',
+          level: 'error',
+          message: isFailedVerify
+            ? `Publish unverified for @${account?.username || accountId} (likely succeeded)`
+            : `Posting failed permanently for @${account?.username || accountId}: ${error.message}`,
+          error: error.message,
+          attempt: job.attemptsMade + 1,
+          progress: 0,
+        });
+
         const postStatus = isFailedVerify ? 'published' : 'failed';
         const resultStatus = isFailedVerify ? 'FAILED_VERIFY' : 'failed';
         if (campaignActionId && !isFailedVerify) await prisma.campaignAction.update({ where: { id: campaignActionId }, data: { status: 'failed', result: JSON.stringify({ category: categorized.category, message: categorized.humanReadable }), executedAt: new Date() } }).catch(() => {});

@@ -9,6 +9,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from 'sonner'
+import LiveExecutionConsole from '@/components/activity/LiveExecutionConsole'
+import { usePostingConsole } from '@/hooks/usePostingConsole'
 
 interface ActivityLog {
   id: string
@@ -139,6 +141,20 @@ export default function ActivityTimeline() {
   const [hasMore, setHasMore] = useState(false)
   const [loading, setLoading] = useState(false)
 
+  const postingConsole = usePostingConsole()
+
+  // Load recent execution events from REST on mount (for page refresh)
+  useEffect(() => {
+    activityApi.executionEvents({ limit: 50 }).then(({ data }: any) => {
+      if (data?.events?.length) {
+        postingConsole.clear()
+        // Events come most-recent-first, reverse to chronological order
+        const reversed = [...data.events].reverse()
+        postingConsole.loadFromRest(reversed)
+      }
+    }).catch(() => {})
+  }, [postingConsole.loadFromRest])
+
   const params = useMemo(() => ({
     type: cleanFilter(type),
     category: cleanFilter(category),
@@ -266,6 +282,26 @@ export default function ActivityTimeline() {
           </Button>
         </div>
       </div>
+
+      <LiveExecutionConsole
+        events={postingConsole.events}
+        connected={postingConsole.connected}
+        autoScroll={postingConsole.autoScroll}
+        onToggleAutoScroll={() => postingConsole.setAutoScroll(!postingConsole.autoScroll)}
+        filterCampaign={postingConsole.filterCampaign}
+        onFilterCampaignChange={postingConsole.setFilterCampaign}
+        filterUsername={postingConsole.filterUsername}
+        onFilterUsernameChange={postingConsole.setFilterUsername}
+        onClear={() => postingConsole.clear()}
+        onRefresh={() => {
+          postingConsole.clear()
+          activityApi.executionEvents({ limit: 50 }).then(({ data }: any) => {
+            if (data?.events?.length) {
+              postingConsole.loadFromRest([...data.events].reverse())
+            }
+          }).catch(() => {})
+        }}
+      />
 
       <Card className={cn('border-blue-500/20', queueRunning && 'border-green-500/30 bg-green-500/[0.03]')}>
         <CardHeader className="pb-3">

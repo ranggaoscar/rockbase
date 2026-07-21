@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { Queue } from 'bullmq';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { postingEventEmitter } from '../services/PostingEventEmitter';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -120,6 +121,25 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   } catch (err) {
     console.error('[Activity] List error:', err);
     res.status(500).json({ error: 'Failed to fetch activity' });
+  }
+});
+
+router.get('/execution-events', async (req: AuthRequest, res: Response) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+    const events = postingEventEmitter.getRecentEvents(
+      limit,
+      {
+        campaignId: req.query.campaignId ? String(req.query.campaignId) : undefined,
+        accountId: req.query.accountId ? String(req.query.accountId) : undefined,
+        username: req.query.username ? String(req.query.username) : undefined,
+        stage: req.query.stage ? String(req.query.stage) : undefined,
+      },
+    );
+    res.json({ events });
+  } catch (err: any) {
+    console.error('[Activity] Execution events error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch execution events' });
   }
 });
 
