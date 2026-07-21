@@ -241,6 +241,7 @@ import { backupService } from './services/BackupService';
 import { logRetentionService } from './services/LogRetentionService';
 import { campaignSchedulerService } from './services/CampaignSchedulerService';
 import { sessionHealthScheduler } from './services/SessionHealthScheduler';
+import { scheduledPostConsumerService } from './queue/scheduledPostConsumer';
 
 // Initialize auto-backup
 backupService.init();
@@ -248,6 +249,7 @@ backupService.init();
 void backupService.createBackup();
 logRetentionService.init();
 campaignSchedulerService.init();
+scheduledPostConsumerService.init();
 if (isAutomationEnabled()) {
   sessionHealthScheduler.init();
 } else {
@@ -350,6 +352,7 @@ function gracefulShutdown(signal: string) {
 
   // Stop campaign scheduler
   campaignSchedulerService.stop();
+  scheduledPostConsumerService.stop();
   sessionHealthScheduler.stop();
 
   // Close socket.io

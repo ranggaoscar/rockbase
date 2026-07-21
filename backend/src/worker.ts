@@ -19,6 +19,7 @@ console.log(`[Worker Process] Starting at: ${new Date().toISOString()}`);
 
 // Load workers
 require('./queue/postingWorker');
+require('./queue/scheduledPostConsumer');
 require('./queue/analyticsWorker');
 require('./queue/engagementWorker');
 
