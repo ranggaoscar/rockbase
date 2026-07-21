@@ -3,12 +3,24 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { getJwtSecret } from '../middleware/security';
 
 const router = Router();
 const prisma = new PrismaClient();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_dev_secret_change_in_production';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
+function getBootstrapConfig() {
+  if (process.env.BOOTSTRAP_ADMIN_ENABLED !== 'true') return null;
+
+  const email = process.env.BOOTSTRAP_ADMIN_EMAIL?.trim();
+  const password = process.env.BOOTSTRAP_ADMIN_PASSWORD;
+  const token = process.env.BOOTSTRAP_ADMIN_TOKEN;
+  if (!email || !password || password.length < 12 || !token || token.length < 24) {
+    return null;
+  }
+  return { email, password, token };
+}
+
 
 // POST /api/auth/login
 router.post('/login', async (req: Request, res: Response) => {
@@ -34,7 +46,7 @@ router.post('/login', async (req: Request, res: Response) => {
     }
 
     const payload = { id: user.id, email: user.email, role: user.role, name: user.name };
-    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN } as any);
+    const token = jwt.sign(payload, getJwtSecret(), { expiresIn: JWT_EXPIRES_IN } as any);
 
     res.json({
       token,
@@ -52,43 +64,39 @@ router.get('/me', authenticateToken, (req: AuthRequest, res: Response) => {
 });
 
 // POST /api/auth/register — Admin only in production; open during dev
-router.post('/register', async (req: Request, res: Response) => {
-  const { email, password, name, role } = req.body;
+router.post('/register', async (_req: Request, res: Response) => {
+  res.status(403).json({ error: 'Public registration is disabled' });
+});
 
-  if (!email || !password) {
-    res.status(400).json({ error: 'Email and password are required' });
+// One-time staging/bootstrap path. Credentials and token only come from the environment.
+router.post('/bootstrap-admin', async (req: Request, res: Response) => {
+  const config = getBootstrapConfig();
+  if (!config || req.header('x-bootstrap-token') !== config.token) {
+    res.status(403).json({ error: 'Bootstrap is unavailable' });
     return;
   }
 
   try {
-    const existing = await prisma.user.findUnique({ where: { email } });
-    if (existing) {
-      res.status(409).json({ error: 'Email already registered' });
+    if (await prisma.user.count()) {
+      res.status(409).json({ error: 'Bootstrap is unavailable' });
       return;
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword = await bcrypt.hash(config.password, 12);
     const newUser = await prisma.user.create({
       data: {
-        email,
+        email: config.email,
         password: hashedPassword,
-        name: name || 'User',
-        role: role || 'Operator',
+        name: 'Administrator',
+        role: 'Admin',
       },
     });
 
-    const token = jwt.sign(
-      { id: newUser.id, email: newUser.email, role: newUser.role, name: newUser.name },
-      JWT_SECRET,
-      { expiresIn: JWT_EXPIRES_IN } as any
-    );
-
     res.status(201).json({
-      token,
       user: { id: newUser.id, email: newUser.email, role: newUser.role, name: newUser.name },
     });
   } catch (error) {
-    console.error('Register error:', error);
+    console.error('Bootstrap admin error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

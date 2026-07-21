@@ -7,8 +7,13 @@ import { Server } from 'socket.io';
 import { Queue } from 'bullmq';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import * as path from 'path';
+import { AUTOMATION_DISABLED_MESSAGE, isAutomationEnabled } from './middleware/automation';
+import { getWorkerMode, getWorkerStartupPlan } from './utils/workerMode';
+import { authenticateToken } from './middleware/auth';
+import { assertJwtConfiguration, verifyAccessToken } from './middleware/security';
 
 dotenv.config();
+assertJwtConfiguration();
 
 // ── Initialize structured logging ──────────────────────────────────
 import { logger } from './services/logger';
@@ -70,7 +75,6 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 // Routes
 import authRoutes from './routes/authRoutes';
@@ -88,9 +92,31 @@ import campaignEngineRoutes from './routes/campaignEngineRoutes';
 import accountGroupRoutes from './routes/accountGroupRoutes';
 import activityRoutes from './routes/activityRoutes';
 import rockSocialRoutes from './routes/rockSocialRoutes';
+import hermesShadowCampaignRoutes from './routes/hermesShadowCampaignRoutes';
+app.get('/livez', (_req, res) => {
+  res.status(200).json({ status: 'live' });
+});
+
+app.get('/readyz', async (_req, res) => {
+  try {
+    const { PrismaClient } = require('@prisma/client');
+    const prisma = new PrismaClient();
+    await prisma.$queryRaw`SELECT 1`;
+    const client = await automationQueue.client;
+    if (await client.ping() !== 'PONG') throw new Error('Redis unavailable');
+    await prisma.$disconnect();
+    res.status(200).json({ status: 'ready' });
+  } catch {
+    res.status(503).json({ status: 'not_ready' });
+  }
+});
+
 import systemRoutes from './routes/systemRoutes';
 
 app.use('/api/auth', authRoutes);
+app.use('/uploads', authenticateToken, express.static(path.join(process.cwd(), 'uploads')));
+app.use('/internal/hermes', hermesShadowCampaignRoutes);
+app.use('/api', authenticateToken);
 app.use('/api/accounts', accountRoutes);
 app.use('/api/proxies', proxyRoutes);
 app.use('/api/warming', warmingRoutes);
@@ -149,6 +175,7 @@ app.get('/api/health', async (req, res) => {
     status: isHealthy ? 'ok' : 'unhealthy',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
+    automationEnabled: isAutomationEnabled(),
     workerMode: process.env.RUN_WORKERS_SEPARATELY === 'true' ? 'separate' : 'in-process',
     database: {
       status: dbStatus,
@@ -166,10 +193,16 @@ app.get('/api/health', async (req, res) => {
       activeAccountIds,
     }
   });
+
 });
 
 // Initialize Workers
-if (process.env.RUN_WORKERS_SEPARATELY !== 'true') {
+const workerMode = getWorkerMode();
+const workerStartupPlan = getWorkerStartupPlan(isAutomationEnabled(), workerMode);
+console.log(`[Server] Worker mode: ${workerMode}`);
+if (workerStartupPlan === 'disabled') {
+  console.log('[Server] Automation disabled; workers will not start.');
+} else if (workerStartupPlan === 'internal') {
   console.log('[Server] Initializing workers in-process...');
   require('./queue/postingWorker');
   require('./queue/analyticsWorker');
@@ -186,6 +219,22 @@ export const io = new Server(server, {
     methods: ['GET', 'POST'],
   },
 });
+io.use((socket, next) => {
+  const authToken = typeof socket.handshake.auth?.token === 'string'
+    ? socket.handshake.auth.token
+    : undefined;
+  const header = socket.handshake.headers.authorization;
+  const headerToken = typeof header === 'string' && header.startsWith('Bearer ')
+    ? header.slice('Bearer '.length)
+    : undefined;
+
+  try {
+    socket.data.user = verifyAccessToken(authToken || headerToken || '');
+    next();
+  } catch {
+    next(new Error('Authentication required'));
+  }
+});
 
 // Farm View real-time handlers
 import { farmService } from './services/FarmService';
@@ -194,19 +243,40 @@ import { backupService } from './services/BackupService';
 import { logRetentionService } from './services/LogRetentionService';
 import { campaignSchedulerService } from './services/CampaignSchedulerService';
 import { sessionHealthScheduler } from './services/SessionHealthScheduler';
+import { scheduledPostConsumerService } from './queue/scheduledPostConsumer';
+import { campaignService } from './services/CampaignService';
+
 
 // Initialize auto-backup
 backupService.init();
 // Initial backup on startup for safety
-backupService.createBackup();
+void backupService.createBackup();
 logRetentionService.init();
 campaignSchedulerService.init();
-sessionHealthScheduler.init();
+scheduledPostConsumerService.init();
+if (isAutomationEnabled()) {
+  void campaignService.recoverExecutionState();
+}
+if (isAutomationEnabled()) {
+  sessionHealthScheduler.init();
+} else {
+  console.log('[Server] Automation disabled; session health scheduler will not start.');
+}
 
 io.on('connection', (socket) => {
   console.log('Client connected to WebSocket:', socket.id);
 
+  const rejectDisabledAutomation = () => {
+    if (isAutomationEnabled()) return false;
+    socket.emit('automation_disabled', {
+      error: 'AUTOMATION_DISABLED',
+      message: AUTOMATION_DISABLED_MESSAGE,
+    });
+    return true;
+  };
+
   socket.on('join_farm', () => {
+    if (rejectDisabledAutomation()) return;
     farmService.startStreaming(socket);
   });
 
@@ -215,11 +285,17 @@ io.on('connection', (socket) => {
   });
 
   socket.on('farm_visible_accounts', (data) => {
+    if (rejectDisabledAutomation()) return;
     const accountIds = Array.isArray(data?.accountIds) ? data.accountIds.map(String) : [];
     farmService.updateVisibleAccounts(socket, accountIds);
   });
 
   socket.on('control_action', async (data) => {
+    if (!['Admin', 'Operator'].includes(socket.data.user.role)) {
+      socket.emit('authorization_error', { error: 'FORBIDDEN' });
+      return;
+    }
+    if (rejectDisabledAutomation()) return;
     // set_mode needs the live socket reference — handle it here
     if (data.action === 'set_mode') {
       await farmService.setControlMode(
@@ -245,33 +321,6 @@ io.on('connection', (socket) => {
 // ── Startup: auto-clean stale BullMQ jobs ──────────────────────────────────
 const STARTUP_SESSION_ID = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-async function cleanStaleQueueOnStartup() {
-  try {
-    // Preserve 'delayed' jobs — these are user-scheduled posts waiting for their
-    // scheduled time. Wiping them on restart loses user intent.
-    // Only clean 'wait' (queued but not delayed) and 'failed' (terminal failures).
-    const states = ['wait', 'failed'] as const;
-    const counts = await automationQueue.getJobCounts(...states);
-    const delayedCount = (await automationQueue.getJobCounts('delayed')).delayed || 0;
-    const totalStale = (counts.wait || 0) + (counts.failed || 0);
-
-    if (totalStale > 0) {
-      console.log(`[Startup] Cleaning ${totalStale} stale jobs from previous session (preserving ${delayedCount} delayed job(s))...`);
-      for (const state of states) {
-        const removed = await automationQueue.clean(0, 10000, state);
-        if (removed.length > 0) {
-          console.log(`[Startup] Removed ${removed.length} ${state} job(s).`);
-        }
-      }
-      console.log(`[Startup] Stale queue cleaned. ${delayedCount} delayed job(s) preserved.`);
-    } else {
-      console.log(`[Startup] Queue is clean. No stale jobs. ${delayedCount} delayed job(s) preserved.`);
-    }
-  } catch (err: any) {
-    console.warn('[Startup] Could not clean queue (Redis may not be running):', err.message);
-  }
-}
-
 // Export session ID so workers/controllers can tag jobs
 export { STARTUP_SESSION_ID };
 
@@ -281,19 +330,27 @@ server.listen(port, async () => {
   console.log(`Session ID: ${STARTUP_SESSION_ID}`);
   console.log(`Frontend expected at: ${process.env.FRONTEND_URL || 'http://localhost:5173'}`);
 
-  // Clean stale queue on every server start
-  await cleanStaleQueueOnStartup();
+  try {
+    const counts = await automationQueue.getJobCounts('wait', 'active', 'delayed', 'failed', 'paused', 'completed');
+    console.log('[Server] Queue startup summary (non-destructive):', { queue: 'automationQueue', counts });
+  } catch (error) {
+    console.warn('[Server] Queue startup summary unavailable:', error instanceof Error ? error.message : error);
+  }
 });
 server.timeout = 300000; // 5 minutes
 
 // Initialize Browser Manager
 import { browserManager } from './services/BrowserManager';
 
-browserManager.initBrowser().then(() => {
-  console.log('Playwright Browser Manager initialized.');
-}).catch((err: any) => {
-  console.error('Failed to initialize Playwright:', err);
-});
+if (isAutomationEnabled()) {
+  browserManager.initBrowser().then(() => {
+    console.log('Playwright Browser Manager initialized.');
+  }).catch((err: any) => {
+    console.error('Failed to initialize Playwright:', err);
+  });
+} else {
+  console.log('[Server] Automation disabled; Playwright browser will not start.');
+}
 
 // ── Graceful Shutdown ──────────────────────────────────────────────
 function gracefulShutdown(signal: string) {
@@ -302,6 +359,7 @@ function gracefulShutdown(signal: string) {
 
   // Stop campaign scheduler
   campaignSchedulerService.stop();
+  scheduledPostConsumerService.stop();
   sessionHealthScheduler.stop();
 
   // Close socket.io
@@ -328,3 +386,4 @@ function gracefulShutdown(signal: string) {
 
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+

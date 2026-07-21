@@ -21,6 +21,7 @@ import * as path from 'path';
 import { browserManager } from './BrowserManager';
 import { PrismaClient } from '@prisma/client';
 import { HumanBehavior } from './HumanBehavior';
+import { assertAutomationEnabled } from '../middleware/automation';
 
 const prisma = new PrismaClient();
 
@@ -97,6 +98,7 @@ export class TikTokPostingService {
     caption: string,
     mediaPath: string,
   ): Promise<TikTokPostResult> {
+    assertAutomationEnabled();
     const account = await prisma.socialAccount.findUnique({ where: { id: accountId } });
     if (!account) return { accountId, username: 'unknown', platform: 'TikTok', status: 'failed', error: 'Account not found' };
     if (!account.cookies) return { accountId, username: account.username, platform: 'TikTok', status: 'skipped', error: 'No saved session — login via Farm View first' };

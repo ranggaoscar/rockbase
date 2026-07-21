@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { getLogs, listLogFilesEndpoint, clearQueue, resetQueue } from '../controllers/systemController';
+import { automationGuard } from '../middleware/automation';
 
 const router = Router();
 
@@ -8,7 +9,7 @@ router.get('/logs', getLogs);
 router.get('/logs/files', listLogFilesEndpoint);
 
 // ── Queue endpoints ─────────────────────────────────────────────────────────
-router.post('/queue/clear', clearQueue);
-router.post('/queue/reset', resetQueue);
+router.post('/queue/clear', automationGuard, clearQueue);
+router.post('/queue/reset', automationGuard, resetQueue);
 
 export default router;

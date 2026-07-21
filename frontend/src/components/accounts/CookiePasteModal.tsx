@@ -44,6 +44,7 @@ export default function CookiePasteModal({ account, open, onClose, onSuccess }: 
   if (!account) return null
 
   async function handleImport() {
+    if (!account) return
     const text = cookiesText.trim()
     if (!text) {
       toast.error('Please paste your cookies first')

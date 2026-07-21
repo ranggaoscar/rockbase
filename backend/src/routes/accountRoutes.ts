@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { automationGuard } from '../middleware/automation';
 import { encrypt, decrypt } from '../utils/encryption';
 import multer from 'multer';
 import { parse } from 'csv-parse';
@@ -58,7 +59,7 @@ router.get('/session-health-summary', async (_req: AuthRequest, res: Response) =
 });
 
 // POST /api/accounts/check-session-bulk
-router.post('/check-session-bulk', async (req: AuthRequest, res: Response) => {
+router.post('/check-session-bulk', automationGuard, async (req: AuthRequest, res: Response) => {
   try {
     const accountIds = Array.isArray(req.body?.accountIds) ? req.body.accountIds.map(String) : [];
     if (accountIds.length === 0) {
@@ -81,7 +82,7 @@ router.post('/check-session-bulk', async (req: AuthRequest, res: Response) => {
 // POST /api/accounts/check-session-all?platform=Instagram
 // Checks all accounts for a given platform. Returns a streaming-style
 // result array — frontend can poll status during the bulk run.
-router.post('/check-session-all', async (req: AuthRequest, res: Response) => {
+router.post('/check-session-all', automationGuard, async (req: AuthRequest, res: Response) => {
   try {
     const platform = String(req.query.platform || req.body?.platform || 'Instagram');
     const accounts = await prisma.socialAccount.findMany({
@@ -111,7 +112,7 @@ router.post('/check-session-all', async (req: AuthRequest, res: Response) => {
 
 // POST /api/accounts/session-sweep?force=true
 // Triggers the daily health-check sweep manually. Returns the sweep result.
-router.post('/session-sweep', async (req: AuthRequest, res: Response) => {
+router.post('/session-sweep', automationGuard, async (req: AuthRequest, res: Response) => {
   try {
     const { sessionHealthScheduler } = await import('../services/SessionHealthScheduler');
     const force = req.query.force === 'true' || req.body?.force === true;
@@ -166,7 +167,7 @@ router.get('/:id/credentials', async (req: AuthRequest, res: Response) => {
 
 // POST /api/accounts — create account
 // POST /api/accounts/:id/check-session
-router.post('/:id/check-session', async (req: AuthRequest, res: Response) => {
+router.post('/:id/check-session', automationGuard, async (req: AuthRequest, res: Response) => {
   const id = String(req.params.id);
   try {
     const result = await sessionHealthService.checkAccount(id);
@@ -249,7 +250,7 @@ router.delete('/:id', async (req: AuthRequest, res: Response) => {
 });
 
 // POST /api/accounts/:id/start-session
-router.post('/:id/start-session', async (req: AuthRequest, res: Response) => {
+router.post('/:id/start-session', automationGuard, async (req: AuthRequest, res: Response) => {
   const id = String(req.params.id);
   try {
     await prisma.socialAccount.update({

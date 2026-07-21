@@ -2,6 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { automationGuard } from '../middleware/automation';
 import {
   createSocialPost,
   getSocialAccounts,
@@ -33,12 +34,12 @@ router.get('/select-accounts', getSelectAccounts);
 router.get('/exclude-accounts', getExcludeAccounts);
 
 // ── Post endpoints ──────────────────────────────────────────────────────────
-router.post('/post', createSocialPost);
+router.post('/post', automationGuard, createSocialPost);
 router.get('/posts', listRecentPosts);            // Fix #6
 
 // ── Job / Queue endpoints ───────────────────────────────────────────────────
 router.get('/jobs/:jobId', getJobStatus);         // Fix #4
-router.post('/queue/clear', clearQueue);          // Fix #5
+router.post('/queue/clear', automationGuard, clearQueue);          // Fix #5
 
 // ── Upload endpoint ─────────────────────────────────────────────────────────
 router.post('/upload', upload.single('image'), uploadImage);

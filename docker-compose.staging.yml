@@ -1,0 +1,169 @@
+name: rockbase-staging
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: rockbase-staging-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    restart: unless-stopped
+    volumes:
+      - staging-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    cpus: "0.50"
+    mem_limit: 256m
+    pids_limit: 100
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - staging-network
+
+  backend:
+    image: rockbase-backend:staging
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: rockbase-staging-api
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3010:3010"
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      AUTOMATION_ENABLED: "false"
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      BOOTSTRAP_ADMIN_ENABLED: ${BOOTSTRAP_ADMIN_ENABLED:?BOOTSTRAP_ADMIN_ENABLED is required}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:?BOOTSTRAP_ADMIN_EMAIL is required}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?BOOTSTRAP_ADMIN_PASSWORD is required}
+      BOOTSTRAP_ADMIN_TOKEN: ${BOOTSTRAP_ADMIN_TOKEN:?BOOTSTRAP_ADMIN_TOKEN is required}
+      HERMES_INTERNAL_API_TOKEN: ${HERMES_INTERNAL_API_TOKEN:?HERMES_INTERNAL_API_TOKEN is required}
+      DATABASE_URL: "file:./dev.db"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      FRONTEND_URL: "http://localhost:5173"
+      BACKEND_URL: "http://localhost:3010"
+      PORT: "3010"
+      RUN_WORKERS_SEPARATELY: "false"
+      NODE_ENV: production
+      LOG_DIR: /app/backend/logs
+      ROCKBASE_BROWSER_HEADLESS: "true"
+    volumes:
+      - staging-db:/app/backend/prisma
+      - staging-uploads:/app/backend/uploads
+      - staging-backups:/app/backend/backups
+      - staging-logs:/app/backend/logs
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3010/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    cpus: "1.00"
+    mem_limit: 1g
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - staging-network
+      - hermes-internal
+
+  migrate:
+    image: rockbase-backend:staging-migrate
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: build
+    container_name: rockbase-staging-migrate
+    command: ["sh", "-c", "npx prisma migrate deploy --schema /app/backend/prisma/schema.prisma && chown -R node:node /data"]
+    restart: "no"
+    environment:
+      DATABASE_URL: "file:/data/dev.db"
+    volumes:
+      - staging-db:/data
+    cpus: "0.50"
+    mem_limit: 512m
+    pids_limit: 100
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - staging-network
+
+  restore-tool:
+    image: rockbase-backend:staging-migrate
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: build
+    profiles: ["tools"]
+    restart: "no"
+    environment:
+      AUTOMATION_ENABLED: "false"
+      RESTORE_TARGET_ROOT: /restore
+    volumes:
+      - staging-backups:/backups:ro
+      - staging-restore-test:/restore
+    cpus: "0.50"
+    mem_limit: 512m
+    pids_limit: 100
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - staging-network
+
+  frontend:
+    image: rockbase-frontend:staging
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: rockbase-staging-frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5173/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    cpus: "0.50"
+    mem_limit: 256m
+    pids_limit: 100
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - staging-network
+
+volumes:
+  staging-redis-data:
+    name: rockbase-staging-redis-data
+  staging-db:
+    name: rockbase-staging-db
+  staging-uploads:
+    name: rockbase-staging-uploads
+  staging-backups:
+    name: rockbase-staging-backups
+  staging-logs:
+    name: rockbase-staging-logs
+  staging-restore-test:
+    name: rockbase-staging-restore-test
+
+networks:
+  staging-network:
+    name: rockbase-staging-network
+    driver: bridge
+  hermes-internal:
+    name: rockbase-hermes-staging-network
+    driver: bridge
+    internal: true
+
+

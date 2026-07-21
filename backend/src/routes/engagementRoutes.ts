@@ -5,6 +5,7 @@ import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { Queue } from 'bullmq';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { automationGuard } from '../middleware/automation';
 import { targetedEngagementService } from '../services/TargetedEngagementService';
 import { sessionPool } from '../services/SessionPool';
 import { HumanBehavior } from '../services/HumanBehavior';
@@ -29,7 +30,7 @@ try {
 const runningTasks = new Map<string, { aborted: boolean }>();
 
 // ── POST /api/engagement/like — All selected accounts like a post ─────────
-router.post('/like', async (req: AuthRequest, res: Response) => {
+router.post('/like', automationGuard, async (req: AuthRequest, res: Response) => {
   try {
     const { postUrl, accountIds } = req.body;
     if (!postUrl || !accountIds?.length) {
@@ -67,7 +68,7 @@ router.post('/like', async (req: AuthRequest, res: Response) => {
 });
 
 // ── POST /api/engagement/follow — All selected accounts follow a user ─────
-router.post('/follow', async (req: AuthRequest, res: Response) => {
+router.post('/follow', automationGuard, async (req: AuthRequest, res: Response) => {
   try {
     const { username, accountIds } = req.body;
     if (!username || !accountIds?.length) {
@@ -103,7 +104,7 @@ router.post('/follow', async (req: AuthRequest, res: Response) => {
 });
 
 // ── POST /api/engagement/comment — All selected accounts comment on a post ─
-router.post('/comment', async (req: AuthRequest, res: Response) => {
+router.post('/comment', automationGuard, async (req: AuthRequest, res: Response) => {
   try {
     const { postUrl, accountIds } = req.body;
     if (!postUrl || !accountIds?.length) {
@@ -140,7 +141,7 @@ router.post('/comment', async (req: AuthRequest, res: Response) => {
 });
 
 // ── POST /api/engagement/follow-and-like — Follow + like their posts ──────
-router.post('/follow-and-like', async (req: AuthRequest, res: Response) => {
+router.post('/follow-and-like', automationGuard, async (req: AuthRequest, res: Response) => {
   try {
     const { username, accountIds } = req.body;
     if (!username || !accountIds?.length) {
@@ -175,7 +176,7 @@ router.post('/follow-and-like', async (req: AuthRequest, res: Response) => {
 });
 
 // ── POST /api/engagement/hashtag — Auto-engage by hashtag ─────────────────
-router.post('/hashtag', async (req: AuthRequest, res: Response) => {
+router.post('/hashtag', automationGuard, async (req: AuthRequest, res: Response) => {
   try {
     const { hashtag, accountIds, actions = { like: true } } = req.body;
     if (!hashtag || !accountIds?.length) {

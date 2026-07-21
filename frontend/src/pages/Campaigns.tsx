@@ -1946,12 +1946,11 @@ export default function Campaigns() {
     const timeout = window.setTimeout(() => controller.abort(), 8000)
 
     try {
-      const response = await fetch(endpoint, {
+      const response = await fetch(`/api/campaigns/${campaign.id}/local-webhook`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-Rockbase-Simulation': 'true',
-          'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjY2VlNTAzYy00NGFhLTQyODItYTE3ZS0wOWY5NjA0NWJiZTQiLCJpc3MiOiJuOG4iLCJhdWQiOiJwdWJsaWMtYXBpIiwianRpIjoiNjMzZWNiMzEtNGYwZi00OWMyLWE3ZTYtYjNhOWM3YjU4YzNjIiwiaWF0IjoxNzgwODA3ODk2fQ.amgpYh2fYudLwpsjhFTGqYrh_an2fXPqv7CQrecQIgs',
         },
         body: JSON.stringify(schema),
         signal: controller.signal,

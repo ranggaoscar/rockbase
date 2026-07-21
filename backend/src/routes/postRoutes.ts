@@ -4,6 +4,7 @@ import { Queue } from 'bullmq';
 import multer from 'multer';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as crypto from 'crypto';
 import { spinCaptions } from '../services/CaptionSpinnerService';
 import { sessionHealthService } from '../services/SessionHealthService';
 import { resolveAccountSelection } from '../services/AccountSelectionResolver';
@@ -14,10 +15,30 @@ import {
   acquireRequestLock,
   releaseRequestLock,
 } from '../utils/idempotency';
+import { automationGuard } from '../middleware/automation';
+import {
+  DurableIdempotencyService,
+  IdempotencyConflictError,
+  IdempotencyValidationError,
+} from '../services/DurableIdempotencyService';
+import { canonicalRequestHash } from '../utils/canonicalRequestHash';
 
 const router = Router();
 const prisma = new PrismaClient();
 
+const durableIdempotency = new DurableIdempotencyService(prisma);
+
+function idempotencyErrorResponse(res: Response, error: unknown): boolean {
+  if (error instanceof IdempotencyConflictError) {
+    res.status(409).json({ error: error.message });
+    return true;
+  }
+  if (error instanceof IdempotencyValidationError) {
+    res.status(400).json({ error: error.message });
+    return true;
+  }
+  return false;
+}
 // ── BullMQ queue (only created if Redis is available) ─────────────────────
 let automationQueue: Queue | null = null;
 try {
@@ -153,8 +174,10 @@ const upload = multer({
 
 // ── POST /api/posts/bulk — Bulk post with AI caption spinning ─────────────
 // multipart/form-data: image file + JSON fields
-router.post('/bulk', upload.single('media'), async (req: Request, res: Response) => {
+router.post('/bulk', automationGuard, upload.single('media'), async (req: Request, res: Response) => {
   let payloadHash = '';
+  const durableKey = req.get('Idempotency-Key');
+  let durableAcquired = false;
   try {
     const {
       baseCaption,
@@ -173,7 +196,6 @@ router.post('/bulk', upload.single('media'), async (req: Request, res: Response)
       parsedAccountIdsRaw,
       parseBoolean(allowUnhealthy),
     );
-    logSkippedUnhealthyAccounts(workspaceId, skippedAccounts, 'bulk');
 
     if (!baseCaption?.trim())       { res.status(400).json({ error: 'baseCaption is required' }); return; }
     if (parsedAccountIdsRaw.length === 0) { res.status(400).json({ error: 'accountIds is required' }); return; }
@@ -185,28 +207,63 @@ router.post('/bulk', upload.single('media'), async (req: Request, res: Response)
       return;
     }
     if (!req.file)                  { res.status(400).json({ error: 'media file is required — Instagram needs an image' }); return; }
+    if (durableKey) {
+      const requestHash = canonicalRequestHash({
+        workspaceId,
+        baseCaption,
+        baseHashtags: parsedHashtags,
+        accountIds: parsedAccountIdsRaw,
+        scheduleAt: scheduleAt ?? null,
+        spinCaptions: shouldSpin,
+        allowUnhealthy: parseBoolean(allowUnhealthy),
+        campaignId,
+        media: {
+          sha256: crypto.createHash('sha256').update(fs.readFileSync(req.file.path)).digest('hex'),
+          size: req.file.size,
+          mimetype: req.file.mimetype,
+        },
+      });
+      const begun = await durableIdempotency.beginOperation({
+        scope: 'post.bulk',
+        key: durableKey,
+        requestHash,
+      });
+      if (!begun.acquired) {
+        fs.unlink(req.file.path, () => {});
+        res.status(200).json({
+          message: 'Idempotent operation already exists.',
+          operation: begun.operation,
+        });
+        return;
+      }
+      durableAcquired = true;
+    }
+    logSkippedUnhealthyAccounts(workspaceId, skippedAccounts, 'bulk');
+
 
     // ── Request-level Lock ──
-    payloadHash = generateRequestPayloadHash(req.body, req.file);
-    if (!acquireRequestLock(payloadHash)) {
-      logActivity({
-        workspaceId,
-        type: 'posting',
-        entityType: 'request',
-        entityId: 'lock-blocked',
-        action: 'duplicate_request_blocked',
-        status: 'blocked',
-        message: 'Duplicate bulk-post request blocked by request-level lock.',
-        metadata: { payloadHash },
-      });
-      res.status(409).json({
-        error: 'Duplicate request blocked (request-level lock). Please wait a few seconds before trying again.',
-        createdCount: 0,
-        skippedDuplicateCount: 0,
-        skippedUnhealthyCount: skippedAccounts.length,
-        jobIds: [],
-      });
-      return;
+    if (!durableKey) {
+      payloadHash = generateRequestPayloadHash(req.body, req.file);
+      if (!acquireRequestLock(payloadHash)) {
+        logActivity({
+          workspaceId,
+          type: 'posting',
+          entityType: 'request',
+          entityId: 'lock-blocked',
+          action: 'duplicate_request_blocked',
+          status: 'blocked',
+          message: 'Duplicate bulk-post request blocked by request-level lock.',
+          metadata: { payloadHash },
+        });
+        res.status(409).json({
+          error: 'Duplicate request blocked (request-level lock). Please wait a few seconds before trying again.',
+          createdCount: 0,
+          skippedDuplicateCount: 0,
+          skippedUnhealthyCount: skippedAccounts.length,
+          jobIds: [],
+        });
+        return;
+      }
     }
 
     const mediaLocalPath = req.file.path;
@@ -422,6 +479,17 @@ router.post('/bulk', upload.single('media'), async (req: Request, res: Response)
       cumulativeDelay += accountGap;
     }
 
+    if (durableKey && durableAcquired) {
+      await durableIdempotency.markCompleted('post.bulk', durableKey, {
+        resourceType: 'post-submission',
+        ...(createdPosts[0]?.id ? { resourceId: createdPosts[0].id } : {}),
+        resultReference: {
+          postIds: createdPosts.map((post) => post.id),
+          skippedDuplicateCount,
+        },
+      });
+    }
+
     res.status(202).json({
       message: automationQueue 
         ? `Queued ${createdPosts.length} posts via BullMQ (skipped ${skippedDuplicateCount} duplicates).`
@@ -432,6 +500,11 @@ router.post('/bulk', upload.single('media'), async (req: Request, res: Response)
     });
   } catch (error: any) {
     console.error('[Bulk] Error:', error);
+    if (durableKey && !durableAcquired && req.file) fs.unlink(req.file.path, () => {});
+    if (durableKey && durableAcquired) {
+      await durableIdempotency.markUnknown('post.bulk', durableKey, 'SUBMISSION_OUTCOME_UNCERTAIN').catch(() => {});
+    }
+    if (idempotencyErrorResponse(res, error)) return;
     res.status(500).json({ error: 'Failed to queue posts', details: error.message });
   } finally {
     if (payloadHash) {
@@ -441,7 +514,7 @@ router.post('/bulk', upload.single('media'), async (req: Request, res: Response)
 });
 
 // ── POST /api/posts/bulk-multi — Multi-media bulk post (Assignment Mode support) ───────────
-router.post('/bulk-multi', upload.array('media', 20), async (req: Request, res: Response) => {
+router.post('/bulk-multi', automationGuard, upload.array('media', 20), async (req: Request, res: Response) => {
   let payloadHash = '';
   try {
     const {
@@ -812,7 +885,9 @@ router.post('/spin-preview', async (req: Request, res: Response) => {
 });
 
 // ── POST /api/posts — Legacy single-account post (kept for backwards compatibility)
-router.post('/', async (req: Request, res: Response) => {
+router.post('/', automationGuard, async (req: Request, res: Response) => {
+  const durableKey = req.get('Idempotency-Key');
+  let durableAcquired = false;
   try {
     const { workspaceId = 'workspace-default', content, mediaUrls, accountIds, scheduleAt } = req.body;
 
@@ -825,6 +900,28 @@ router.post('/', async (req: Request, res: Response) => {
         error: 'mediaUrls is required for Instagram posting. Upload media or use the bulk post endpoint.',
       });
       return;
+    }
+
+    if (durableKey) {
+      const begun = await durableIdempotency.beginOperation({
+        scope: 'post.submit',
+        key: durableKey,
+        requestHash: canonicalRequestHash({
+          workspaceId,
+          content,
+          mediaUrls,
+          accountIds,
+          scheduleAt: scheduleAt ?? null,
+        }),
+      });
+      if (!begun.acquired) {
+        res.status(200).json({
+          message: 'Idempotent operation already exists.',
+          operation: begun.operation,
+        });
+        return;
+      }
+      durableAcquired = true;
     }
 
     let baseDelay = 0;
@@ -900,12 +997,27 @@ router.post('/', async (req: Request, res: Response) => {
       createdPosts.push(post);
     }
 
+    if (durableKey && durableAcquired) {
+      await durableIdempotency.markCompleted('post.submit', durableKey, {
+        resourceType: 'post-submission',
+        ...(createdPosts[0]?.id ? { resourceId: createdPosts[0].id } : {}),
+        resultReference: {
+          postIds: createdPosts.map((post) => post.id),
+          skippedCount,
+        },
+      });
+    }
+
     res.status(202).json({
       message: `Queued ${createdPosts.length} posts (skipped ${skippedCount} duplicates).`,
       posts: createdPosts,
     });
   } catch (error: any) {
     console.error('[postRoutes] Error:', error);
+    if (durableKey && durableAcquired) {
+      await durableIdempotency.markUnknown('post.submit', durableKey, 'SUBMISSION_OUTCOME_UNCERTAIN').catch(() => {});
+    }
+    if (idempotencyErrorResponse(res, error)) return;
     res.status(500).json({ error: 'Failed to queue posts', details: error.message });
   }
 });

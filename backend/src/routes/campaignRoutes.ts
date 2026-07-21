@@ -3,13 +3,20 @@
  */
 import { Router, Response } from 'express';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { automationGuard } from '../middleware/automation';
 import { campaignService } from '../services/CampaignService';
 import multer from 'multer';
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
+import { PrismaClient } from '@prisma/client';
+import { DurableIdempotencyService, IdempotencyConflictError, IdempotencyValidationError } from '../services/DurableIdempotencyService';
+import { canonicalRequestHash } from '../utils/canonicalRequestHash';
 
 const router = Router();
+const prisma = new PrismaClient();
+const durableIdempotency = new DurableIdempotencyService(prisma);
+const CAMPAIGN_SUBMISSION_SCOPE = 'campaign.submit';
 const CAMPAIGN_MEDIA_DIR = path.join(process.cwd(), 'uploads', 'campaign-media');
 if (!fs.existsSync(CAMPAIGN_MEDIA_DIR)) fs.mkdirSync(CAMPAIGN_MEDIA_DIR, { recursive: true });
 
@@ -40,6 +47,49 @@ const uploadCampaignMedia = multer({
 });
 
 router.use(authenticateToken);
+router.post('/:id/local-webhook', async (req: AuthRequest, res: Response) => {
+  const endpoint = process.env.ROCKBASE_LOCAL_WEBHOOK_URL?.trim();
+  if (!endpoint) {
+    res.status(503).json({ error: 'Webhook integration is not configured' });
+    return;
+  }
+
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Unsupported protocol');
+  } catch {
+    res.status(503).json({ error: 'Webhook integration is not configured' });
+    return;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Rockbase-Simulation': 'true',
+        ...(process.env.ROCKBASE_LOCAL_WEBHOOK_TOKEN
+          ? { Authorization: `Bearer ${process.env.ROCKBASE_LOCAL_WEBHOOK_TOKEN}` }
+          : {}),
+      },
+      body: JSON.stringify(req.body.schema ?? req.body),
+      signal: controller.signal,
+    });
+    const responsePayload = await response.text();
+    res.status(response.ok ? 200 : 502).json({
+      status: response.ok ? 'success' : 'failed',
+      webhookStatus: response.status,
+      responsePayload,
+    });
+  } catch {
+    res.status(502).json({ error: 'Webhook delivery failed' });
+  } finally {
+    clearTimeout(timeout);
+  }
+});
 
 // ── POST /api/campaigns — Create a new campaign ──────────────────────────
 router.post('/', async (req: AuthRequest, res: Response) => {
@@ -57,20 +107,60 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const campaign = await campaignService.createCampaign({
-      name,
-      type,
-      targetType,
-      targetValue,
-      accountIds: Array.isArray(accountIds) ? accountIds : [],
-      groupIds: Array.isArray(groupIds) ? groupIds : [],
-      dailyFollowLimit, dailyLikeLimit, dailyCommentLimit,
-      activeHoursStart, activeHoursEnd,
-    });
+    const idempotencyKey = req.header('Idempotency-Key')?.trim();
+    let idempotencyAcquired = false;
+    if (idempotencyKey) {
+      const begun = await durableIdempotency.beginOperation({
+        scope: CAMPAIGN_SUBMISSION_SCOPE,
+        key: idempotencyKey,
+        requestHash: canonicalRequestHash({
+          name, type, targetType, targetValue,
+          accountIds: Array.isArray(accountIds) ? accountIds : [],
+          groupIds: Array.isArray(groupIds) ? groupIds : [],
+          dailyFollowLimit, dailyLikeLimit, dailyCommentLimit, activeHoursStart, activeHoursEnd,
+        }),
+      });
+      if (!begun.acquired) {
+        const campaign = begun.operation.resourceId
+          ? await prisma.campaign.findUnique({ where: { id: begun.operation.resourceId }, include: { actions: true } })
+          : null;
+        res.status(200).json({ campaign, operation: begun.operation });
+        return;
+      }
+      idempotencyAcquired = true;
+    }
 
-    res.status(201).json({ campaign });
+    try {
+      const campaign = await campaignService.createCampaign({
+        name,
+        type,
+        targetType,
+        targetValue,
+        accountIds: Array.isArray(accountIds) ? accountIds : [],
+        groupIds: Array.isArray(groupIds) ? groupIds : [],
+        dailyFollowLimit, dailyLikeLimit, dailyCommentLimit,
+        activeHoursStart, activeHoursEnd,
+      });
+
+      if (idempotencyKey) {
+        await durableIdempotency.markCompleted(CAMPAIGN_SUBMISSION_SCOPE, idempotencyKey, {
+          resourceType: 'campaign',
+          resourceId: campaign.id,
+          resultReference: { campaignId: campaign.id },
+        });
+      }
+
+      res.status(201).json({ campaign });
+    } catch (error) {
+      if (idempotencyAcquired && idempotencyKey) {
+        await durableIdempotency.markUnknown(CAMPAIGN_SUBMISSION_SCOPE, idempotencyKey, 'SUBMISSION_OUTCOME_UNCERTAIN').catch(() => {});
+      }
+      throw error;
+    }
   } catch (err: any) {
     console.error('[CampaignRoutes] Create error:', err);
+    if (err instanceof IdempotencyConflictError) { res.status(409).json({ error: err.message }); return; }
+    if (err instanceof IdempotencyValidationError) { res.status(400).json({ error: err.message }); return; }
     res.status(400).json({ error: err.message });
   }
 });
@@ -291,7 +381,7 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
 });
 
 // ── POST /api/campaigns/:id/start — Start a campaign ─────────────────────
-router.post('/:id/start', async (req: AuthRequest, res: Response) => {
+router.post('/:id/start', automationGuard, async (req: AuthRequest, res: Response) => {
   try {
     await campaignService.startCampaign(String(req.params.id));
     res.json({ success: true, message: 'Campaign started' });
@@ -311,7 +401,7 @@ router.post('/:id/pause', async (req: AuthRequest, res: Response) => {
 });
 
 // ── POST /api/campaigns/:id/resume — Resume a campaign ───────────────────
-router.post('/:id/resume', async (req: AuthRequest, res: Response) => {
+router.post('/:id/resume', automationGuard, async (req: AuthRequest, res: Response) => {
   try {
     await campaignService.resumeCampaign(String(req.params.id));
     res.json({ success: true, message: 'Campaign resumed' });

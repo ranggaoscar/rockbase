@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { automationGuard } from '../middleware/automation';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -36,7 +37,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 });
 
 // ── POST /api/scheduler ────────────────────────────────────────────────────
-router.post('/', async (req: AuthRequest, res: Response) => {
+router.post('/', automationGuard, async (req: AuthRequest, res: Response) => {
   try {
     const {
       content,
@@ -80,7 +81,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 // ── POST /api/scheduler/bulk-import ───────────────────────────────────────
 // Expects JSON array parsed from CSV:
 // [{ scheduledAt, content, accountIds: string[], mediaUrls?: string[] }]
-router.post('/bulk-import', async (req: AuthRequest, res: Response) => {
+router.post('/bulk-import', automationGuard, async (req: AuthRequest, res: Response) => {
   try {
     const { posts } = req.body as { posts: any[] };
     if (!Array.isArray(posts) || posts.length === 0) {
@@ -127,7 +128,7 @@ router.post('/bulk-import', async (req: AuthRequest, res: Response) => {
 });
 
 // ── PATCH /api/scheduler/:id ───────────────────────────────────────────────
-router.patch('/:id', async (req: AuthRequest, res: Response) => {
+router.patch('/:id', automationGuard, async (req: AuthRequest, res: Response) => {
   try {
     const existing = await prisma.scheduledPost.findUnique({ where: { id: req.params.id } });
     if (!existing) { res.status(404).json({ error: 'Scheduled post not found' }); return; }
