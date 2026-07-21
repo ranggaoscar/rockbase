@@ -335,6 +335,14 @@ export const postingWorker = new Worker<PostJobData>(
       if (account.platform === 'Instagram') {
         // Real Playwright automation
         if (postType === 'reel') {
+          postingEventEmitter.emit({
+            ...emitBase(account?.username),
+            stage: 'media_resolving',
+            level: 'info',
+            message: `Resolving Reel media for @${account?.username || accountId}`,
+            progress: 8,
+            metadata: { postType: 'reel' },
+          });
           resolvedReelMedia = await resolveReelMedia(resolvedMediaPath || mediaUrls?.[0] || '');
           resolvedMediaPath = resolvedReelMedia.localPath;
         } else if (!resolvedMediaPath || !fs.existsSync(resolvedMediaPath)) {
@@ -346,8 +354,24 @@ export const postingWorker = new Worker<PostJobData>(
 
         accountExecutionLock = await accountExecutionLockService.acquire(accountId);
         if (!accountExecutionLock) throw new Error('ACCOUNT_EXECUTION_LOCK_UNAVAILABLE');
+        postingEventEmitter.emit({
+          ...emitBase(account?.username),
+          stage: 'account_lock_acquired',
+          level: 'success',
+          message: `Account lock acquired for @${account?.username || accountId}`,
+          progress: 12,
+          metadata: { lockHolder: deliveryIdentity().key },
+        });
         postingBudgetReservation = await accountPostingBudgetService.reserve(accountId, deliveryIdentity().key, HUMAN_CONFIG.maxBatchSize);
         if (!postingBudgetReservation) throw new Error('ACCOUNT_DAILY_POSTING_BUDGET_EXHAUSTED');
+        postingEventEmitter.emit({
+          ...emitBase(account?.username),
+          stage: 'daily_budget_checked',
+          level: 'info',
+          message: `Daily posting budget reserved for @${account?.username || accountId}`,
+          progress: 14,
+          metadata: { maxBatchSize: HUMAN_CONFIG.maxBatchSize },
+        });
         const delivery = await beginExternalDelivery();
         if (!delivery.shouldExecute) return { status: 'skipped', reason: delivery.reason };
 
@@ -359,10 +383,17 @@ export const postingWorker = new Worker<PostJobData>(
           },
         });
         reachedPendingVerify = true;
+        postingEventEmitter.emit({
+          ...emitBase(account?.username),
+          stage: 'pending_verify',
+          level: 'info',
+          message: `Marked PENDING_VERIFY for @${account?.username || accountId}`,
+          progress: 15,
+        });
         console.log(`[Worker] @${account.username} marked PENDING_VERIFY before Instagram publish verification`);
 
         if (!await postingBudgetReservation.startExecution()) throw new Error('POSTING_BUDGET_RESERVATION_LOST');
-        const result = await instagramPostingService.postToInstagram(accountId, content, mediaPath);
+        const result = await instagramPostingService.postToInstagram(accountId, content, mediaPath, campaignId);
 
         if (result.status !== 'success') throw new Error(result.error || 'Instagram posting failed');
 
@@ -688,6 +719,17 @@ export const postingWorker = new Worker<PostJobData>(
       await accountExecutionLock?.release().catch((releaseError) => {
         logger.warn('Account execution lock release failed', { accountId, error: releaseError.message });
       });
+      try {
+        postingEventEmitter.emit({
+          ...emitBase(account?.username),
+          stage: 'account_lock_released',
+          level: 'info',
+          message: `Account lock released for @${account?.username || accountId}`,
+          progress: 100,
+        });
+      } catch {
+        // event logging must never fail the worker
+      }
       await resolvedReelMedia?.cleanup().catch((cleanupError) => {
         logger.warn('Reel temporary media cleanup failed', { postId, error: cleanupError.message });
       });

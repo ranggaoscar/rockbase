@@ -38,6 +38,7 @@ services:
         condition: service_completed_successfully
     environment:
       AUTOMATION_ENABLED: "true"
+      EXECUTION_CONSOLE_FIXTURE: "1"
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       BOOTSTRAP_ADMIN_ENABLED: ${BOOTSTRAP_ADMIN_ENABLED:?BOOTSTRAP_ADMIN_ENABLED is required}
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:?BOOTSTRAP_ADMIN_EMAIL is required}

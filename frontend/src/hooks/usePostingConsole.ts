@@ -5,11 +5,16 @@ export type PostingStage =
   | 'campaign_received'
   | 'account_selected'
   | 'account_lock_acquired'
+  | 'account_lock_released'
+  | 'daily_budget_checked'
   | 'browser_launching'
   | 'browser_ready'
+  | 'instagram_opening'
   | 'instagram_opened'
+  | 'media_resolving'
   | 'media_selected'
   | 'upload_started'
+  | 'upload_processing'
   | 'upload_completed'
   | 'upload_rejected'
   | 'next_clicked'
@@ -19,13 +24,16 @@ export type PostingStage =
   | 'verification_started'
   | 'verification_poll'
   | 'published'
+  | 'pending_verify'
   | 'retry_scheduled'
   | 'failed'
+  | 'cleanup_started'
   | 'cleanup_completed'
 
 export type EventLevel = 'info' | 'success' | 'warning' | 'error'
 
 export interface PostingEvent {
+  id?: string
   timestamp: string
   campaignId?: string
   postId?: string
@@ -36,11 +44,14 @@ export interface PostingEvent {
   message: string
   attempt?: number
   progress?: number
+  durationMs?: number
   metadata?: Record<string, unknown>
   screenshotPath?: string
   postedAt?: string
   error?: string
 }
+
+export type LevelFilter = 'all' | EventLevel
 
 const MAX_EVENTS = 500
 
@@ -50,8 +61,12 @@ export function usePostingConsole() {
   const [autoScroll, setAutoScroll] = useState(true)
   const [filterCampaign, setFilterCampaign] = useState('')
   const [filterUsername, setFilterUsername] = useState('')
+  const [filterLevel, setFilterLevel] = useState<LevelFilter>('all')
+  const [search, setSearch] = useState('')
+  const [newEventCount, setNewEventCount] = useState(0)
   const socketRef = useRef<Socket | null>(null)
   const hasJoinedRef = useRef(false)
+  const lastRenderedCountRef = useRef(0)
 
   useEffect(() => {
     const socket = io({
@@ -74,7 +89,8 @@ export function usePostingConsole() {
 
     socket.on('posting_execution_event', (event: PostingEvent) => {
       setEvents((prev) => {
-        // Dedup by stage+accountId+timestamp
+        // Dedup by stage+accountId+timestamp (backend may also dedup, but
+        // protect against reconnect double-emit on the client side).
         const dedupKey = `${event.stage}-${event.accountId}-${event.timestamp}`
         if (prev.some((e) => `${e.stage}-${e.accountId}-${e.timestamp}` === dedupKey)) {
           return prev
@@ -92,8 +108,20 @@ export function usePostingConsole() {
         socket.emit('leave_execution_console')
       }
       socket.disconnect()
+      socketRef.current = null
     }
   }, [])
+
+  // Track how many new events arrived while auto-scroll was paused
+  useEffect(() => {
+    if (autoScroll) {
+      setNewEventCount(0)
+      lastRenderedCountRef.current = events.length
+    } else {
+      const delta = events.length - lastRenderedCountRef.current
+      if (delta > 0) setNewEventCount(delta)
+    }
+  }, [events.length, autoScroll])
 
   /**
    * Load historical events from a REST response — used for page refresh persistence.
@@ -116,17 +144,27 @@ export function usePostingConsole() {
   const filteredEvents = events.filter((e) => {
     if (filterCampaign && e.campaignId !== filterCampaign) return false
     if (filterUsername && !e.username.toLowerCase().includes(filterUsername.toLowerCase())) return false
+    if (filterLevel !== 'all' && e.level !== filterLevel) return false
+    if (search) {
+      const needle = search.toLowerCase()
+      const hay = `${e.message} ${e.stage} ${e.username} ${e.campaignId || ''} ${e.postId || ''}`.toLowerCase()
+      if (!hay.includes(needle)) return false
+    }
     return true
   })
 
   const latestEvent = events.length > 0 ? events[events.length - 1] : null
 
-  const stageLevel = (_stage: PostingStage): 'info' | 'success' | 'warning' | 'error' => {
-    if (['published', 'upload_completed', 'caption_inserted'].includes(_stage)) return 'success'
-    if (['failed', 'upload_rejected'].includes(_stage)) return 'error'
-    if (['retry_scheduled'].includes(_stage)) return 'warning'
-    return 'info'
-  }
+  const clear = useCallback(() => {
+    setEvents([])
+    lastRenderedCountRef.current = 0
+    setNewEventCount(0)
+  }, [])
+
+  const markLatestSeen = useCallback(() => {
+    lastRenderedCountRef.current = events.length
+    setNewEventCount(0)
+  }, [events.length])
 
   return {
     events: filteredEvents,
@@ -138,9 +176,14 @@ export function usePostingConsole() {
     setFilterCampaign,
     filterUsername,
     setFilterUsername,
+    filterLevel,
+    setFilterLevel,
+    search,
+    setSearch,
+    newEventCount,
+    markLatestSeen,
     latestEvent,
-    stageLevel,
-    clear: () => setEvents([]),
+    clear,
     loadFromRest,
   }
 }

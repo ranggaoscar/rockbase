@@ -16,11 +16,16 @@ export type PostingStage =
   | 'campaign_received'
   | 'account_selected'
   | 'account_lock_acquired'
+  | 'account_lock_released'
+  | 'daily_budget_checked'
   | 'browser_launching'
   | 'browser_ready'
+  | 'instagram_opening'
   | 'instagram_opened'
+  | 'media_resolving'
   | 'media_selected'
   | 'upload_started'
+  | 'upload_processing'
   | 'upload_completed'
   | 'upload_rejected'
   | 'next_clicked'
@@ -30,8 +35,10 @@ export type PostingStage =
   | 'verification_started'
   | 'verification_poll'
   | 'published'
+  | 'pending_verify'
   | 'retry_scheduled'
   | 'failed'
+  | 'cleanup_started'
   | 'cleanup_completed';
 
 export type EventLevel = 'info' | 'success' | 'warning' | 'error';

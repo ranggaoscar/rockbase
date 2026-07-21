@@ -145,13 +145,11 @@ export default function ActivityTimeline() {
 
   // Load recent execution events from REST on mount (for page refresh)
   useEffect(() => {
-    const campaignId = postingConsole.filterCampaign || undefined
-    activityApi.executionEvents({ limit: 50, campaignId }).then(({ data }: any) => {
+    activityApi.executionEvents({ limit: 200 }).then(({ data }: any) => {
       if (data?.events?.length) {
         postingConsole.clear()
         // Events come most-recent-first, reverse to chronological order
-        const reversed = [...data.events].reverse()
-        postingConsole.loadFromRest(reversed)
+        postingConsole.loadFromRest([...data.events].reverse())
       }
     }).catch(() => {})
   }, [postingConsole.loadFromRest])
@@ -383,11 +381,24 @@ export default function ActivityTimeline() {
             onFilterCampaignChange={postingConsole.setFilterCampaign}
             filterUsername={postingConsole.filterUsername}
             onFilterUsernameChange={postingConsole.setFilterUsername}
+            filterLevel={postingConsole.filterLevel}
+            onFilterLevelChange={postingConsole.setFilterLevel}
+            search={postingConsole.search}
+            onSearchChange={postingConsole.setSearch}
+            newEventCount={postingConsole.newEventCount}
+            onJumpToLatest={() => {
+              postingConsole.setAutoScroll(true)
+              postingConsole.markLatestSeen()
+              requestAnimationFrame(() => {
+                const el = document.querySelector('[data-testid="live-execution-console-body"]') as HTMLDivElement | null
+                if (el) el.scrollTop = el.scrollHeight
+              })
+            }}
             onClear={() => postingConsole.clear()}
             onRefresh={() => {
               const campaignId = postingConsole.filterCampaign || undefined
               postingConsole.clear()
-              activityApi.executionEvents({ limit: 50, campaignId }).then(({ data }: any) => {
+              activityApi.executionEvents({ limit: 200, campaignId }).then(({ data }: any) => {
                 if (data?.events?.length) {
                   postingConsole.loadFromRest([...data.events].reverse())
                 }

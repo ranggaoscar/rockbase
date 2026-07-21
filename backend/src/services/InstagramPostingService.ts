@@ -75,6 +75,18 @@ export class InstagramPostingService {
         metadata: { platform: 'Instagram' },
       });
 
+      postingEventEmitter.emit({
+        timestamp: new Date().toISOString(),
+        accountId,
+        username: account.username,
+        campaignId: campaignId || undefined,
+        stage: 'instagram_opening',
+        level: 'info',
+        message: `Opening Instagram for @${account.username}`,
+        progress: 5,
+        metadata: { platform: 'Instagram' },
+      });
+
       // 1. Navigate home
       await page.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
       await medium();
@@ -223,6 +235,18 @@ export class InstagramPostingService {
         level: 'info',
         message: `Upload started for @${account.username}`,
         progress: 30,
+        metadata: { mediaPath },
+      });
+
+      postingEventEmitter.emit({
+        timestamp: new Date().toISOString(),
+        accountId,
+        username: account.username,
+        campaignId: campaignId || undefined,
+        stage: 'upload_processing',
+        level: 'info',
+        message: `Instagram is processing the uploaded media for @${account.username}`,
+        progress: 35,
         metadata: { mediaPath },
       });
 
