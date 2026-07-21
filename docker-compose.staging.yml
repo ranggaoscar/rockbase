@@ -43,6 +43,7 @@ services:
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:?BOOTSTRAP_ADMIN_EMAIL is required}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?BOOTSTRAP_ADMIN_PASSWORD is required}
       BOOTSTRAP_ADMIN_TOKEN: ${BOOTSTRAP_ADMIN_TOKEN:?BOOTSTRAP_ADMIN_TOKEN is required}
+      HERMES_INTERNAL_API_TOKEN: ${HERMES_INTERNAL_API_TOKEN:?HERMES_INTERNAL_API_TOKEN is required}
       DATABASE_URL: "file:./dev.db"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
@@ -71,6 +72,7 @@ services:
       - no-new-privileges:true
     networks:
       - staging-network
+      - hermes-internal
 
   migrate:
     image: rockbase-backend:staging-migrate
@@ -159,3 +161,9 @@ networks:
   staging-network:
     name: rockbase-staging-network
     driver: bridge
+  hermes-internal:
+    name: rockbase-hermes-staging-network
+    driver: bridge
+    internal: true
+
+
