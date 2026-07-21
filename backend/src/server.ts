@@ -92,6 +92,7 @@ import campaignEngineRoutes from './routes/campaignEngineRoutes';
 import accountGroupRoutes from './routes/accountGroupRoutes';
 import activityRoutes from './routes/activityRoutes';
 import rockSocialRoutes from './routes/rockSocialRoutes';
+import hermesShadowCampaignRoutes from './routes/hermesShadowCampaignRoutes';
 app.get('/livez', (_req, res) => {
   res.status(200).json({ status: 'live' });
 });
@@ -114,6 +115,7 @@ import systemRoutes from './routes/systemRoutes';
 
 app.use('/api/auth', authRoutes);
 app.use('/uploads', authenticateToken, express.static(path.join(process.cwd(), 'uploads')));
+app.use('/internal/hermes', hermesShadowCampaignRoutes);
 app.use('/api', authenticateToken);
 app.use('/api/accounts', accountRoutes);
 app.use('/api/proxies', proxyRoutes);
@@ -384,3 +386,4 @@ function gracefulShutdown(signal: string) {
 
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
