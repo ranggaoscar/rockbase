@@ -242,6 +242,8 @@ import { logRetentionService } from './services/LogRetentionService';
 import { campaignSchedulerService } from './services/CampaignSchedulerService';
 import { sessionHealthScheduler } from './services/SessionHealthScheduler';
 import { scheduledPostConsumerService } from './queue/scheduledPostConsumer';
+import { campaignService } from './services/CampaignService';
+
 
 // Initialize auto-backup
 backupService.init();
@@ -250,6 +252,9 @@ void backupService.createBackup();
 logRetentionService.init();
 campaignSchedulerService.init();
 scheduledPostConsumerService.init();
+if (isAutomationEnabled()) {
+  void campaignService.recoverExecutionState();
+}
 if (isAutomationEnabled()) {
   sessionHealthScheduler.init();
 } else {

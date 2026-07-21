@@ -12,12 +12,24 @@ import { sessionHealthService } from './SessionHealthService';
 import { logActivity } from './ActivityLogService';
 import { aiService, CampaignAiPlan } from './AiService';
 import { assertAutomationEnabled } from '../middleware/automation';
+import { DurableIdempotencyService } from './DurableIdempotencyService';
+import { canonicalRequestHash } from '../utils/canonicalRequestHash';
+import { AccountExecutionLease, accountExecutionLockService } from './AccountExecutionLockService';
 
 const prisma = new PrismaClient();
 const DEFAULT_WORKSPACE_ID = 'workspace-default';
 
 // Track running campaigns so we can pause/stop them
-const runningCampaigns = new Map<string, { aborted: boolean; paused: boolean }>();
+const runningCampaigns = new Map<string, { aborted: boolean; paused: boolean; processing: boolean }>();
+const durableIdempotency = new DurableIdempotencyService(prisma);
+
+export function campaignRecoveryActionStatus(status: string): string {
+  return status === 'running' ? 'unknown' : status;
+}
+
+export function campaignCompletionBlocked(statuses: string[]): boolean {
+  return statuses.some((status) => ['pending', 'running', 'unknown'].includes(status));
+}
 
 export interface CampaignProgress {
   id: string;
@@ -337,7 +349,7 @@ export class CampaignService {
     });
 
     // Set up control state
-    runningCampaigns.set(campaignId, { aborted: false, paused: false });
+    runningCampaigns.set(campaignId, { aborted: false, paused: false, processing: true });
 
     console.log(`[Campaign] Starting campaign "${campaign.name}" (${campaignId})`);
 
@@ -370,9 +382,15 @@ export class CampaignService {
     const control = runningCampaigns.get(campaignId);
     if (control) {
       control.paused = false;
+      if (!control.processing) {
+        control.processing = true;
+        this._processCampaign(campaignId).catch((err) => {
+          console.error(`[Campaign] Resume error:`, err.message);
+        });
+      }
     } else {
       // Re-start processing if control was lost
-      runningCampaigns.set(campaignId, { aborted: false, paused: false });
+      runningCampaigns.set(campaignId, { aborted: false, paused: false, processing: true });
       this._processCampaign(campaignId).catch((err) => {
         console.error(`[Campaign] Resume error:`, err.message);
       });
@@ -408,6 +426,26 @@ export class CampaignService {
     console.log(`[Campaign] Stopped campaign ${campaignId}`);
   }
 
+  public async recoverExecutionState(): Promise<void> {
+    assertAutomationEnabled();
+    const stranded = await prisma.campaignAction.findMany({ where: { status: 'running' } });
+    for (const action of stranded) {
+      const operation = await durableIdempotency.getOperation('campaign-action.execute', action.id);
+      const recoveredStatus = operation?.status === 'COMPLETED' ? 'completed' : campaignRecoveryActionStatus(action.status);
+      await prisma.campaignAction.update({
+        where: { id: action.id },
+        data: { status: recoveredStatus, result: JSON.stringify({ status: recoveredStatus, error: recoveredStatus === 'unknown' ? 'ACTION_OUTCOME_UNCERTAIN_AFTER_RESTART' : undefined, recovered: true }), executedAt: new Date() },
+      });
+    }
+    const campaigns = await prisma.campaign.findMany({ where: { status: { in: ['running', 'paused'] } } });
+    for (const campaign of campaigns) {
+      const paused = campaign.status === 'paused';
+      runningCampaigns.set(campaign.id, { aborted: false, paused, processing: !paused });
+      if (!paused) {
+        this._processCampaign(campaign.id).catch((err) => console.error(`[Campaign] Recovery error:`, err.message));
+      }
+    }
+  }
   /**
    * Archive a campaign so it's hidden from default lists.
    */
@@ -1385,9 +1423,30 @@ export class CampaignService {
           data: { status: 'running' },
         });
 
+        const actionHash = canonicalRequestHash({
+          campaignId, actionId: action.id, accountId: action.accountId,
+          actionType: action.actionType, targetUrl: action.targetUrl || null,
+        });
+        const actionOperation = await durableIdempotency.beginOperation({
+          scope: 'campaign-action.execute', key: action.id, requestHash: actionHash,
+        });
+        if (!actionOperation.acquired) {
+          await prisma.campaignAction.update({
+            where: { id: action.id },
+            data: {
+              status: actionOperation.operation.status === 'UNKNOWN' ? 'unknown' : 'completed',
+              result: JSON.stringify({ status: actionOperation.operation.status.toLowerCase(), recovered: true }),
+              executedAt: new Date(),
+            },
+          });
+          continue;
+        }
         // Execute the action
         let result: ActionResult;
+        let accountExecutionLock: AccountExecutionLease | null = null;
         try {
+          accountExecutionLock = await accountExecutionLockService.acquire(action.accountId);
+          if (!accountExecutionLock) throw new Error('ACCOUNT_EXECUTION_LOCK_UNAVAILABLE');
           switch (action.actionType) {
             case 'like':
               result = await targetedEngagementService.likePost(action.accountId, action.targetUrl || '');
@@ -1415,8 +1474,15 @@ export class CampaignService {
             target: action.targetUrl || '', status: 'failed',
             error: err.message, executedAt: new Date().toISOString(),
           };
+        } finally {
+          if (accountExecutionLock) await accountExecutionLock.release().catch(() => {});
         }
 
+        await durableIdempotency.markCompleted('campaign-action.execute', action.id, {
+          resourceType: 'campaign-action',
+          resourceId: action.id,
+          resultReference: { status: result.status },
+        });
         // Update action status
         await prisma.campaignAction.update({
           where: { id: action.id },
@@ -1446,6 +1512,11 @@ export class CampaignService {
         await new Promise((r) => setTimeout(r, staggerMs));
       }
 
+      const remaining = await prisma.campaignAction.findMany({ where: { campaignId }, select: { status: true } });
+      if (campaignCompletionBlocked(remaining.map((action) => action.status))) {
+        console.warn(`[Campaign] Campaign ${campaignId} remains incomplete because actions are pending, running, or unknown.`);
+        return;
+      }
       // Campaign complete
       if (!control.aborted) {
         await prisma.campaign.update({
