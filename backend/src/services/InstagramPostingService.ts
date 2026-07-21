@@ -155,6 +155,17 @@ export class InstagramPostingService {
                 console.log('[Instagram] Warning: Could not trigger Post submenu, attempting to proceed...');
               }
 
+      postingEventEmitter.emit({
+        timestamp: new Date().toISOString(),
+        accountId,
+        username: account.username,
+        stage: 'media_selected',
+        level: 'info',
+        message: `Selecting media for @${account.username}`,
+        progress: 20,
+        metadata: { mediaPath, isVideo: /\.(mp4|mov|avi|webm|mkv)$/i.test(mediaPath) },
+      });
+
       // 4. Handle "Select from computer" file upload dialog
       console.log('[Instagram] Waiting for "Select from computer" button...');
       let uploadBtn;
@@ -185,10 +196,32 @@ export class InstagramPostingService {
         await fileChooser.setFiles(mediaPath);
       }
       console.log(`[Instagram] @${account.username} upload selected: ${mediaPath}`);
+
+      postingEventEmitter.emit({
+        timestamp: new Date().toISOString(),
+        accountId,
+        username: account.username,
+        stage: 'upload_started',
+        level: 'info',
+        message: `Upload started for @${account.username}`,
+        progress: 30,
+        metadata: { mediaPath },
+      });
+
       const afterUploadScreenshot = await this.captureShareScreenshot(page, account.username, 'after_file_upload');
       console.log(`[Instagram] @${account.username} after file upload screenshot saved to ${afterUploadScreenshot}`);
       await delay(5000, 5000);
       await this.waitForUploadProcessingToStabilize(page, account.username, 'after file upload');
+
+      postingEventEmitter.emit({
+        timestamp: new Date().toISOString(),
+        accountId,
+        username: account.username,
+        stage: 'upload_completed',
+        level: 'success',
+        message: `Upload completed for @${account.username}`,
+        progress: 40,
+      });
 
       // Detect if this is a video/Reel — different Instagram flow
       const isVideo = /\.(mp4|mov|avi|webm|mkv)$/i.test(mediaPath);
@@ -200,13 +233,35 @@ export class InstagramPostingService {
         const beforeReelsScreenshot = await this.captureShareScreenshot(page, account.username, 'before_reels_next');
         console.log(`[Instagram] @${account.username} before Reels Next screenshot saved to ${beforeReelsScreenshot}`);
         // Check for upload rejection dialog before proceeding
-        await this.checkUploadRejected(page, account.username);
+        await this.checkUploadRejected(page, account.username, accountId);
         await this.clickNext(page, 'Reels step');
+
+        postingEventEmitter.emit({
+          timestamp: new Date().toISOString(),
+          accountId,
+          username: account.username,
+          stage: 'next_clicked',
+          level: 'info',
+          message: `Next clicked (Reels step) for @${account.username}`,
+          progress: 50,
+        });
+
         await medium();
 
         // Cover selection step — click Next again
         await this.waitForUploadProcessingToStabilize(page, account.username, 'before cover Next');
         await this.clickNext(page, 'Cover step');
+
+        postingEventEmitter.emit({
+          timestamp: new Date().toISOString(),
+          accountId,
+          username: account.username,
+          stage: 'cover_next_clicked',
+          level: 'info',
+          message: `Cover Next clicked for @${account.username}`,
+          progress: 55,
+        });
+
         await medium();
       } else {
         console.log(`[Instagram] @${account.username} image detected — using standard flow`);
@@ -215,11 +270,33 @@ export class InstagramPostingService {
         const beforeCropNextScreenshot = await this.captureShareScreenshot(page, account.username, 'before_crop_next');
         console.log(`[Instagram] @${account.username} before crop Next screenshot saved to ${beforeCropNextScreenshot}`);
         await this.clickNext(page, 'Crop step');
+
+        postingEventEmitter.emit({
+          timestamp: new Date().toISOString(),
+          accountId,
+          username: account.username,
+          stage: 'next_clicked',
+          level: 'info',
+          message: `Next clicked (Crop step) for @${account.username}`,
+          progress: 50,
+        });
+
         await medium();
 
         // 6. Next button (Filters/Edit)
         await this.waitForUploadProcessingToStabilize(page, account.username, 'before filter Next');
         await this.clickNext(page, 'Filter step');
+
+        postingEventEmitter.emit({
+          timestamp: new Date().toISOString(),
+          accountId,
+          username: account.username,
+          stage: 'next_clicked',
+          level: 'info',
+          message: `Next clicked (Filter step) for @${account.username}`,
+          progress: 60,
+        });
+
         await medium();
       }
 
@@ -227,6 +304,20 @@ export class InstagramPostingService {
       console.log('[Instagram] Entering caption and sharing...');
       if (caption.trim()) {
         const captionInsert = await this.insertCaptionIntoActiveCreateModal(page, account.username, caption);
+
+        if (captionInsert.verified) {
+          postingEventEmitter.emit({
+            timestamp: new Date().toISOString(),
+            accountId,
+            username: account.username,
+            stage: 'caption_inserted',
+            level: 'success',
+            message: `Caption inserted for @${account.username} (${captionInsert.length} chars)`,
+            progress: 70,
+            metadata: { method: captionInsert.method, length: captionInsert.length },
+          });
+        }
+
         console.log(
           `[Instagram] @${account.username} caption insertion verified=${captionInsert.verified}, selector=${captionInsert.selector}, method=${captionInsert.method}, length=${captionInsert.length}`
         );
@@ -249,9 +340,43 @@ export class InstagramPostingService {
       await HumanBehavior.preEngagePause();
       await HumanBehavior.humanScroll(page, 1);
 
+      postingEventEmitter.emit({
+        timestamp: new Date().toISOString(),
+        accountId,
+        username: account.username,
+        stage: 'share_clicked',
+        level: 'info',
+        message: `Share clicked for @${account.username}`,
+        progress: 80,
+      });
+
       await this.executeSharePublish(page, account.username, caption);
 
+      postingEventEmitter.emit({
+        timestamp: new Date().toISOString(),
+        accountId,
+        username: account.username,
+        stage: 'verification_started',
+        level: 'info',
+        message: `Verifying publish for @${account.username}`,
+        progress: 85,
+      });
+
       const verification = await this.verifyPublishSuccess(page, account.username, latestPostHrefBefore);
+
+      postingEventEmitter.emit({
+        timestamp: new Date().toISOString(),
+        accountId,
+        username: account.username,
+        stage: 'verification_poll',
+        level: verification.verified ? 'success' : 'warning',
+        message: verification.verified
+          ? `Publish verified for @${account.username}: ${verification.reason}`
+          : `Verification timed out for @${account.username}: ${verification.reason}`,
+        progress: verification.verified ? 95 : 90,
+        metadata: { postUrl: verification.postUrl, reason: verification.reason },
+      });
+
       if (!verification.verified) {
         // The Share button was clicked and disappeared — post was likely published,
         // but we couldn't confirm within the extended verification window.
@@ -279,6 +404,19 @@ export class InstagramPostingService {
 
       const postedAt = new Date().toISOString();
       console.log(`[Instagram] ✅ Post success for @${account.username}`);
+
+      postingEventEmitter.emit({
+        timestamp: new Date().toISOString(),
+        accountId,
+        username: account.username,
+        stage: 'published',
+        level: 'success',
+        message: `Published successfully for @${account.username}`,
+        postedAt,
+        progress: 100,
+        metadata: { postUrl: verification.postUrl, verificationReason: verification.reason },
+      });
+
       return {
         accountId,
         username: account.username,
@@ -1458,7 +1596,7 @@ export class InstagramPostingService {
   }
 
   /** Check if Instagram rejected the uploaded file — throws REEL_UPLOAD_REJECTED if any rejection dialog is visible */
-  private async checkUploadRejected(page: Page, username: string): Promise<void> {
+  private async checkUploadRejected(page: Page, username: string, accountId: string): Promise<void> {
     const rejectionTexts = [
       'File couldn\'t be uploaded',
       'Couldn\'t upload video',
@@ -1474,6 +1612,18 @@ export class InstagramPostingService {
         if (rejected) {
           const screenshotPath = await this.captureShareScreenshot(page, username, 'upload_rejected');
           console.log(`[Instagram] @${username} upload rejected dialog detected: "${text}". Screenshot: ${screenshotPath}`);
+          // Emit upload_rejected before throwing so the console shows the failure
+          postingEventEmitter.emit({
+            timestamp: new Date().toISOString(),
+            accountId,
+            username,
+            stage: 'upload_rejected',
+            level: 'error',
+            message: `Upload rejected for @${username}: ${text}`,
+            screenshotPath,
+            progress: 25,
+            error: `REEL_UPLOAD_REJECTED: ${text}`,
+          });
           throw new Error(`REEL_UPLOAD_REJECTED: Instagram rejected the uploaded video file`);
         }
       } catch (err: any) {
