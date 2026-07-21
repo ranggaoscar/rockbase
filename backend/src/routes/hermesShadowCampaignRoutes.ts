@@ -8,6 +8,7 @@ import { authenticateHermesInternal } from '../middleware/hermesAuth';
 import { campaignService } from '../services/CampaignService';
 import { DurableIdempotencyService, IdempotencyConflictError, IdempotencyValidationError } from '../services/DurableIdempotencyService';
 import { canonicalRequestHash } from '../utils/canonicalRequestHash';
+import { Queue } from 'bullmq';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -35,6 +36,9 @@ export function hermesSafeResult(action: any) {
   return { id: action.id, accountId: action.accountId, actionType: action.actionType, status: action.status,
     result, scheduledAt: action.scheduledAt ?? null, executedAt: action.executedAt ?? null };
 }
+
+export function campaignCancellationAllowed(status: string, actionStatuses: string[]) { return (status === 'pending' || status === 'paused' || status === 'cancelled') && !actionStatuses.some((value) => value === 'running' || value === 'executing' || value === 'completed'); }
+async function removeCampaignQueueJobs(campaignId: string) { const connection = { host: process.env.REDIS_HOST || '127.0.0.1', port: Number(process.env.REDIS_PORT || 6379) }; let removed = 0; for (const name of ['automationQueue', 'engagementQueue', 'scheduledPosts']) { const queue = new Queue(name, { connection }); try { const active = await queue.getJobs(['active']); if (active.some((job) => job.data?.campaignId === campaignId)) throw new Error('Campaign has an executing queue job'); for (const job of await queue.getJobs(['wait', 'delayed', 'paused', 'prioritized'])) if (job.data?.campaignId === campaignId) { await job.remove(); removed++; } } finally { await queue.close(); } } return removed; }
 
 function campaignInput(body: any) {
   return {
@@ -120,4 +124,7 @@ router.get('/campaigns/:id/results', async (req, res) => {
   res.json({ campaign, results: actions.map(hermesSafeResult), failures: actions.filter((a) => a.status === 'failed').map(hermesSafeResult) });
 });
 
+router.post('/campaigns/:id/cancel', async (req, res) => { const id = String(req.params.id); const campaign = await prisma.campaign.findUnique({ where: { id }, include: { actions: { select: { status: true } } } }); if (!campaign) { res.status(404).json({ error: 'Campaign not found' }); return; } if (!campaignCancellationAllowed(campaign.status, campaign.actions.map((action) => action.status))) { res.status(409).json({ error: 'Only pending or paused campaigns without executing or completed actions can be cancelled' }); return; } try { const removedJobs = campaign.status === 'cancelled' ? 0 : await removeCampaignQueueJobs(id); const actions = campaign.status === 'cancelled' ? { count: 0 } : await prisma.campaignAction.updateMany({ where: { campaignId: id, status: { in: ['pending', 'queued'] } }, data: { status: 'cancelled' } }); if (campaign.status !== 'cancelled') await prisma.campaign.update({ where: { id }, data: { status: 'cancelled' } }); res.json({ campaignId: id, status: 'cancelled', cancelledActions: actions.count, removedJobs, idempotent: campaign.status === 'cancelled' }); } catch (error: any) { res.status(409).json({ error: error.message || 'Campaign cannot be cancelled' }); } });
+
 export default router;
+
