@@ -139,11 +139,14 @@ export default function FarmView() {
   useEffect(() => {
     fetchAccounts()
 
+    // socket.io requires the JWT on the handshake — server middleware rejects unauthenticated connects.
+    const token = (typeof window !== 'undefined' && localStorage.getItem('sc_token')) || null
     const socket = io({
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: 10,
       reconnectionDelay: 2000,
+      ...(token ? { auth: { token } } : {}),
     })
     socketRef.current = socket
 
@@ -151,6 +154,8 @@ export default function FarmView() {
       setConnected(true)
       socket.emit('join_farm')
     })
+
+    socket.on('connect_error', () => setConnected(false))
 
     socket.on('disconnect', () => setConnected(false))
 
