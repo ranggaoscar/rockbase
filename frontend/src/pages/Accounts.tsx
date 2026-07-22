@@ -113,6 +113,7 @@ export default function Accounts() {
   const [showImport, setShowImport] = useState(false)
   const [bulkLoading, setBulkLoading] = useState(false)
   const [checking, setChecking] = useState<string | null>(null)
+  const [sessionJob, setSessionJob] = useState<any>(null)
   const [healthSummary, setHealthSummary] = useState<HealthSummary>({
     HEALTHY: 0, NEEDS_RELOGIN: 0, CHECKPOINT: 0, EXPIRED: 0, PAUSED: 0, UNKNOWN: 0, total: 0,
   })
@@ -152,6 +153,22 @@ export default function Accounts() {
     fetchAccounts()
     fetchGroups()
   }, [fetchAccounts, fetchGroups])
+
+  useEffect(() => {
+    accountsApi.latestSessionHealthJob().then(({ data }) => data.job && setSessionJob(data.job)).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (!sessionJob || !['queued', 'running'].includes(sessionJob.state)) return
+    const timer = window.setInterval(async () => {
+      try {
+        const { data } = await accountsApi.sessionHealthJob(sessionJob.id)
+        setSessionJob(data.job)
+        if (!['queued', 'running'].includes(data.job.state)) fetchAccounts()
+      } catch {}
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [sessionJob?.id, sessionJob?.state, fetchAccounts])
 
   // ── Derived lists ────────────────────────────────────────────────────────
   const brands = [...new Set(accounts.map((a) => a.brandTag).filter(Boolean))] as string[]
@@ -249,16 +266,12 @@ export default function Accounts() {
 
   async function checkSelectedSessions() {
     if (selected.size === 0) return
-    if (selected.size > 3) {
-      toast.error('Bulk Check Session max 3 selected accounts.')
-      return
-    }
+
     setBulkLoading(true)
     try {
       const { data } = await accountsApi.checkSessionBulk(Array.from(selected))
-      setHealthSummary(data.summary)
-      toast.success(`Checked ${data.results.length} session${data.results.length === 1 ? '' : 's'}`)
-      fetchAccounts()
+      setSessionJob(data.job)
+      toast.success(`Queued ${data.job.total} session checks`)
     } catch (err: any) {
       toast.error('Bulk session check failed', err.response?.data?.details || err.message)
     } finally {
@@ -596,6 +609,13 @@ export default function Accounts() {
         </span>
       </div>
 
+      {sessionJob && (
+        <div className="rounded-lg border border-blue-500/30 bg-blue-500/10 px-4 py-3 text-sm">
+          <div className="font-medium">Completed {sessionJob.completed} of {sessionJob.total} · {sessionJob.checking} checking · {sessionJob.queued} queued</div>
+          <div className="mt-1 text-xs text-muted-foreground">Healthy {sessionJob.healthy} · Needs Login {sessionJob.needsLogin} · Challenge {sessionJob.challenge} · Error {sessionJob.error} · {sessionJob.state}</div>
+          {sessionJob.results?.length > 0 && <div className="mt-2 max-h-32 overflow-y-auto space-y-1 text-xs">{sessionJob.results.map((result: any) => <div key={result.accountId} className="flex gap-2"><span className="font-medium">@{result.username}</span><span>{result.health}</span><span className="text-muted-foreground">{result.reason}</span></div>)}</div>}
+        </div>
+      )}
       {/* Bulk action bar */}
       {someSelected && (
         <div className="flex items-center gap-3 rounded-lg bg-purple-600/10 border border-purple-600/20 px-4 py-2.5">
@@ -613,12 +633,10 @@ export default function Accounts() {
               <Play className="h-3.5 w-3.5 text-green-400" /> Start Sessions
             </Button>
             <div className="flex items-center gap-2">
-              <Button size="sm" variant="outline" disabled={bulkLoading || selected.size > 3} onClick={checkSelectedSessions}>
+              <Button size="sm" variant="outline" disabled={bulkLoading} onClick={checkSelectedSessions}>
                 <ShieldCheck className="h-3.5 w-3.5 text-blue-400" /> Check Selected Sessions
               </Button>
-              {selected.size > 3 && (
-                <p className="text-xs text-yellow-400">Max 3 accounts.</p>
-              )}
+
             </div>
             <Button size="sm" variant="outline" disabled={bulkLoading} onClick={() => bulkAction('stop-session')}>
               <Square className="h-3.5 w-3.5 text-yellow-400" /> Stop Sessions

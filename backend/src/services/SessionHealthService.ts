@@ -28,7 +28,7 @@ export interface SessionHealthResult {
  * Blocked states: NEEDS_RELOGIN, CHECKPOINT, EXPIRED, PAUSED
  */
 const HEALTHY_STATUSES = new Set<SessionHealthStatus>(['HEALTHY', 'UNKNOWN']);
-const BULK_CHECK_CONCURRENCY = Math.max(1, Math.min(3, Number(process.env.SESSION_HEALTH_CHECK_CONCURRENCY || 2)));
+const BULK_CHECK_CONCURRENCY = Math.max(1, Math.min(3, Number(process.env.SESSION_HEALTH_CHECK_CONCURRENCY || 3)));
 
 export class SessionHealthService {
   public isPostableHealth(value: string | null | undefined): boolean {

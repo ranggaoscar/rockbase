@@ -9,6 +9,9 @@ export interface ScreenshotData {
   status: string
   warmingDay: number
   image: string | null
+  sessionHealth?: string
+  sessionHealthReason?: string | null
+  sessionHealthCheckedAt?: string | null
 }
 
 interface PhoneFrameProps {
@@ -33,7 +36,7 @@ function PlatformIcon({ platform, size = 12 }: { platform: string; size?: number
 }
 
 export default function PhoneFrame({ data, onClick }: PhoneFrameProps) {
-  const { username, platform, status, warmingDay, image } = data
+  const { username, platform, status, warmingDay, image, sessionHealth = 'UNKNOWN', sessionHealthReason, sessionHealthCheckedAt } = data
   const cfg = statusConfig[status] ?? statusConfig.idle
   const warmingPct = Math.round((warmingDay / 14) * 100)
   const isWarming = status === 'warming_up'
@@ -82,7 +85,7 @@ export default function PhoneFrame({ data, onClick }: PhoneFrameProps) {
             ) : (
               <>
                 <WifiOff className="h-5 w-5 text-muted-foreground/40" />
-                <span className="text-[10px] text-muted-foreground/40">No signal</span>
+                <span className="text-[10px] text-muted-foreground/40">{status === 'disconnected' ? 'Stream disconnected' : 'No live session'}</span>
               </>
             )}
           </div>

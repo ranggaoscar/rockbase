@@ -7,11 +7,13 @@ import multer from 'multer';
 import { parse } from 'csv-parse';
 import * as fs from 'fs';
 import { sessionHealthService } from '../services/SessionHealthService';
+import { sessionHealthJobService } from '../services/SessionHealthJobService';
+import { browserManager } from '../services/BrowserManager';
 
 const router = Router();
 const prisma = new PrismaClient();
 const upload = multer({ dest: 'uploads/' });
-const MAX_BULK_SESSION_CHECK = Math.max(1, Number(process.env.MAX_BULK_SESSION_CHECK || 3));
+
 
 // All account routes require authentication
 router.use(authenticateToken);
@@ -66,19 +68,63 @@ router.post('/check-session-bulk', automationGuard, async (req: AuthRequest, res
       res.status(400).json({ error: 'accountIds is required' });
       return;
     }
-    if (accountIds.length > MAX_BULK_SESSION_CHECK) {
-      res.status(400).json({ error: `Bulk session check is limited to ${MAX_BULK_SESSION_CHECK} accounts` });
-      return;
-    }
 
-    const results = await sessionHealthService.checkBulk(accountIds);
-    res.json({ results, summary: await sessionHealthService.getSummary() });
+
+    const job = await sessionHealthJobService.start(accountIds);
+    res.status(202).json({ job });
   } catch (err: any) {
     console.error('Bulk session health check error:', err);
     res.status(500).json({ error: 'Failed to check sessions', details: err.message });
   }
 });
 
+router.get('/session-health-jobs/latest', async (_req: AuthRequest, res: Response) => {
+  try { res.json({ job: await sessionHealthJobService.latest() }); } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+router.get('/session-health-jobs/:jobId', async (req: AuthRequest, res: Response) => {
+  try { res.json({ job: await sessionHealthJobService.get(String(req.params.jobId)) }); } catch (err: any) { res.status(404).json({ error: err.message }); }
+});
+
+router.post('/:id/manual-login/start', automationGuard, async (req: AuthRequest, res: Response) => {
+  const id = String(req.params.id);
+  try {
+    const account = await prisma.socialAccount.findUnique({ where: { id } });
+    if (!account) return res.status(404).json({ error: 'Account not found' });
+    if (!['Instagram', 'TikTok', 'Tiktok'].includes(account.platform)) return res.status(422).json({ error: 'Unsupported platform' });
+    if (browserManager.hasContext(id)) return res.status(409).json({ error: 'A browser session is already active for this account' });
+    const context = await browserManager.getContext(id);
+    const page = await context.newPage();
+    const target = account.platform === 'Instagram' ? 'https://www.instagram.com/' : 'https://www.tiktok.com/';
+    await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    const idleTimeoutMs = Math.max(60000, Number(process.env.MANUAL_LOGIN_IDLE_TIMEOUT_MS || 1800000));
+    setTimeout(() => { if (browserManager.hasContext(id)) void browserManager.closeContext(id, { saveCookies: false }); }, idleTimeoutMs);
+    res.status(201).json({ accountId: id, state: 'waiting_for_login', idleTimeoutMs });
+  } catch (err: any) { res.status(500).json({ error: 'Failed to start manual login', details: err.message }); }
+});
+router.get('/:id/manual-login', async (req: AuthRequest, res: Response) => {
+  const id = String(req.params.id);
+  res.json({ accountId: id, state: browserManager.hasContext(id) ? 'waiting_for_login' : 'stopped' });
+});
+router.post('/:id/manual-login/retry-navigation', automationGuard, async (req: AuthRequest, res: Response) => {
+  const id = String(req.params.id);
+  try {
+    const account = await prisma.socialAccount.findUnique({ where: { id } });
+    if (!account) return res.status(404).json({ error: 'Account not found' });
+    const context = await browserManager.getContext(id);
+    const page = context.pages()[0] || await context.newPage();
+    await page.goto(account.platform === 'Instagram' ? 'https://www.instagram.com/' : 'https://www.tiktok.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    res.json({ accountId: id, state: 'waiting_for_login' });
+  } catch (err: any) { res.status(500).json({ error: 'Retry navigation failed', details: err.message }); }
+});router.post('/:id/manual-login/stop', automationGuard, async (req: AuthRequest, res: Response) => {
+  const id = String(req.params.id);
+  await browserManager.closeContext(id, { saveCookies: false });
+  res.json({ accountId: id, state: 'stopped' });
+});
+router.post('/:id/manual-login/save-and-recheck', automationGuard, async (req: AuthRequest, res: Response) => {
+  const id = String(req.params.id);
+  try { await browserManager.saveCookies(id); await browserManager.closeContext(id, { saveCookies: false }); const result = await sessionHealthService.checkAccount(id); res.json({ result }); }
+  catch (err: any) { res.status(422).json({ error: 'Could not save and recheck session', details: err.message }); }
+});
 // POST /api/accounts/check-session-all?platform=Instagram
 // Checks all accounts for a given platform. Returns a streaming-style
 // result array — frontend can poll status during the bulk run.
@@ -94,10 +140,7 @@ router.post('/check-session-all', automationGuard, async (req: AuthRequest, res:
       res.json({ checked: 0, results: [], summary: await sessionHealthService.getSummary() });
       return;
     }
-    if (accountIds.length > MAX_BULK_SESSION_CHECK) {
-      res.status(400).json({ error: `Total ${platform} accounts (${accountIds.length}) exceeds bulk limit (${MAX_BULK_SESSION_CHECK}). Use check-session-bulk with accountIds instead.` });
-      return;
-    }
+
     const results = await sessionHealthService.checkBulk(accountIds);
     res.json({
       checked: results.length,

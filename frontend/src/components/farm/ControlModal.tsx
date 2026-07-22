@@ -7,6 +7,7 @@ import { Socket } from 'socket.io-client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn, statusLabel } from '@/lib/utils'
+import { accountsApi } from '@/lib/api'
 import type { ScreenshotData } from './PhoneFrame'
 
 interface ControlModalProps {
@@ -91,6 +92,10 @@ export default function ControlModal({ account, socket, onClose }: ControlModalP
     setTimeout(() => setActionFeedback(''), 2000)
   }
 
+  async function handleStopSession() {
+    try { await accountsApi.stopManualLogin(account.accountId); setActionFeedback('Session stopped'); onClose() }
+    catch { setActionFeedback('Could not stop session') }
+  }
   function handleSendText(e: React.FormEvent) {
     e.preventDefault()
     if (!typingText.trim()) return
@@ -151,7 +156,7 @@ export default function ControlModal({ account, socket, onClose }: ControlModalP
             }
           </Button>
 
-          <Button size="sm" variant="ghost" onClick={onClose} className="ml-2 text-muted-foreground">
+          <Button size="sm" variant="outline" onClick={handleStopSession}>Stop Session</Button>          <Button size="sm" variant="ghost" onClick={onClose} className="ml-2 text-muted-foreground">
             <X className="h-4 w-4" />
           </Button>
         </div>

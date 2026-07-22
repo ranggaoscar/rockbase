@@ -10,11 +10,11 @@ import { cn } from '@/lib/utils'
 import PhoneFrame, { type ScreenshotData } from '@/components/farm/PhoneFrame'
 import ControlModal from '@/components/farm/ControlModal'
 import AddAccountModal from '@/components/farm/AddAccountModal'
-import api from '@/lib/api'
+import api, { accountsApi } from '@/lib/api'
 import { toast } from '@/components/ui/use-toast'
 
 // ── Types ──────────────────────────────────────────────────────────────────
-type FilterKey = 'all' | 'instagram' | 'tiktok' | 'active' | 'warming_up' | 'idle' | 'error'
+type FilterKey = 'all' | 'instagram' | 'tiktok' | 'active' | 'warming_up' | 'idle' | 'error' | 'healthy' | 'needs_login' | 'challenge' | 'unchecked' | 'attention'
 type GridKey = '2' | '3' | '4' | '6'
 
 interface Account {
@@ -23,6 +23,9 @@ interface Account {
   platform: string
   status: string
   warmingDay: number
+  sessionHealth?: string
+  sessionHealthReason?: string | null
+  sessionHealthCheckedAt?: string | null
 }
 
 const FILTERS: { key: FilterKey; label: string }[] = [
@@ -33,6 +36,11 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'warming_up', label: 'Warming Up' },
   { key: 'idle',       label: 'Idle' },
   { key: 'error',      label: 'Error' },
+  { key: 'healthy', label: 'Healthy' },
+  { key: 'needs_login', label: 'Needs Login' },
+  { key: 'challenge', label: 'Challenge' },
+  { key: 'unchecked', label: 'Unchecked' },
+  { key: 'attention', label: 'Needs Attention' },
 ]
 
 const GRID_OPTIONS: { key: GridKey; icon: typeof LayoutGrid; label: string }[] = [
@@ -56,6 +64,11 @@ function matchesFilter(account: Account, filter: FilterKey, search: string): boo
     case 'all': return true
     case 'instagram': return account.platform.toLowerCase() === 'instagram'
     case 'tiktok': return account.platform.toLowerCase() === 'tiktok'
+    case 'healthy': return account.sessionHealth === 'HEALTHY'
+    case 'needs_login': return ['NEEDS_RELOGIN', 'EXPIRED'].includes(account.sessionHealth || 'UNKNOWN')
+    case 'challenge': return account.sessionHealth === 'CHECKPOINT'
+    case 'unchecked': return !account.sessionHealth || account.sessionHealth === 'UNKNOWN'
+    case 'attention': return ['NEEDS_RELOGIN', 'EXPIRED', 'CHECKPOINT', 'ERROR'].includes(account.sessionHealth || 'UNKNOWN')
     default: return account.status === filter
   }
 }
@@ -69,6 +82,9 @@ function mergeWithScreenshot(account: Account, screenshots: Map<string, Screensh
     status: shot?.status ?? account.status,
     warmingDay: shot?.warmingDay ?? account.warmingDay ?? 0,
     image: shot?.image ?? null,
+    sessionHealth: account.sessionHealth,
+    sessionHealthReason: account.sessionHealthReason,
+    sessionHealthCheckedAt: account.sessionHealthCheckedAt,
   }
 }
 
@@ -146,7 +162,7 @@ export default function FarmView() {
       })
     })
 
-    return () => {
+  return () => {
       socket.emit('leave_farm')
       socket.disconnect()
     }
@@ -171,6 +187,18 @@ export default function FarmView() {
     error: accounts.filter((a) => a.status === 'error').length,
   }
 
+  async function startManualLogin(account: Account) {
+    try {
+      await accountsApi.startManualLogin(account.id)
+      if (!monitoredAccountIds.includes(account.id)) setMonitoredAccountIds(prev => [...prev.slice(0, MAX_VISIBLE_SCREENSHOTS - 1), account.id])
+      setControlAccount(mergeWithScreenshot(account, screenshots))
+      toast({ title: `Manual login started for @${account.username}` })
+    } catch (error: any) { toast({ title: error.response?.data?.error || 'Could not start manual login', variant: 'destructive' }) }
+  }
+
+  async function recheck(account: Account) {
+    try { await accountsApi.checkSession(account.id); await fetchAccounts() } catch { toast({ title: 'Session recheck failed', variant: 'destructive' }) }
+  }
   return (
     <div className="flex flex-col gap-4 h-[calc(100vh-3.5rem-3rem)]">
 
@@ -362,6 +390,7 @@ export default function FarmView() {
                     data={data}
                     onClick={() => setControlAccount(data)}
                   />
+                  {['NEEDS_RELOGIN', 'EXPIRED', 'CHECKPOINT', 'ERROR'].includes(account.sessionHealth || 'UNKNOWN') && <div className="mt-2 flex gap-2"><Button size="sm" variant="outline" onClick={() => startManualLogin(account)}>Login Again</Button><Button size="sm" variant="outline" onClick={() => recheck(account)}>Recheck Session</Button></div>}
                 </div>
               )
             })}
