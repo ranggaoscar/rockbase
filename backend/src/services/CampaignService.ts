@@ -13,6 +13,7 @@ import { logActivity } from './ActivityLogService';
 import { aiService, CampaignAiPlan } from './AiService';
 import { assertAutomationEnabled } from '../middleware/automation';
 import { DurableIdempotencyService } from './DurableIdempotencyService';
+import { recoverCampaignActionStatus } from './ExecutionReliabilityService';
 import { canonicalRequestHash } from '../utils/canonicalRequestHash';
 import { AccountExecutionLease, accountExecutionLockService } from './AccountExecutionLockService';
 
@@ -28,7 +29,10 @@ export function campaignRecoveryActionStatus(status: string): string {
 }
 
 export function campaignCompletionBlocked(statuses: string[]): boolean {
-  return statuses.some((status) => ['pending', 'running', 'unknown'].includes(status));
+  // Unknown means delivery may have happened. It is an operator-review state,
+  // not an active execution lease, so recovery must not leave a campaign
+  // falsely running forever.
+  return statuses.some((status) => ['pending', 'running'].includes(status));
 }
 
 export interface CampaignProgress {
@@ -431,10 +435,11 @@ export class CampaignService {
     const stranded = await prisma.campaignAction.findMany({ where: { status: 'running' } });
     for (const action of stranded) {
       const operation = await durableIdempotency.getOperation('campaign-action.execute', action.id);
-      const recoveredStatus = operation?.status === 'COMPLETED' ? 'completed' : campaignRecoveryActionStatus(action.status);
+      const recovery = recoverCampaignActionStatus(operation?.status);
+      const recoveredStatus = recovery.status;
       await prisma.campaignAction.update({
         where: { id: action.id },
-        data: { status: recoveredStatus, result: JSON.stringify({ status: recoveredStatus, error: recoveredStatus === 'unknown' ? 'ACTION_OUTCOME_UNCERTAIN_AFTER_RESTART' : undefined, recovered: true }), executedAt: new Date() },
+        data: { status: recoveredStatus, result: JSON.stringify({ status: recoveredStatus, recoveryState: recovery.state, error: recoveredStatus === 'unknown' ? 'ACTION_OUTCOME_UNCERTAIN_AFTER_RESTART' : undefined, recovered: true }), executedAt: new Date() },
       });
     }
     const campaigns = await prisma.campaign.findMany({ where: { status: { in: ['running', 'paused'] } } });

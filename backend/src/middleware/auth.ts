@@ -1,11 +1,17 @@
 import { Request, Response, NextFunction } from 'express';
 import { AuthIdentity, verifyAccessToken } from './security';
+import { getRockBaseMode, isLoopbackAddress, localOperator } from './runtimeMode';
 
 export interface AuthRequest extends Request {
   user?: AuthIdentity;
 }
 
 export const authenticateToken = (req: AuthRequest, res: Response, next: NextFunction): void => {
+  if (getRockBaseMode() === 'local' && isLoopbackAddress(req.socket.remoteAddress)) {
+    req.user = localOperator;
+    next();
+    return;
+  }
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 

@@ -30,6 +30,10 @@ export interface SessionHealthResult {
 const HEALTHY_STATUSES = new Set<SessionHealthStatus>(['HEALTHY', 'UNKNOWN']);
 const BULK_CHECK_CONCURRENCY = Math.max(1, Math.min(3, Number(process.env.SESSION_HEALTH_CHECK_CONCURRENCY || 2)));
 
+export function shouldCloseHealthCheckContext(reusedExistingContext: boolean): boolean {
+  return !reusedExistingContext;
+}
+
 export class SessionHealthService {
   public isPostableHealth(value: string | null | undefined): boolean {
     return HEALTHY_STATUSES.has((value || 'UNKNOWN') as SessionHealthStatus);
@@ -57,6 +61,7 @@ export class SessionHealthService {
 
     let context: BrowserContext | null = null;
     let page: Page | null = null;
+    const reusedExistingContext = browserManager.hasContext(account.id);
 
     try {
       context = await browserManager.getContext(account.id);
@@ -83,7 +88,9 @@ export class SessionHealthService {
       );
     } finally {
       await page?.close().catch(() => {});
-      await browserManager.closeContext(account.id, { saveCookies: false });
+      if (shouldCloseHealthCheckContext(reusedExistingContext)) {
+        await browserManager.closeContext(account.id, { saveCookies: false });
+      }
     }
   }
 

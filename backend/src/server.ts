@@ -11,9 +11,12 @@ import { AUTOMATION_DISABLED_MESSAGE, isAutomationEnabled } from './middleware/a
 import { getWorkerMode, getWorkerStartupPlan } from './utils/workerMode';
 import { authenticateToken } from './middleware/auth';
 import { assertJwtConfiguration, verifyAccessToken } from './middleware/security';
+import { assertEncryptionConfiguration } from './utils/encryption';
+import { getRockBaseMode, isLoopbackAddress, localOperator, requireLocalLoopback } from './middleware/runtimeMode';
 
 dotenv.config();
 assertJwtConfiguration();
+assertEncryptionConfiguration();
 
 // ── Initialize structured logging ──────────────────────────────────
 import { logger } from './services/logger';
@@ -56,6 +59,7 @@ process.on('SIGINT', () => {
 
 const app = express();
 const port = process.env.PORT || 3010;
+const runtimeMode = getRockBaseMode();
 
 // Gemini Setup
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || 'dummy_key_for_now');
@@ -69,6 +73,7 @@ const automationQueue = new Queue('automationQueue', { connection });
 
 // Middleware
 app.use(helmet());
+app.use(requireLocalLoopback);
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:5173',
   credentials: true,
@@ -96,6 +101,16 @@ import hermesShadowCampaignRoutes from './routes/hermesShadowCampaignRoutes';
 app.get('/livez', (_req, res) => {
   res.status(200).json({ status: 'live' });
 });
+
+// Local Mode has no dashboard login, but the backend is loopback-only. This
+// endpoint gives the Windows stop helper a graceful alternative to hard-killing
+// Node so session cleanup can run. It is never registered in Server Mode.
+if (runtimeMode === 'local') {
+  app.post('/internal/local/shutdown', (_req, res) => {
+    res.status(202).json({ status: 'shutting_down' });
+    setImmediate(() => gracefulShutdown('LOCAL_STOP_HELPER'));
+  });
+}
 
 app.get('/readyz', async (_req, res) => {
   try {
@@ -220,6 +235,11 @@ export const io = new Server(server, {
   },
 });
 io.use((socket, next) => {
+  if (runtimeMode === 'local' && isLoopbackAddress(socket.handshake.address)) {
+    socket.data.user = localOperator;
+    next();
+    return;
+  }
   const authToken = typeof socket.handshake.auth?.token === 'string'
     ? socket.handshake.auth.token
     : undefined;
@@ -290,20 +310,30 @@ io.on('connection', (socket) => {
     farmService.updateVisibleAccounts(socket, accountIds);
   });
 
-  socket.on('control_action', async (data) => {
+  socket.on('control_action', async (data, acknowledgement?: (result: { ok: boolean; error?: string; cookieCount?: number }) => void) => {
     if (!['Admin', 'Operator'].includes(socket.data.user.role)) {
       socket.emit('authorization_error', { error: 'FORBIDDEN' });
+      acknowledgement?.({ ok: false, error: 'You are not authorized to control account sessions.' });
       return;
     }
-    if (rejectDisabledAutomation()) return;
-    // set_mode needs the live socket reference — handle it here
-    if (data.action === 'set_mode') {
-      await farmService.setControlMode(
-        data.params?.active ? data.accountId : null,
-        socket
-      );
-    } else {
-      await farmService.handleControl(data);
+    if (rejectDisabledAutomation()) {
+      acknowledgement?.({ ok: false, error: AUTOMATION_DISABLED_MESSAGE });
+      return;
+    }
+    try {
+      // set_mode needs the live socket reference — handle it here
+      if (data.action === 'set_mode') {
+        await farmService.setControlMode(
+          data.params?.active ? data.accountId : null,
+          socket
+        );
+        acknowledgement?.({ ok: true });
+      } else {
+        const result = await farmService.handleControl(data);
+        acknowledgement?.({ ok: true, ...(result || {}) });
+      }
+    } catch (error: any) {
+      acknowledgement?.({ ok: false, error: error?.message || 'Session control request failed.' });
     }
   });
 
@@ -324,9 +354,10 @@ const STARTUP_SESSION_ID = `session-${Date.now()}-${Math.random().toString(36).s
 // Export session ID so workers/controllers can tag jobs
 export { STARTUP_SESSION_ID };
 
-server.listen(port, async () => {
+const listenHost = runtimeMode === 'local' ? '127.0.0.1' : undefined;
+const onListening = async () => {
   logger.info(`ROCK BASE backend running on port ${port}`, { sessionId: STARTUP_SESSION_ID });
-  console.log(`ROCK BASE backend running on port ${port}`);
+  console.log(`ROCK BASE backend running on ${listenHost || 'configured network interface'}:${port} (${runtimeMode} mode)`);
   console.log(`Session ID: ${STARTUP_SESSION_ID}`);
   console.log(`Frontend expected at: ${process.env.FRONTEND_URL || 'http://localhost:5173'}`);
 
@@ -336,7 +367,8 @@ server.listen(port, async () => {
   } catch (error) {
     console.warn('[Server] Queue startup summary unavailable:', error instanceof Error ? error.message : error);
   }
-});
+};
+server.listen({ port: Number(port), host: listenHost }, onListening);
 server.timeout = 300000; // 5 minutes
 
 // Initialize Browser Manager
@@ -367,15 +399,17 @@ function gracefulShutdown(signal: string) {
     console.log('[Shutdown] HTTP server closed.');
   });
 
-  // Force-kill all browser contexts
-  browserManager.forceKillAll().catch((e: any) => {
-    console.error('[Shutdown] Error killing browsers:', e);
-  });
-
-  // Release session pool
-  sessionPool.releaseAll().catch((e: any) => {
-    console.error('[Shutdown] Error releasing session pool:', e);
-  });
+  // Release pooled sessions before force-closing the browser so their last
+  // usable cookies can be persisted. Contexts outside the pool are only
+  // force-closed; BrowserManager never overwrites a saved session with [].
+  void (async () => {
+    await sessionPool.releaseAll().catch((e: any) => {
+      console.error('[Shutdown] Error releasing session pool:', e);
+    });
+    await browserManager.forceKillAll().catch((e: any) => {
+      console.error('[Shutdown] Error killing browsers:', e);
+    });
+  })();
 
   // Exit after timeout
   setTimeout(() => {

@@ -3,6 +3,7 @@ import { Queue } from 'bullmq';
 import { canonicalRequestHash } from '../utils/canonicalRequestHash';
 import { DurableIdempotencyService } from './DurableIdempotencyService';
 import { isAutomationEnabled } from '../middleware/automation';
+import { scheduledClaimRecoveryStatus } from './ExecutionReliabilityService';
 
 export const SCHEDULED_POST_SCOPE = 'scheduled-post.enqueue';
 export const SCHEDULED_POST_TIME_ZONE = 'Asia/Jakarta';
@@ -71,6 +72,7 @@ export class ScheduledPostConsumerService {
     if (this.running) return 0;
     this.running = true;
     try {
+      await this.recoverQueuedClaims();
       const due = await this.prisma.scheduledPost.findMany({
         where: { status: 'pending', scheduledAt: { lte: now } },
         orderBy: { scheduledAt: 'asc' },
@@ -83,26 +85,36 @@ export class ScheduledPostConsumerService {
     }
   }
 
+  async recoverQueuedClaims(): Promise<number> {
+    const queued = await this.prisma.scheduledPost.findMany({ where: { status: 'queued' } });
+    let recovered = 0;
+    for (const schedule of queued) {
+      const hash = scheduledPostHash(schedule);
+      const durablePostId = `scheduled-${schedule.id}-${hash.slice(0, 24)}`;
+      const durablePost = await this.prisma.post.findUnique({ where: { id: durablePostId }, select: { id: true } });
+      if (scheduledClaimRecoveryStatus(schedule.status, Boolean(durablePost)) === 'pending') {
+        await this.prisma.scheduledPost.update({ where: { id: schedule.id }, data: { status: 'pending' } });
+        recovered++;
+      }
+    }
+    return recovered;
+  }
+
   async enqueue(post: any): Promise<void> {
     const hash = scheduledPostHash(post);
     const jobId = scheduledPostJobId(post.id, hash);
-    const job = await this.scheduledQueue.add('scheduledPost', {
+    await this.scheduledQueue.add('scheduledPost', {
       scheduledPostId: post.id,
       scheduleHash: hash,
     }, { jobId, removeOnComplete: false, removeOnFail: false });
 
-    const begun = await this.idempotency.beginOperation({
+    await this.idempotency.beginOperation({
       scope: SCHEDULED_POST_SCOPE,
       key: `${post.id}:${hash}`,
       requestHash: hash,
     });
-    if (begun.acquired || begun.operation.status === 'IN_PROGRESS') {
-      await this.idempotency.markCompleted(SCHEDULED_POST_SCOPE, `${post.id}:${hash}`, {
-        resourceType: 'scheduled-post-job',
-        resourceId: post.id,
-        resultReference: { jobId: String(job.id), queue: 'scheduledPosts' },
-      });
-    }
+    // Enqueue is not delivery. The durable operation intentionally remains
+    // in progress until consume claims the schedule and creates its Post row.
   }
 
   async consume(data: ScheduledPostQueueData): Promise<{ status: string; reason?: string }> {

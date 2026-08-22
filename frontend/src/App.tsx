@@ -20,10 +20,12 @@ import Engagement from '@/pages/Engagement'
 import Campaigns from '@/pages/Campaigns'
 import CampaignEngine from '@/pages/CampaignEngine'
 import ActivityTimeline from '@/pages/ActivityTimeline'
+import Queue from '@/pages/Queue'
 import OperationalValidation from '@/pages/OperationalValidation'
 import ContentPlanner from '@/pages/ContentPlanner'
 
 function ProtectedRoute() {
+  if (import.meta.env.VITE_ROCKBASE_MODE === 'local') return <Outlet />
   const isAuthenticated = useAppStore((s) => s.isAuthenticated)
   const token = useAppStore((s) => s.token) || localStorage.getItem('sc_token')
   if (!isAuthenticated || !token) return <Navigate to="/login" replace />
@@ -31,6 +33,7 @@ function ProtectedRoute() {
 }
 
 function PublicRoute() {
+  if (import.meta.env.VITE_ROCKBASE_MODE === 'local') return <Navigate to="/" replace />
   const isAuthenticated = useAppStore((s) => s.isAuthenticated)
   const token = useAppStore((s) => s.token) || localStorage.getItem('sc_token')
   if (isAuthenticated && token) return <Navigate to="/" replace />
@@ -87,6 +90,11 @@ export default function App() {
             <Route path="activity" element={
               <ErrorBoundary>
                 <ActivityTimeline />
+              </ErrorBoundary>
+            } />
+            <Route path="queue" element={
+              <ErrorBoundary>
+                <Queue />
               </ErrorBoundary>
             } />
             <Route path="validation" element={

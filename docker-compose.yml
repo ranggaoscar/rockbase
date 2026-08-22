@@ -25,6 +25,23 @@ services:
       timeout: 3s
       retries: 5
 
+  # ── Safe schema migration ──────────────────────────────────────────
+  # Uses Prisma migrate deploy only. It never resets the SQLite database.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: build
+    container_name: rockbase-migrate
+    restart: "no"
+    command: ["sh", "-c", "npx prisma migrate deploy --schema /app/backend/prisma/schema.prisma"]
+    env_file:
+      - backend/.env
+    environment:
+      - DATABASE_URL=file:/data/dev.db
+    volumes:
+      - backend-db:/data
+
   # ── Backend API ────────────────────────────────────────────────────
   backend:
     build:
@@ -37,6 +54,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     env_file:
       - backend/.env
     environment:

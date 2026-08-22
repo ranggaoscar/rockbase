@@ -16,6 +16,7 @@ import { toast } from '@/components/ui/use-toast'
 // ── Types ──────────────────────────────────────────────────────────────────
 type FilterKey = 'all' | 'instagram' | 'tiktok' | 'active' | 'warming_up' | 'idle' | 'error'
 type GridKey = '2' | '3' | '4' | '6'
+type ConnectionState = 'connecting' | 'connected' | 'authentication_failed' | 'disconnected' | 'error'
 
 interface Account {
   id: string
@@ -79,7 +80,7 @@ export default function FarmView() {
   const [filter, setFilter] = useState<FilterKey>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [gridCols, setGridCols] = useState<GridKey>('2')
-  const [connected, setConnected] = useState(false)
+  const [connectionState, setConnectionState] = useState<ConnectionState>('connecting')
   const [loading, setLoading] = useState(true)
   const [controlAccount, setControlAccount] = useState<ScreenshotData | null>(null)
   const [showAddModal, setShowAddModal] = useState(false)
@@ -123,20 +124,25 @@ export default function FarmView() {
   useEffect(() => {
     fetchAccounts()
 
+    const token = localStorage.getItem('sc_token')
     const socket = io({
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: 10,
       reconnectionDelay: 2000,
+      auth: token ? { token } : undefined,
     })
     socketRef.current = socket
 
     socket.on('connect', () => {
-      setConnected(true)
+      setConnectionState('connected')
       socket.emit('join_farm')
     })
 
-    socket.on('disconnect', () => setConnected(false))
+    socket.on('connect_error', (error) => {
+      setConnectionState(/authentication|required|token/i.test(error.message) ? 'authentication_failed' : 'error')
+    })
+    socket.on('disconnect', () => setConnectionState('disconnected'))
 
     socket.on('farm_screenshot', (data: ScreenshotData) => {
       setScreenshots((prev) => {
@@ -159,9 +165,9 @@ export default function FarmView() {
     .filter((a): a is Account => Boolean(a))
 
   useEffect(() => {
-    if (!socketRef.current || !connected) return
+    if (!socketRef.current || connectionState !== 'connected') return
     socketRef.current.emit('farm_visible_accounts', { accountIds: monitoredAccountIds })
-  }, [connected, monitoredAccountIds.join(',')])
+  }, [connectionState, monitoredAccountIds.join(',')])
 
   // ── Status bar counts ───────────────────────────────────────────────────
   const counts = {
@@ -178,16 +184,24 @@ export default function FarmView() {
       <div className="flex flex-wrap items-center gap-3">
         {/* Title + connection status */}
         <div className="flex items-center gap-2">
-          <h1 className="text-xl font-bold">Farm View</h1>
+          <h1 className="text-xl font-bold">Farm View / Session Control</h1>
           <div className={cn(
             'flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium',
-            connected
+            connectionState === 'connected'
               ? 'bg-green-500/10 text-green-400'
+              : connectionState === 'connecting'
+              ? 'bg-yellow-500/10 text-yellow-400'
               : 'bg-red-500/10 text-red-400'
           )}>
-            {connected
+            {connectionState === 'connected'
               ? <><Wifi className="h-3 w-3" /> Live</>
-              : <><WifiOff className="h-3 w-3" /> Offline</>
+              : connectionState === 'connecting'
+              ? <><RefreshCw className="h-3 w-3 animate-spin" /> Connecting</>
+              : connectionState === 'authentication_failed'
+              ? <><WifiOff className="h-3 w-3" /> Authentication failed</>
+              : connectionState === 'disconnected'
+              ? <><WifiOff className="h-3 w-3" /> Disconnected</>
+              : <><WifiOff className="h-3 w-3" /> Connection error</>
             }
           </div>
         </div>
@@ -294,12 +308,12 @@ export default function FarmView() {
           )}
           <div className="flex items-start gap-3 rounded-lg border border-blue-500/20 bg-blue-500/10 p-4 text-xs text-blue-400">
             <div className="flex-1 space-y-1.5">
-              <p className="font-semibold text-sm">Monitoring {monitoredAccounts.length} of {accounts.length} accounts</p>
+              <p className="font-semibold text-sm">Open and recover the browser sessions RockBase uses for campaign execution.</p>
               <ul className="list-disc list-inside opacity-90 space-y-0.5">
-                <li>Farm View does not keep all accounts active.</li>
-                <li>Visible cards do not mean browser/session is open.</li>
-                <li>Login remains manual.</li>
-                <li>Session health should be checked from Accounts or per selected account.</li>
+                <li>Monitoring {monitoredAccounts.length} of {accounts.length} accounts.</li>
+                <li>Login, verification, and session recovery remain human-controlled.</li>
+                <li>Use Take Control, then Save Session after a successful login.</li>
+                <li>Check session health from Accounts when an account needs attention.</li>
               </ul>
             </div>
           </div>

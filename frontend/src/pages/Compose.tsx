@@ -1185,10 +1185,10 @@ export default function Compose() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold flex items-center gap-2">
-              <SendHorizontal className="h-5 w-5 text-purple-400" /> Compose & Post
+              <SendHorizontal className="h-5 w-5 text-purple-400" /> Quick Publish
             </h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Post to multiple accounts with unique captions and photos.
+              Use this for a quick post to one or a small set of accounts. Use Campaigns for coordinated multi-account campaign work.
             </p>
           </div>
           <div className="flex bg-secondary p-1 rounded-lg">

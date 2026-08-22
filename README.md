@@ -1,213 +1,305 @@
-# 🪨 ROCK BASE — Social Media Farm Management Dashboard
+# ROCK BASE
 
-ROCK BASE is a local dashboard for managing multiple social media accounts with Farm View, session saving, warming flows, AI-assisted captions, and mass posting queues.
+> **Campaign operations for small teams and AI agents.**
 
-## 🚀 Quick Start (Docker — Recommended)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
+![Self-hosted](https://img.shields.io/badge/Self--hosted-111827)
+![Windows Local Mode](https://img.shields.io/badge/Windows-Local%20Mode-0078D4?logo=windows&logoColor=white)
+![Docker Server Mode](https://img.shields.io/badge/Docker-Server%20Mode-2496ED?logo=docker&logoColor=white)
+![Status: Alpha](https://img.shields.io/badge/Status-Alpha-F59E0B)
 
-```bash
-# 1. Clone & enter
-git clone https://github.com/ranggaoscar/rockbase.git
-cd rockbase
+RockBase is a self-hosted campaign operations platform for teams that manage multiple social accounts.
 
-# 2. Create environment file
-cp backend/.env.example backend/.env
-# Edit backend/.env — set JWT_SECRET and ENCRYPTION_KEY at minimum
+Connect accounts once, keep reusable browser sessions, prepare campaigns with humans or AI agents, and let RockBase coordinate queued publishing, pacing, execution, session recovery, and operational status from one control plane.
 
-# 3. Start everything
-docker compose up -d
+```text
+Prepare → Target → Queue → Publish → Monitor → Recover sessions when needed
 ```
 
-Dashboard: **http://localhost:5173**
-Default login: `admin@rockbase.com` / `Admin@123`
+## Quick start
 
-### Docker Commands
+### Windows Local Mode — easiest
 
-| Command | Description |
-|---------|-------------|
-| `docker compose up -d` | Start all services |
-| `docker compose down` | Stop all services |
-| `docker compose logs -f` | View live logs |
-| `docker compose --profile worker up -d` | Start with separate worker process |
-| `docker compose exec backend npx prisma migrate dev` | Run database migrations |
-
----
-
-## ✨ New: Cookie Paste — No Playwright Required!
-
-The biggest pain point — adding accounts — is now solved. **You don't need Playwright or a browser tool to add accounts anymore.**
-
-### How to Import Cookies
-
-1. Go to **Account Manager** in the dashboard
-2. Click the **`⋯`** menu on any account → **Import Cookies**
-3. Export cookies from your browser:
-   - **Chrome:** Install EditThisCookie extension → click 🍪 → Export → Copy
-   - **Manual:** DevTools → Application → Storage → Cookies → right-click → Export as JSON
-4. Paste cookies into ROCK BASE → click **Import Cookies**
-5. ✅ Account is instantly ACTIVE and HEALTHY
-
-### Supported Cookie Formats
-
-| Format | Example |
-|--------|---------|
-| **JSON Array** | `[{"name":"sessionid","value":"abc123","domain":".instagram.com"}]` |
-| **Netscape String** | `sessionid=abc123; csrftoken=xyz789;` |
-| **EditThisCookie** | Native export from the Chrome extension |
-
-### Bulk Import Cookies
-
-You can also import cookies in bulk via API:
-
-```bash
-curl -X POST http://localhost:3010/api/accounts/import-cookies-bulk \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "accounts": [
-      { "username": "akun1", "cookies": "[...]" },
-      { "username": "akun2", "cookies": "[...]" }
-    ]
-  }'
-```
-
----
-
-## 📦 Traditional Setup (Without Docker)
-
-### Requirements
-
-- Node.js 18+
-- npm
-- Redis on `127.0.0.1:6379`
-
-### Windows Quick Start
+Best for one Windows operator on one workstation.
 
 ```bat
-SETUP_ROCK_BASE.bat
-START_ROCK_BASE.bat
+git clone https://github.com/ranggaoscar/rockbase.git
+cd rockbase
+START_ROCKBASE.bat
 ```
 
-### Manual Setup
+Open:
 
-```bash
-# Backend
-cd backend
-npm install
-npx prisma generate
-npx prisma migrate dev --name init
-npm run seed
-npm run dev
-
-# Frontend (another terminal)
-cd frontend
-npm install
-npm run dev
+```text
+http://127.0.0.1:5173
 ```
 
-Dashboard: **http://localhost:5173**
-Default login: `admin@rockbase.com` / `Admin@123`
+No RockBase login is required in Local Mode.
 
----
+Then go to:
 
-## 🔧 Environment Variables
-
-Copy `backend/.env.example` to `backend/.env` and configure:
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `PORT` | No | Backend port (default: 3010) |
-| `JWT_SECRET` | **Yes** | JWT signing secret — change this |
-| `ENCRYPTION_KEY` | **Yes** | AES-256 key — 64 hex characters — change this |
-| `DATABASE_URL` | No | SQLite path (default: `file:./dev.db`) |
-| `REDIS_HOST` | No | Redis host (default: 127.0.0.1) |
-| `REDIS_PORT` | No | Redis port (default: 6379) |
-| `GEMINI_API_KEY` | No | Google Gemini for AI captions |
-| `OPENAI_API_KEY` | No | OpenAI fallback for AI |
-
----
-
-## ✨ Features
-
-| Feature | Status | Description |
-|---------|--------|-------------|
-| **Cookie Import** | ✅ **New** | Paste cookies directly — no Playwright needed |
-| **Farm View** | ✅ Working | Real-time monitoring via Playwright screenshots |
-| **Remote Control** | ✅ Working | Manual browser control for login & checkpoints |
-| **Save Session** | ✅ Working | Encrypted cookies in SQLite |
-| **Instagram Warming** | ✅ Working | Human-behavior style warming |
-| **Mass Auto Posting** | ✅ Working | Bulk posting with queue & captions |
-| **AI Caption Spinner** | ✅ Working | Gemini/OpenAI caption variations |
-| **Campaign Engine** | ✅ Working | Automated engagement campaigns |
-| **TikTok Automation** | 🚧 Planned | Manual control only for now |
-| **PWA / Mobile** | 🚧 Planned | Progressive web app support |
-
----
-
-## 🐳 Architecture (Docker)
-
-```
-┌─────────────┐     ┌──────────────┐     ┌─────────────┐
-│  Frontend    │────▶│  Backend API │────▶│   Redis     │
-│  :5173       │     │  :3010       │     │  :6379      │
-│  Nginx       │     │  Express     │     │  BullMQ     │
-└─────────────┘     │  Prisma      │     └─────────────┘
-                    │  Playwright  │
-                    └──────┬───────┘
-                           │
-                    ┌──────▼───────┐
-                    │   SQLite     │
-                    │  (dev.db)    │
-                    └──────────────┘
-
-Optional: docker compose --profile worker up
-          ┌──────────────┐
-          │  Worker      │
-          │  (separate)  │
-          └──────────────┘
+```text
+Accounts → Farm View / Sessions → log in to a social account manually → Save Session
 ```
 
----
+Local Mode prepares the native Node, Redis, Prisma, and Playwright runtime when needed. It is localhost-only and is not intended for LAN, phone, VPS, or public-hostname access.
 
-## 🔒 Data Safety
+### Server Mode — Docker
 
-- Cookies are encrypted with AES-256 before storage
-- Account passwords are encrypted
-- `.env`, database files, and sessions are never committed to Git
-- Backups are created automatically on startup
+Best for teams, VPS deployments, and network-accessible installations.
 
-## 🛠 Useful Scripts
-
-- `SETUP_ROCK_BASE.bat` — Windows first-time setup
-- `CHECK_ROCK_BASE.bat` — System readiness check
-- `START_ROCK_BASE.bat` — Start all services (Windows)
-- `start.bat` — Simpler development starter
-
-## 📝 Developer Notes
-
-Do not delete these local runtime folders unless you intentionally want to remove local data:
-
-- `backend/dev.db`
-- `backend/prisma/dev.db`
-- `backend/uploads/`
-- `backend/backups/`
-- `backend/logs/`
-
-## 🆘 Troubleshooting
-
-**Docker:**
-```bash
-# Check service status
-docker compose ps
-
-# View backend logs
-docker compose logs -f backend
-
-# Reset database (WARNING: deletes all data)
-docker compose down -v
-docker compose up -d
+```powershell
+git clone https://github.com/ranggaoscar/rockbase.git
+cd rockbase
+powershell -ExecutionPolicy Bypass -File .\setup-rockbase.ps1
 ```
 
-**Traditional:**
-- Run `CHECK_ROCK_BASE.bat` to verify setup
-- Ensure Redis is running: `redis-cli ping` → `PONG`
-- Backend health: `curl http://localhost:3010/api/health`
+Then open:
+
+```text
+http://localhost:5173
+```
+
+Server Mode uses authenticated RockBase access. On a fresh installation, the setup flow prints a generated first administrator credential. For an existing installation, follow the dedicated [upgrade guide](docs/UPGRADE.md) instead of first-install steps.
+
+## Why RockBase?
+
+A small company may have one marketing operator, several salespeople, brand accounts, regional accounts, project accounts, and an AI agent—but not a large social media department.
+
+RockBase gives that team a shared operational layer for campaign distribution. Humans and AI agents prepare the intent, content, and targets; RockBase owns session handling, queued account work, paced execution, and visibility into what needs attention.
+
+RockBase does **not** create a fake audience. It operates social accounts that the team owns, manages, or is authorized to use.
+
+## How to use RockBase
+
+### 1. Start RockBase
+
+- **Local Mode:** run `START_ROCKBASE.bat`
+- **Server Mode:** use Docker with `setup-rockbase.ps1`
+
+### 2. Add accounts
+
+Open **Accounts** to add and organize account identities, platforms, status, and groups.
+
+### 3. Open Sessions
+
+Open **Farm View / Sessions**, choose an account, then:
+
+1. open its browser session
+2. log in to Instagram or TikTok manually
+3. complete verification or 2FA when required
+4. choose **Save Session**
+
+RockBase login and social-platform login are separate. Local Mode removes RockBase dashboard login only; social account login remains human-controlled.
+
+### 4. Create a campaign
+
+Open **Campaigns** and prepare:
+
+- content and caption
+- target accounts or account groups
+- execution intent
+
+### 5. Monitor Queue
+
+Use **Queue** to follow operational states:
+
+```text
+Queued → Running → Delayed → Completed
+                    ↘ Needs attention / Failed
+```
+
+### 6. Resolve account attention
+
+When a session needs attention, open it again in **Farm View / Sessions**, reconnect or complete verification, then save the refreshed session.
+
+### 7. Review Activity
+
+**Activity** provides campaign, publishing, and session operational history.
+
+## Local Mode vs Server Mode
+
+| | Local Mode | Server Mode |
+|---|---|---|
+| Best for | One Windows operator | Team, VPS, or network deployment |
+| Start | `START_ROCKBASE.bat` | Docker Compose / `setup-rockbase.ps1` |
+| RockBase login | No | Yes |
+| Network | `localhost` only | Server deployment |
+| URL | `http://127.0.0.1:5173` | Deployment URL; fresh Docker defaults to `http://localhost:5173` |
+| Runtime | Native Node + Redis + Playwright prepared by launcher | Docker services |
+| Data | Local repository/runtime paths | Persistent Docker volumes |
+| Recommended for | Personal workstation / campaign operator | Shared team environment |
+
+## Features
+
+### Core
+
+| Area | What it provides | Maturity |
+|---|---|---|
+| Accounts | Multi-account management, groups, platform/status fields, and session-health visibility | Core |
+| Farm View / Sessions | Interactive Playwright browser, manual login and challenge handling, control/screenshots, Save Session, encrypted cookie persistence | Core |
+| Campaigns | Campaign intent/content, account or group targeting, multi-account workflow | Core |
+| Publishing Queue | Queued, running, delayed, completed, failed, and needs-attention operational states | Core |
+| Quick Publish | Smaller or single publishing operations | Core |
+| Activity | Campaign, publishing, and session operational history | Core |
+| AI agent integration | Hermes/internal API for account discovery, media upload, campaign submission, and status/results without raw social cookies/passwords | Core boundary |
+| Execution reliability | Account locks, posting budgets, durable idempotency, paced execution, Redis fail-closed behavior, ambiguous-delivery protection, restart reconciliation | Core |
+| Backup / recovery | SQLite backup, checksums, and integrity validation | Core |
+
+### Advanced / optional
+
+| Area | Current role |
+|---|---|
+| Engagement | Optional operational tooling; not the primary product loop |
+| Warming | Optional operational tooling |
+| Proxy management | Optional runtime configuration |
+| AI Writer | Optional drafting assistance; external agents remain the preferred content-generation layer |
+
+### Experimental / not primary
+
+| Area | Current role |
+|---|---|
+| Analytics | Not a trustworthy product-performance source yet |
+| Content Planner | Secondary workflow surface |
+| Campaign Engine panels | Experimental/advanced operational panels |
+| Advanced scheduler recurrence | Not fully mature |
+
+## Infrastructure
+
+### Local Mode
+
+```text
+Human / AI agent
+      |
+RockBase Frontend
+React + Vite
+127.0.0.1:5173
+      |
+RockBase Backend
+Express + TypeScript
+127.0.0.1:3010
+      |
+ ┌────┼──────────────┐
+ |    |              |
+SQLite Redis/BullMQ Playwright Chromium
+ |    |              |
+data  queue/locks    account browser sessions
+```
+
+- **Frontend:** operator interface for Accounts, Sessions, Campaigns, Queue, and Activity.
+- **Backend:** campaign, session, queue, and execution control plane.
+- **SQLite:** accounts, campaigns, posts, activity, and encrypted session blobs.
+- **Redis/BullMQ:** execution queue, locks, posting budgets, and runtime coordination.
+- **Playwright Chromium:** interactive account browser sessions and supported browser-driven execution.
+
+### Server Mode
+
+```text
+Browser / Operator
+       |
+Frontend container
+       |
+Backend API
+       |
+ ┌──────────┬────────────┐
+SQLite      Redis/BullMQ Playwright
+volume      redis-data   browser runtime
+
+migrate service
+      |
+prisma migrate deploy
+      |
+backend starts
+```
+
+Persistent Docker volumes are preserved across normal upgrades:
+
+```text
+backend-db
+backend-uploads
+backend-backups
+backend-logs
+redis-data
+```
+
+Do not rename or delete these volumes during a normal upgrade.
+
+## Where RockBase stores data
+
+### Local Mode
+
+| Data | Location |
+|---|---|
+| SQLite database | `backend/prisma/dev.db` |
+| Configuration and encryption key | `backend/.env` |
+| Uploads | `backend/uploads/` |
+| Backups | `backend/backups/` |
+| Logs | `backend/logs/` |
+| Redis runtime data | `rockbase-data/redis/` |
+
+### Server Mode
+
+| Persistent volume | Purpose |
+|---|---|
+| `backend-db` | SQLite database, accounts, and encrypted saved sessions |
+| `backend-uploads` | Uploaded/campaign media |
+| `backend-backups` | Verified SQLite backup snapshots |
+| `backend-logs` | Runtime logs |
+| `redis-data` | Redis/BullMQ persistent state |
+
+Social account sessions are currently stored as encrypted cookie data.
+
+> **Recovery-critical:** a database backup without the original `ENCRYPTION_KEY` is not sufficient to recover encrypted account sessions. Preserve the database and the original key together. Do not print, expose, rotate, or replace saved cookies or secrets during normal operation.
+
+## Security model
+
+### Local Mode
+
+- no RockBase dashboard login
+- explicit `ROCKBASE_MODE=local`
+- backend binds to `127.0.0.1`
+- backend rejects non-loopback Local Mode requests
+
+### Server Mode
+
+- JWT authentication
+- first-administrator bootstrap for fresh installs
+- Docker/server deployment model
+
+### Social accounts and AI agents
+
+- social-platform login remains human-controlled
+- saved cookies are encrypted
+- AI agents do not normally receive raw social passwords or cookies
+- Hermes/internal routes retain an independent token boundary
+
+## Project status
+
+**Current stage: `v0.1.0-alpha`**
+
+The core campaign workflow is usable, but RockBase is not marketed as production-grade enterprise software. Browser-driven social connectors can require maintenance as platform UIs change.
+
+## Current limitations
+
+- social platform UI changes can break browser publishing selectors
+- operators may need to reconnect expired sessions
+- session persistence is encrypted cookies, not a complete browser profile
+- login, 2FA, checkpoints, and challenges remain human-controlled
+- analytics is not currently a trustworthy product-performance source
+- advanced scheduler recurrence is not fully mature
+- Local Mode is Windows-first
+- Server/production upgrades require backup plus the [preflight and upgrade procedure](docs/UPGRADE.md)
+
+## Documentation
+
+- [Local Mode](docs/LOCAL_MODE.md) — localhost runtime, data paths, and graceful stop
+- [Upgrade guide](docs/UPGRADE.md) — safe existing-installation upgrades
+- [Production data contract](docs/PRODUCTION_DATA_CONTRACT.md) — session, volume, encryption-key, and recovery guarantees
+- [Release checklist draft](docs/RELEASE_CHECKLIST_DRAFT.md) — alpha release preparation
+
+## License
+
+RockBase is licensed under the MIT License.
+
+See [LICENSE](LICENSE).

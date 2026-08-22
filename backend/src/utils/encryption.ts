@@ -1,13 +1,24 @@
 import crypto from 'crypto';
 
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toString('hex'); // 32 bytes for AES-256
 const IV_LENGTH = 16; // For AES, this is always 16
 
-export function encrypt(text: string): string {
-  const key = Buffer.from(ENCRYPTION_KEY, 'hex');
-  if (key.length !== 32) {
-    throw new Error('Invalid ENCRYPTION_KEY length. Must be 32 bytes (64 hex characters).');
+export function getEncryptionKey(): string {
+  const key = process.env.ENCRYPTION_KEY?.trim();
+  if (!key) {
+    throw new Error('ENCRYPTION_KEY must be configured with exactly 64 hexadecimal characters.');
   }
+  if (!/^[a-fA-F0-9]{64}$/.test(key)) {
+    throw new Error('ENCRYPTION_KEY must be exactly 64 hexadecimal characters.');
+  }
+  return key;
+}
+
+export function assertEncryptionConfiguration(): void {
+  getEncryptionKey();
+}
+
+export function encrypt(text: string): string {
+  const key = Buffer.from(getEncryptionKey(), 'hex');
   const iv = crypto.randomBytes(IV_LENGTH);
   const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
   let encrypted = cipher.update(text);
@@ -16,7 +27,7 @@ export function encrypt(text: string): string {
 }
 
 export function decrypt(text: string): string {
-  const key = Buffer.from(ENCRYPTION_KEY, 'hex');
+  const key = Buffer.from(getEncryptionKey(), 'hex');
   const textParts = text.split(':');
   const ivHex = textParts.shift();
   if (!ivHex) throw new Error('Invalid encrypted text format');

@@ -3,9 +3,13 @@ import { PrismaClient } from '@prisma/client';
 import { Queue } from 'bullmq';
 import { AUTOMATION_DISABLED_MESSAGE, isAutomationEnabled } from './middleware/automation';
 import { assertSeparateWorkerMode } from './utils/workerMode';
+import { assertEncryptionConfiguration } from './utils/encryption';
+import { executionReliabilityReconciler } from './services/ExecutionReliabilityReconciler';
+import { reconcileQueueReadOnly } from './services/QueueReconciliationService';
 dotenv.config();
 
 assertSeparateWorkerMode();
+assertEncryptionConfiguration();
 
 if (!isAutomationEnabled()) {
   console.error('[Worker Process] ' + AUTOMATION_DISABLED_MESSAGE);
@@ -54,20 +58,22 @@ setInterval(async () => {
   try {
     console.log('[Worker Process] Running automated queue recovery check...');
 
-    // 1. Mark stale pending_verify posts as failed (older than 1 hour)
-    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-    const updatedVerify = await prisma.post.updateMany({
-      where: { status: 'pending_verify', createdAt: { lt: oneHourAgo } },
-      data: { status: 'failed' }
-    });
-    if (updatedVerify.count > 0) {
-      console.log(`[Worker Process] Recovered ${updatedVerify.count} stale pending_verify posts.`);
+    // 1. One owner for durable execution recovery: pending verification and
+    // orphan scheduled claims. Neither path creates a new publish attempt.
+    const reliability = await executionReliabilityReconciler.reconcile();
+    if (reliability.verified.confirmed || reliability.verified.unknown || reliability.recoveredScheduledClaims) {
+      console.log(`[Worker Process] Reliability reconciliation: confirmed=${reliability.verified.confirmed}, unknown=${reliability.verified.unknown}, recoveredScheduledClaims=${reliability.recoveredScheduledClaims}.`);
     }
 
     // 2. Re-queue pending posts that aren't in any queue
     if (!automationQueue) {
       console.log('[Worker Process] Queue not available — skipping re-queue check');
       return;
+    }
+
+    const reconciliation = await reconcileQueueReadOnly(prisma as any, automationQueue as any);
+    if (reconciliation.issues.length) {
+      console.warn('[Worker Process] Queue reconciliation findings:', reconciliation.issues);
     }
 
     const pendingPosts = await prisma.post.findMany({ 

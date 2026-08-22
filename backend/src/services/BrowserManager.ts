@@ -12,10 +12,32 @@ const prisma = new PrismaClient();
 // Default headless=true (no desktop popup). Set ROCKBASE_BROWSER_HEADLESS=false to force visible window.
 const BROWSER_HEADLESS = process.env.ROCKBASE_BROWSER_HEADLESS !== 'false';
 
+export function shouldPreserveExistingCookies(cookieCount: number, existingEncryptedCookies: string | null): boolean {
+  return cookieCount === 0 && Boolean(existingEncryptedCookies);
+}
+
+export class InFlightContextCoordinator<T> {
+  private readonly inFlight = new Map<string, Promise<T>>();
+
+  async getOrCreate(accountId: string, create: () => Promise<T>): Promise<T> {
+    const existing = this.inFlight.get(accountId);
+    if (existing) return existing;
+
+    const creation = create();
+    this.inFlight.set(accountId, creation);
+    try {
+      return await creation;
+    } finally {
+      if (this.inFlight.get(accountId) === creation) this.inFlight.delete(accountId);
+    }
+  }
+}
+
 export class BrowserManager {
   private browser: Browser | null = null;
   // Store active contexts by accountId
   private activeContexts: Map<string, BrowserContext> = new Map();
+  private readonly contextCoordinator = new InFlightContextCoordinator<BrowserContext>();
 
   constructor() {}
 
@@ -55,6 +77,10 @@ export class BrowserManager {
       this.activeContexts.delete(accountId);
     }
 
+    return this.contextCoordinator.getOrCreate(accountId, () => this.createContext(accountId));
+  }
+
+  private async createContext(accountId: string): Promise<BrowserContext> {
     const account = await prisma.socialAccount.findUnique({
       where: { id: accountId },
       include: { proxy: true }
@@ -106,7 +132,7 @@ export class BrowserManager {
   /**
    * Saves the current session cookies back to the database.
    */
-  public async saveCookies(accountId: string): Promise<void> {
+  public async saveCookies(accountId: string): Promise<{ saved: true; cookieCount: number }> {
     console.log(`[BrowserManager] Attempting to save cookies for account: ${accountId}`);
     const context = this.activeContexts.get(accountId);
     if (!context || !this.isContextUsable(context)) {
@@ -120,7 +146,14 @@ export class BrowserManager {
     
     if (cookies.length === 0) {
       console.warn(`[BrowserManager] No cookies found in context for ${accountId}. Manual login may have failed or not yet completed.`);
-      // We still update DB to track attempt, but maybe don't overwrite if we already have cookies?
+      const existing = await prisma.socialAccount.findUnique({
+        where: { id: accountId },
+        select: { cookies: true },
+      });
+      if (shouldPreserveExistingCookies(cookies.length, existing?.cookies ?? null)) {
+        throw new Error('No usable cookies were captured; the previously saved session was preserved.');
+      }
+      throw new Error('No usable cookies were captured.');
     }
 
     const encryptedCookies = encrypt(JSON.stringify(cookies));
@@ -131,6 +164,7 @@ export class BrowserManager {
     });
     
     console.log(`[BrowserManager] ✅ Successfully updated database for ${accountId}. Cookies field length: ${updated.cookies?.length || 0}`);
+    return { saved: true, cookieCount: cookies.length };
   }
 
   /**
