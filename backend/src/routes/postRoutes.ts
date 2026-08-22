@@ -395,75 +395,26 @@ router.post('/bulk', automationGuard, upload.single('media'), async (req: Reques
           metadata: { source: 'bulk', delayMs: cumulativeDelay, spinIndex: i },
         });
       } else {
-        // ── Direct Fallback Mode (No Redis) ──
-        console.log(`[BulkPost] Redis missing. Queuing direct post for ${accountId} with ${cumulativeDelay}ms delay`);
-        
-        // Execute in background without awaiting
-        (async () => {
-          try {
-            if (cumulativeDelay > 0) await new Promise(r => setTimeout(r, cumulativeDelay));
-            
-            // Re-importing service to ensure it's available in this scope if needed
-            const { instagramPostingService } = await import('../services/InstagramPostingService');
-            
-            await prisma.post.update({
-              where: { id: post.id },
-              data: {
-                status: 'pending_verify',
-                results: JSON.stringify({ [accountId]: { status: 'PENDING_VERIFY' } })
-              }
-            });
-            console.log(`[DirectPost] ${accountId} marked PENDING_VERIFY before Instagram publish verification`);
-            
-            const result = await instagramPostingService.postToInstagram(accountId, finalContent, mediaLocalPath);
-            
-            if (result.status === 'success') {
-              await prisma.post.update({
-                where: { id: post.id },
-                data: {
-                  status: 'published',
-                  postedAt: new Date(),
-                  results: JSON.stringify({ [accountId]: { status: 'success' } })
-                }
-              });
-              logActivity({
-                workspaceId,
-                type: 'posting',
-                entityType: 'post',
-                entityId: post.id,
-                accountId,
-                action: 'publish_success',
-                status: 'success',
-                message: `Published Instagram post for @${result.username}`,
-                metadata: { source: 'direct_fallback' },
-              });
-              console.log(`[DirectPost] ✅ Published for @${result.username}`);
-            } else {
-              throw new Error(result.error);
-            }
-          } catch (err: any) {
-            console.error(`[DirectPost] ❌ Failed for ${accountId}:`, err.message);
-            const failedStatus = err.message?.includes('FAILED_VERIFY') ? 'FAILED_VERIFY' : 'failed';
-            await prisma.post.update({
-              where: { id: post.id },
-              data: {
-                status: 'failed',
-                results: JSON.stringify({ [accountId]: { status: failedStatus, error: err.message } })
-              }
-            }).catch(() => {});
-            logActivity({
-              workspaceId,
-              type: 'posting',
-              entityType: 'post',
-              entityId: post.id,
-              accountId,
-              action: 'publish_failure',
-              status: 'failed',
-              message: `Direct fallback publish failed for ${accountId}`,
-              metadata: { source: 'direct_fallback', failedStatus, error: err.message },
-            });
-          }
-        })();
+        // Never bypass account locks, budgets, or durable idempotency when Redis
+        // is unavailable. Persist the intent for queue reconciliation instead.
+        await prisma.post.update({
+          where: { id: post.id },
+          data: {
+            status: 'pending',
+            results: JSON.stringify({ [accountId]: { status: 'QUEUE_UNAVAILABLE', error: 'EXECUTION_NOT_STARTED' } }),
+          },
+        });
+        logActivity({
+          workspaceId,
+          type: 'queue',
+          entityType: 'post',
+          entityId: post.id,
+          accountId,
+          action: 'queue_unavailable_execution_not_started',
+          status: 'warning',
+          message: `Publishing was not started for @${username} because the safe queue is unavailable.`,
+          metadata: { source: 'bulk' },
+        });
       }
 
       createdPosts.push({

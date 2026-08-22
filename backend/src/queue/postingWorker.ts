@@ -15,6 +15,7 @@ import { DurableIdempotencyService, IdempotencyConflictError } from '../services
 import { postingWorkerDeliveryIdentity } from '../utils/socialPostingIdempotency';
 import { AccountExecutionLease, accountExecutionLockService } from '../services/AccountExecutionLockService';
 import { AccountPostingBudgetReservation, accountPostingBudgetService } from '../services/AccountPostingBudgetService';
+import { postResultService } from '../services/PostResultService';
 
 const prisma = new PrismaClient();
 const durableIdempotency = new DurableIdempotencyService(prisma);
@@ -317,13 +318,12 @@ export const postingWorker = new Worker<PostJobData>(
         const delivery = await beginExternalDelivery();
         if (!delivery.shouldExecute) return { status: 'skipped', reason: delivery.reason };
 
-        await prisma.post.update({
-          where: { id: postId },
-          data: {
-            status: 'pending_verify',
-            results: JSON.stringify({ [accountId]: { status: 'PENDING_VERIFY', username: account.username } }),
-          },
-        });
+        await postResultService.merge(
+          postId,
+          accountId,
+          { status: 'PENDING_VERIFY', username: account.username },
+          { status: 'pending_verify' },
+        );
         reachedPendingVerify = true;
         console.log(`[Worker] @${account.username} marked PENDING_VERIFY before Instagram publish verification`);
 
@@ -340,14 +340,12 @@ export const postingWorker = new Worker<PostJobData>(
         });
         deliveryOperationCompleted = true;
 
-        await prisma.post.update({
-          where: { id: postId },
-          data: {
-            status: 'published',
-            postedAt: new Date(result.postedAt || Date.now()),
-            results: JSON.stringify({ ...existingResults, [accountId]: { status: 'success', postedAt: result.postedAt } }),
-          },
-        });
+        await postResultService.merge(
+          postId,
+          accountId,
+          { status: 'success', postedAt: result.postedAt },
+          { status: 'published', postedAt: new Date(result.postedAt || Date.now()) },
+        );
 
         logActivity({
           workspaceId: account.workspaceId,
@@ -390,13 +388,12 @@ export const postingWorker = new Worker<PostJobData>(
         const delivery = await beginExternalDelivery();
         if (!delivery.shouldExecute) return { status: 'skipped', reason: delivery.reason };
 
-        await prisma.post.update({
-          where: { id: postId },
-          data: {
-            status: 'pending_verify',
-            results: JSON.stringify({ [accountId]: { status: 'PENDING_VERIFY', username: account.username } }),
-          },
-        });
+        await postResultService.merge(
+          postId,
+          accountId,
+          { status: 'PENDING_VERIFY', username: account.username },
+          { status: 'pending_verify' },
+        );
         reachedPendingVerify = true;
         console.log(`[Worker] @${account.username} marked PENDING_VERIFY before TikTok publish verification`);
 
@@ -413,14 +410,12 @@ export const postingWorker = new Worker<PostJobData>(
         });
         deliveryOperationCompleted = true;
 
-        await prisma.post.update({
-          where: { id: postId },
-          data: {
-            status: 'published',
-            postedAt: new Date(result.postedAt || Date.now()),
-            results: JSON.stringify({ ...existingResults, [accountId]: { status: 'success', postedAt: result.postedAt } }),
-          },
-        });
+        await postResultService.merge(
+          postId,
+          accountId,
+          { status: 'success', postedAt: result.postedAt },
+          { status: 'published', postedAt: new Date(result.postedAt || Date.now()) },
+        );
 
         logActivity({
           workspaceId: account.workspaceId,
