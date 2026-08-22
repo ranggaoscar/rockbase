@@ -78,17 +78,17 @@ export default function Dashboard() {
       bg: 'bg-green-500/10',
     },
     {
-      label: 'Engagement Activity',
+      label: 'Campaign activity',
       value: 'Live',
-      sub: 'Monitor in Engagement Center',
+      sub: 'Review activity and account status',
       icon: SendHorizontal,
       color: 'text-purple-400',
       bg: 'bg-purple-500/10',
     },
     {
-      label: 'Scheduled Posts',
+      label: 'Queued publishing',
       value: '—',
-      sub: 'Check Scheduler for details',
+      sub: 'Review queue status in Activity',
       icon: CalendarDays,
       color: 'text-yellow-400',
       bg: 'bg-yellow-500/10',
@@ -112,7 +112,7 @@ export default function Dashboard() {
             Welcome back, {user?.name ?? 'Admin'} 👋
           </h1>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            Here's your farm overview for today.
+            Coordinate account sessions, campaigns, and publishing from one place.
           </p>
         </div>
         <div className="flex gap-2">
@@ -122,7 +122,7 @@ export default function Dashboard() {
           </Button>
           <Button size="sm" variant="purple" onClick={() => navigate('/farm')}>
             <Tv2 className="h-3.5 w-3.5" />
-            Open Farm
+            Open Sessions
           </Button>
         </div>
       </div>
@@ -159,8 +159,8 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent className="py-10 text-center">
             <Activity className="h-10 w-10 mx-auto text-muted-foreground/20 mb-3" />
-            <p className="text-sm text-muted-foreground">Detailed activity logs are available in Engagement Center.</p>
-            <Button variant="link" onClick={() => navigate('/engagement')} className="text-purple-400 mt-2">Go to Engagement Center →</Button>
+            <p className="text-sm text-muted-foreground">Campaign and publishing activity is available in the activity timeline.</p>
+            <Button variant="link" onClick={() => navigate('/activity')} className="text-purple-400 mt-2">Open activity →</Button>
           </CardContent>
         </Card>
 
@@ -220,11 +220,10 @@ export default function Dashboard() {
         <CardContent>
           <div className="flex flex-wrap gap-2">
             {[
-              { label: 'New Post',          icon: SendHorizontal, path: '/compose',    variant: 'purple' as const },
-              { label: 'Engagement Center', icon: Activity,       path: '/engagement', variant: 'outline' as const },
-              { label: 'Campaign Manager',  icon: Target,         path: '/campaigns',  variant: 'outline' as const },
-              { label: 'Farm View',         icon: Tv2,            path: '/farm',       variant: 'outline' as const },
-              { label: 'Warming Manager',   icon: Leaf,           path: '/warming',    variant: 'outline' as const },
+              { label: 'New campaign', icon: Target, path: '/campaigns', variant: 'purple' as const },
+              { label: 'Prepare content', icon: SendHorizontal, path: '/compose', variant: 'outline' as const },
+              { label: 'Open sessions', icon: Tv2, path: '/farm', variant: 'outline' as const },
+              { label: 'View queue', icon: Activity, path: '/activity?focus=queue', variant: 'outline' as const },
             ].map(({ label, icon: Icon, path, variant }) => (
               <Button key={path} size="sm" variant={variant} onClick={() => navigate(path)}>
                 <Icon className="h-3.5 w-3.5" />

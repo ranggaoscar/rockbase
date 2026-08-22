@@ -184,7 +184,7 @@ export default function FarmView() {
       <div className="flex flex-wrap items-center gap-3">
         {/* Title + connection status */}
         <div className="flex items-center gap-2">
-          <h1 className="text-xl font-bold">Farm View</h1>
+          <h1 className="text-xl font-bold">Farm View / Session Control</h1>
           <div className={cn(
             'flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium',
             connectionState === 'connected'

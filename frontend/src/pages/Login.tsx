@@ -64,7 +64,7 @@ export default function Login() {
               ROCK BASE
             </h1>
             <p className="mt-1 text-sm text-white/40">
-              Farm Management Platform
+              Campaign Operations Platform
             </p>
           </div>
 
