@@ -12,6 +12,7 @@ import { getWorkerMode, getWorkerStartupPlan } from './utils/workerMode';
 import { authenticateToken } from './middleware/auth';
 import { assertJwtConfiguration, verifyAccessToken } from './middleware/security';
 import { assertEncryptionConfiguration } from './utils/encryption';
+import { getRockBaseMode, isLoopbackAddress, localOperator, requireLocalLoopback } from './middleware/runtimeMode';
 
 dotenv.config();
 assertJwtConfiguration();
@@ -58,6 +59,7 @@ process.on('SIGINT', () => {
 
 const app = express();
 const port = process.env.PORT || 3010;
+const runtimeMode = getRockBaseMode();
 
 // Gemini Setup
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || 'dummy_key_for_now');
@@ -71,6 +73,7 @@ const automationQueue = new Queue('automationQueue', { connection });
 
 // Middleware
 app.use(helmet());
+app.use(requireLocalLoopback);
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:5173',
   credentials: true,
@@ -222,6 +225,11 @@ export const io = new Server(server, {
   },
 });
 io.use((socket, next) => {
+  if (runtimeMode === 'local' && isLoopbackAddress(socket.handshake.address)) {
+    socket.data.user = localOperator;
+    next();
+    return;
+  }
   const authToken = typeof socket.handshake.auth?.token === 'string'
     ? socket.handshake.auth.token
     : undefined;
@@ -336,9 +344,10 @@ const STARTUP_SESSION_ID = `session-${Date.now()}-${Math.random().toString(36).s
 // Export session ID so workers/controllers can tag jobs
 export { STARTUP_SESSION_ID };
 
-server.listen(port, async () => {
+const listenHost = runtimeMode === 'local' ? '127.0.0.1' : undefined;
+const onListening = async () => {
   logger.info(`ROCK BASE backend running on port ${port}`, { sessionId: STARTUP_SESSION_ID });
-  console.log(`ROCK BASE backend running on port ${port}`);
+  console.log(`ROCK BASE backend running on ${listenHost || 'configured network interface'}:${port} (${runtimeMode} mode)`);
   console.log(`Session ID: ${STARTUP_SESSION_ID}`);
   console.log(`Frontend expected at: ${process.env.FRONTEND_URL || 'http://localhost:5173'}`);
 
@@ -348,7 +357,8 @@ server.listen(port, async () => {
   } catch (error) {
     console.warn('[Server] Queue startup summary unavailable:', error instanceof Error ? error.message : error);
   }
-});
+};
+server.listen({ port: Number(port), host: listenHost }, onListening);
 server.timeout = 300000; // 5 minutes
 
 // Initialize Browser Manager

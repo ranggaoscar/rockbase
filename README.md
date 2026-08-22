@@ -107,6 +107,22 @@ The agent prepares intent and content. RockBase owns account-session handling an
 - activity history
 - verified SQLite backups with checksum and integrity validation
 
+## Choose how to run RockBase
+
+### Local Mode — recommended for one Windows operator
+
+```bat
+START_ROCKBASE.bat
+```
+
+Local Mode runs on `127.0.0.1` only and does not require a RockBase username/password. It keeps social account login separate: use Farm View / Sessions to log in to Instagram or TikTok and save encrypted sessions.
+
+The launcher checks or prepares Node, Redis, project dependencies, Prisma client, and Playwright Chromium. It never overwrites an existing `backend/.env` or `ENCRYPTION_KEY`.
+
+Read [docs/LOCAL_MODE.md](docs/LOCAL_MODE.md) for localhost security, local data paths, and graceful stop instructions.
+
+### Server Mode — recommended for teams, VPS, and network access
+
 ## Windows / Docker quick start
 
 Docker Desktop is the only runtime prerequisite for a normal Windows install. You do not need to manually install Node, Redis, Prisma, or Playwright.

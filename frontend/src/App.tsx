@@ -25,6 +25,7 @@ import OperationalValidation from '@/pages/OperationalValidation'
 import ContentPlanner from '@/pages/ContentPlanner'
 
 function ProtectedRoute() {
+  if (import.meta.env.VITE_ROCKBASE_MODE === 'local') return <Outlet />
   const isAuthenticated = useAppStore((s) => s.isAuthenticated)
   const token = useAppStore((s) => s.token) || localStorage.getItem('sc_token')
   if (!isAuthenticated || !token) return <Navigate to="/login" replace />
@@ -32,6 +33,7 @@ function ProtectedRoute() {
 }
 
 function PublicRoute() {
+  if (import.meta.env.VITE_ROCKBASE_MODE === 'local') return <Navigate to="/" replace />
   const isAuthenticated = useAppStore((s) => s.isAuthenticated)
   const token = useAppStore((s) => s.token) || localStorage.getItem('sc_token')
   if (isAuthenticated && token) return <Navigate to="/" replace />
