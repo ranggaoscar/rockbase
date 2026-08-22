@@ -68,9 +68,13 @@ The Local Mode launcher starts Redis with `--bind 127.0.0.1` and protected mode 
 
 ## Stop
 
-For graceful session shutdown, press `Ctrl+C` in the backend launcher window and wait for its shutdown output before closing the frontend window.
+Run:
 
-`STOP_ROCKBASE.bat` displays this safe stop procedure. It intentionally does not hard-kill Node processes.
+```bat
+STOP_ROCKBASE.bat
+```
+
+The helper sends a loopback-only shutdown request to the backend, waits for its graceful session/browser cleanup path, then closes the Local Mode frontend listener. It intentionally does not hard-kill every Node process. Redis remains running locally for the next start.
 
 ## Server Mode
 
