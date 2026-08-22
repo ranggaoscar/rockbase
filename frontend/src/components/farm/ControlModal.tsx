@@ -82,13 +82,31 @@ export default function ControlModal({ account, socket, onClose }: ControlModalP
   }
 
   async function handleSaveCookies() {
+    if (!socket?.connected) {
+      setActionFeedback('No active browser session')
+      return
+    }
     setSavingCookies(true)
-    emit('save_cookies')
-    await new Promise((r) => setTimeout(r, 1500))
-    setSavingCookies(false)
-    setCookieSaved(true)
-    setActionFeedback('Session saved!')
-    setTimeout(() => setActionFeedback(''), 2000)
+    socket.timeout(15_000).emit(
+      'control_action',
+      { accountId: account.accountId, action: 'save_cookies', params: {} },
+      (error: Error | null, result?: { ok: boolean; error?: string }) => {
+        setSavingCookies(false)
+        if (error) {
+          setCookieSaved(false)
+          setActionFeedback('Session save failed')
+          return
+        }
+        if (!result?.ok) {
+          setCookieSaved(false)
+          setActionFeedback(result?.error || 'Session save failed')
+          return
+        }
+        setCookieSaved(true)
+        setActionFeedback('Session saved!')
+        setTimeout(() => setActionFeedback(''), 2000)
+      },
+    )
   }
 
   function handleSendText(e: React.FormEvent) {

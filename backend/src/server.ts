@@ -11,9 +11,11 @@ import { AUTOMATION_DISABLED_MESSAGE, isAutomationEnabled } from './middleware/a
 import { getWorkerMode, getWorkerStartupPlan } from './utils/workerMode';
 import { authenticateToken } from './middleware/auth';
 import { assertJwtConfiguration, verifyAccessToken } from './middleware/security';
+import { assertEncryptionConfiguration } from './utils/encryption';
 
 dotenv.config();
 assertJwtConfiguration();
+assertEncryptionConfiguration();
 
 // ── Initialize structured logging ──────────────────────────────────
 import { logger } from './services/logger';
@@ -290,20 +292,30 @@ io.on('connection', (socket) => {
     farmService.updateVisibleAccounts(socket, accountIds);
   });
 
-  socket.on('control_action', async (data) => {
+  socket.on('control_action', async (data, acknowledgement?: (result: { ok: boolean; error?: string; cookieCount?: number }) => void) => {
     if (!['Admin', 'Operator'].includes(socket.data.user.role)) {
       socket.emit('authorization_error', { error: 'FORBIDDEN' });
+      acknowledgement?.({ ok: false, error: 'You are not authorized to control account sessions.' });
       return;
     }
-    if (rejectDisabledAutomation()) return;
-    // set_mode needs the live socket reference — handle it here
-    if (data.action === 'set_mode') {
-      await farmService.setControlMode(
-        data.params?.active ? data.accountId : null,
-        socket
-      );
-    } else {
-      await farmService.handleControl(data);
+    if (rejectDisabledAutomation()) {
+      acknowledgement?.({ ok: false, error: AUTOMATION_DISABLED_MESSAGE });
+      return;
+    }
+    try {
+      // set_mode needs the live socket reference — handle it here
+      if (data.action === 'set_mode') {
+        await farmService.setControlMode(
+          data.params?.active ? data.accountId : null,
+          socket
+        );
+        acknowledgement?.({ ok: true });
+      } else {
+        const result = await farmService.handleControl(data);
+        acknowledgement?.({ ok: true, ...(result || {}) });
+      }
+    } catch (error: any) {
+      acknowledgement?.({ ok: false, error: error?.message || 'Session control request failed.' });
     }
   });
 
@@ -367,15 +379,17 @@ function gracefulShutdown(signal: string) {
     console.log('[Shutdown] HTTP server closed.');
   });
 
-  // Force-kill all browser contexts
-  browserManager.forceKillAll().catch((e: any) => {
-    console.error('[Shutdown] Error killing browsers:', e);
-  });
-
-  // Release session pool
-  sessionPool.releaseAll().catch((e: any) => {
-    console.error('[Shutdown] Error releasing session pool:', e);
-  });
+  // Release pooled sessions before force-closing the browser so their last
+  // usable cookies can be persisted. Contexts outside the pool are only
+  // force-closed; BrowserManager never overwrites a saved session with [].
+  void (async () => {
+    await sessionPool.releaseAll().catch((e: any) => {
+      console.error('[Shutdown] Error releasing session pool:', e);
+    });
+    await browserManager.forceKillAll().catch((e: any) => {
+      console.error('[Shutdown] Error killing browsers:', e);
+    });
+  })();
 
   // Exit after timeout
   setTimeout(() => {

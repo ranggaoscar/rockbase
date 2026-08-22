@@ -3,9 +3,11 @@ import { PrismaClient } from '@prisma/client';
 import { Queue } from 'bullmq';
 import { AUTOMATION_DISABLED_MESSAGE, isAutomationEnabled } from './middleware/automation';
 import { assertSeparateWorkerMode } from './utils/workerMode';
+import { assertEncryptionConfiguration } from './utils/encryption';
 dotenv.config();
 
 assertSeparateWorkerMode();
+assertEncryptionConfiguration();
 
 if (!isAutomationEnabled()) {
   console.error('[Worker Process] ' + AUTOMATION_DISABLED_MESSAGE);

@@ -171,16 +171,16 @@ export class FarmService {
     }
   }
 
-  public async handleControl(data: any) {
+  public async handleControl(data: any): Promise<{ cookieCount?: number } | void> {
     const { accountId, action, params } = data;
     try {
       const context = await browserManager.getContext(accountId);
 
       // Save cookies doesn't need an active page
       if (action === 'save_cookies') {
-        await browserManager.saveCookies(accountId);
+        const saved = await browserManager.saveCookies(accountId);
         console.log(`[FarmService] Cookies saved for ${accountId} via remote control request.`);
-        return;
+        return { cookieCount: saved.cookieCount };
       }
 
       const pages = context.pages();
@@ -276,6 +276,7 @@ export class FarmService {
       }
     } catch (err) {
       console.error(`Control action "${action}" failed for ${accountId}:`, err);
+      throw err;
     }
   }
 
