@@ -91,6 +91,16 @@ router.post('/bootstrap-admin', async (req: Request, res: Response) => {
         role: 'Admin',
       },
     });
+    const workspace = await prisma.workspace.upsert({
+      where: { id: 'workspace-default' },
+      update: {},
+      create: { id: 'workspace-default', name: 'Default Workspace' },
+    });
+    await prisma.workspaceUser.upsert({
+      where: { id: `bootstrap-${newUser.id}-${workspace.id}` },
+      update: {},
+      create: { id: `bootstrap-${newUser.id}-${workspace.id}`, userId: newUser.id, workspaceId: workspace.id },
+    });
 
     res.status(201).json({
       user: { id: newUser.id, email: newUser.email, role: newUser.role, name: newUser.name },

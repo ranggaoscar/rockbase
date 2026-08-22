@@ -107,36 +107,35 @@ The agent prepares intent and content. RockBase owns account-session handling an
 - activity history
 - verified SQLite backups with checksum and integrity validation
 
-## Docker quick start
+## Windows / Docker quick start
 
-Docker is the recommended installation path for normal users.
+Docker Desktop is the only runtime prerequisite for a normal Windows install. You do not need to manually install Node, Redis, Prisma, or Playwright.
 
-```bash
+```powershell
 git clone https://github.com/ranggaoscar/rockbase.git
 cd rockbase
-cp backend/.env.example backend/.env
+powershell -ExecutionPolicy Bypass -File .\setup-rockbase.ps1
 ```
 
-Set strong values in `backend/.env` for at least:
+The setup script checks Docker, creates `backend/.env` only when missing, generates unique local secrets, starts Docker Compose, waits for `/readyz`, and prints the dashboard URL plus one-time fresh-install credentials.
 
-```dotenv
-JWT_SECRET=<at-least-32-characters>
-ENCRYPTION_KEY=<exactly-64-hex-characters>
-```
-
-Then start RockBase:
-
-```bash
-docker compose up -d
-```
-
-Open the dashboard:
+Open:
 
 ```text
 http://localhost:5173
 ```
 
-The default Compose configuration starts Redis, the backend API, and the frontend. Use the optional worker profile when you intentionally want a separate worker process.
+### Manual Docker method
+
+```bash
+cp backend/.env.example backend/.env
+# Set a unique JWT_SECRET and a 64-hex-character ENCRYPTION_KEY.
+docker compose up -d --build
+```
+
+For an **existing installation**, do not use first-install instructions to replace configuration. Read [docs/UPGRADE.md](docs/UPGRADE.md), run `scripts/preflight-upgrade.ps1`, create a verified backup, preserve `backend/.env`, and then rebuild without deleting named volumes.
+
+The default Compose configuration starts Redis, applies safe Prisma migrations with `migrate deploy`, starts the backend API, and starts the frontend. Use the optional worker profile only when you intentionally want a separate worker process.
 
 ## Data persistence and session safety
 
