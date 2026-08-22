@@ -2379,7 +2379,7 @@ export default function Campaigns() {
                 : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
             )}
           >
-            {mode === 'simple' ? 'Simple Operator' : mode === 'advanced' ? 'Advanced Automation' : 'Developer Debug'}
+            {mode === 'simple' ? 'Campaign workflow' : mode === 'advanced' ? 'Advanced / Experimental' : 'Developer only'}
           </button>
         ))}
       </div>
@@ -2388,14 +2388,15 @@ export default function Campaigns() {
         <div className="space-y-4">
           <div className="rounded-md border border-amber-500/20 bg-amber-500/10 p-3 text-sm text-amber-200 flex items-center">
             <AlertTriangle className="mr-2 h-5 w-5 shrink-0" />
-            <p><strong>Panduan Operator:</strong> Mulai dari campaign yang statusnya Perlu Konten atau Perlu AI Plan. Ikuti tombol aksi utama di setiap campaign. Konten tetap perlu review sebelum dikirim ke Compose. Tidak ada auto-posting dari halaman ini.</p>
+            <p><strong>Campaign workflow:</strong> add campaign content, choose target accounts or groups, then review the next operational step. Use Queue to monitor publishing work and Sessions when an account needs human attention.</p>
           </div>
           
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {filteredPreparationRows.length === 0 ? (
               <div className="col-span-full rounded-md border border-dashed border-border bg-background/40 p-6 text-center">
                 <ListChecks className="mx-auto h-8 w-8 text-muted-foreground/40" />
-                <p className="mt-2 text-sm font-medium">Tidak ada campaign yang perlu dikerjakan.</p>
+                <p className="mt-2 text-sm font-medium">No campaigns yet</p>
+                <p className="mt-1 text-xs text-muted-foreground">Create your first campaign and distribute content across the accounts your team manages.</p>
               </div>
             ) : filteredPreparationRows.map(({ campaign, readiness }) => {
                const nextAction = buildNextAction(campaign)

@@ -308,12 +308,12 @@ export default function FarmView() {
           )}
           <div className="flex items-start gap-3 rounded-lg border border-blue-500/20 bg-blue-500/10 p-4 text-xs text-blue-400">
             <div className="flex-1 space-y-1.5">
-              <p className="font-semibold text-sm">Monitoring {monitoredAccounts.length} of {accounts.length} accounts</p>
+              <p className="font-semibold text-sm">Open and recover the browser sessions RockBase uses for campaign execution.</p>
               <ul className="list-disc list-inside opacity-90 space-y-0.5">
-                <li>Farm View does not keep all accounts active.</li>
-                <li>Visible cards do not mean browser/session is open.</li>
-                <li>Login remains manual.</li>
-                <li>Session health should be checked from Accounts or per selected account.</li>
+                <li>Monitoring {monitoredAccounts.length} of {accounts.length} accounts.</li>
+                <li>Login, verification, and session recovery remain human-controlled.</li>
+                <li>Use Take Control, then Save Session after a successful login.</li>
+                <li>Check session health from Accounts when an account needs attention.</li>
               </ul>
             </div>
           </div>

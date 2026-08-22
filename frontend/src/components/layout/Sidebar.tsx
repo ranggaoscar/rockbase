@@ -29,7 +29,7 @@ const primaryNavItems: NavItem[] = [
   { label: 'Accounts', path: '/accounts', icon: Users },
   { label: 'Farm View / Sessions', path: '/farm', icon: Tv2 },
   { label: 'Campaigns', path: '/campaigns', icon: Target },
-  { label: 'Queue', path: '/activity?focus=queue', icon: ListChecks },
+  { label: 'Queue', path: '/queue', icon: ListChecks },
   { label: 'Activity', path: '/activity', icon: Activity },
 ]
 

@@ -20,6 +20,7 @@ import Engagement from '@/pages/Engagement'
 import Campaigns from '@/pages/Campaigns'
 import CampaignEngine from '@/pages/CampaignEngine'
 import ActivityTimeline from '@/pages/ActivityTimeline'
+import Queue from '@/pages/Queue'
 import OperationalValidation from '@/pages/OperationalValidation'
 import ContentPlanner from '@/pages/ContentPlanner'
 
@@ -87,6 +88,11 @@ export default function App() {
             <Route path="activity" element={
               <ErrorBoundary>
                 <ActivityTimeline />
+              </ErrorBoundary>
+            } />
+            <Route path="queue" element={
+              <ErrorBoundary>
+                <Queue />
               </ErrorBoundary>
             } />
             <Route path="validation" element={

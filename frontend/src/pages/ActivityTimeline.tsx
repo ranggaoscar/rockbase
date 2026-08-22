@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Activity, AlertTriangle, Bot, CheckCircle2, Clock, Eye, Filter, Flame, HeartPulse, Layers, Radio, RefreshCw, SendHorizontal, Timer, Trash2, Users, XCircle } from 'lucide-react'
-import { activityApi, systemApi } from '@/lib/api'
+import { activityApi } from '@/lib/api'
 import { cn, formatDateTime, timeAgo } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { toast } from 'sonner'
+
 
 interface ActivityLog {
   id: string
@@ -241,25 +241,10 @@ export default function ActivityTimeline() {
     <div className="space-y-5">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <h1 className="text-xl font-bold text-foreground">Activity Timeline</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">Operational audit events across posting, queues, sessions, groups, campaigns, and AI actions.</p>
+          <h1 className="text-xl font-bold text-foreground">Activity</h1>
+          <p className="mt-0.5 text-sm text-muted-foreground">Review campaign, publishing, and session events. Open Queue for active publishing work.</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="destructive" size="sm" onClick={async () => {
-            try {
-              toast.loading('Resetting queue...', { id: 'reset' })
-              await systemApi.resetQueue()
-              toast.success('Queue reset and synced successfully.', { id: 'reset' })
-              loadActivity(null)
-              loadQueueSummary().catch(() => {})
-              loadRuntimeData().catch(() => {})
-            } catch (err: any) {
-              toast.error(err.response?.data?.message || err.message, { id: 'reset' })
-            }
-          }}>
-            <RefreshCw className="mr-2 h-3.5 w-3.5" />
-            Reset Queue
-          </Button>
           <Button variant="outline" size="sm" onClick={() => { loadActivity(null); loadQueueSummary().catch(() => {}); loadRuntimeData().catch(() => {}) }} disabled={loading}>
             <RefreshCw className={cn('h-3.5 w-3.5 mr-2', loading && 'animate-spin')} />
             Refresh

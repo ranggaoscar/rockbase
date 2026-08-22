@@ -169,6 +169,8 @@ export const activityApi = {
     limit?: number
   }) => api.get('/activity', { params }),
   queueSummary: () => api.get('/activity/queue-summary'),
+  operationsSummary: () => api.get('/activity/operations-summary'),
+  publishingQueue: () => api.get('/activity/publishing-queue'),
 }
 
 export const systemApi = {

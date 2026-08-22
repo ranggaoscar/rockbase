@@ -20,6 +20,7 @@ const routeLabels: Record<string, string> = {
   '/engagement': 'Engagement',
   '/campaigns': 'Campaigns',
   '/campaign-engine': 'Campaign Engine',
+  '/queue':     'Publishing Queue',
   '/activity':  'Activity',
   '/validation': 'Validation',
   '/compose':   'Compose & Post',
