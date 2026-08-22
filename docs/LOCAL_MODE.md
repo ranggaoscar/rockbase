@@ -43,7 +43,7 @@ The Hermes internal API keeps its independent bearer-token boundary in both mode
 The launcher checks for Node and Redis. When `winget` is available, it can attempt to install:
 
 - Node LTS through `OpenJS.NodeJS.LTS`
-- Redis through `tporadowski.Redis`
+- Redis through `taizod1024.redis-windows-fork` (MIT-licensed portable Windows build distributed through winget)
 
 No third-party binary is committed into this repository. If a package install is unavailable or Redis cannot start, Local Mode stops safely rather than bypassing queue safety.
 
@@ -60,8 +60,11 @@ To preserve compatibility with existing non-Docker installs, Local Mode keeps cu
 | uploads | `backend/uploads/` |
 | verified database backups | `backend/backups/` |
 | logs | `backend/logs/` |
+| Redis runtime data | `rockbase-data/redis/` |
 
 Do not delete or replace `backend/.env` after sessions exist. `ENCRYPTION_KEY` remains required to decrypt saved cookie sessions.
+
+The Local Mode launcher starts Redis with `--bind 127.0.0.1` and protected mode enabled. Its Redis persistence stays under `rockbase-data/redis/`, not the repository root.
 
 ## Stop
 

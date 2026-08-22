@@ -72,7 +72,7 @@ VISION_PROVIDER="auto"
 GEMINI_VISION_MODEL="gemini-flash-latest"
 OPENAI_API_KEY=""
 OPENAI_VISION_MODEL="gpt-4o-mini"
-"@ | Set-Content -Path $EnvPath -Encoding utf8NoBOM
+"@ | ForEach-Object { [System.IO.File]::WriteAllText($EnvPath, $_, (New-Object System.Text.UTF8Encoding($false))) }
   $createdEnv = $true
   Write-Pass 'Created backend/.env and generated local secrets'
 } else {

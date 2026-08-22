@@ -102,6 +102,16 @@ app.get('/livez', (_req, res) => {
   res.status(200).json({ status: 'live' });
 });
 
+// Local Mode has no dashboard login, but the backend is loopback-only. This
+// endpoint gives the Windows stop helper a graceful alternative to hard-killing
+// Node so session cleanup can run. It is never registered in Server Mode.
+if (runtimeMode === 'local') {
+  app.post('/internal/local/shutdown', (_req, res) => {
+    res.status(202).json({ status: 'shutting_down' });
+    setImmediate(() => gracefulShutdown('LOCAL_STOP_HELPER'));
+  });
+}
+
 app.get('/readyz', async (_req, res) => {
   try {
     const { PrismaClient } = require('@prisma/client');

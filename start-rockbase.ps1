@@ -2,6 +2,7 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $envPath = Join-Path $root 'backend/.env'
+$redisDataPath = Join-Path $root 'rockbase-data/redis'
 function Step($m) { Write-Host "→ $m" -ForegroundColor Cyan }
 function Pass($m) { Write-Host "[PASS] $m" -ForegroundColor Green }
 function Hex([int]$bytes) { $b=New-Object byte[] $bytes; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); ($b|%{$_.ToString('x2')}) -join '' }
@@ -24,26 +25,35 @@ AUTOMATION_ENABLED=false
 DATABASE_URL="file:./dev.db"
 REDIS_HOST="127.0.0.1"
 REDIS_PORT=6379
+RUN_WORKERS_SEPARATELY=false
 JWT_SECRET="$(Hex 64)"
 JWT_EXPIRES_IN="24h"
 ENCRYPTION_KEY="$(Hex 32)"
 MAX_BULK_SESSION_CHECK=3
 SESSION_HEALTH_CHECK_CONCURRENCY=2
-"@ | Set-Content $envPath -Encoding utf8NoBOM
+"@ | ForEach-Object { [System.IO.File]::WriteAllText($envPath, $_, (New-Object System.Text.UTF8Encoding($false))) }
 }
 Pass 'Configuration preserved'
 if (-not (PortOpen 6379)) {
-  if (Get-Command winget -EA SilentlyContinue) { Step 'Installing local Redis runtime'; winget install --id tporadowski.Redis --exact --accept-package-agreements --accept-source-agreements } else { throw 'Local Redis is required and winget is unavailable. Install a Redis-compatible Windows runtime, then rerun.' }
+  if (Get-Command winget -EA SilentlyContinue) { Step 'Installing local Redis runtime'; winget install --id taizod1024.redis-windows-fork --exact --accept-package-agreements --accept-source-agreements } else { throw 'Local Redis is required and winget is unavailable. Install a Redis-compatible Windows runtime, then rerun.' }
   $redis = Get-Command redis-server -EA SilentlyContinue
-  if ($redis) { Start-Process $redis.Source -WindowStyle Hidden }
+  if ($redis) {
+    New-Item -ItemType Directory -Force -Path $redisDataPath | Out-Null
+    Start-Process -FilePath $redis.Source -ArgumentList @('--bind', '127.0.0.1', '--protected-mode', 'yes', '--dir', $redisDataPath, '--dbfilename', 'dump.rdb') -WindowStyle Hidden
+  }
+  for ($i=0; $i -lt 15 -and -not (PortOpen 6379); $i++) { Start-Sleep -Seconds 1 }
 }
 if (-not (PortOpen 6379)) { throw 'Redis is unavailable. Local Mode stops safely rather than bypassing queue protections.' }
 Pass 'Redis'
 if (-not (Test-Path (Join-Path $root 'backend/node_modules'))) { Step 'Installing backend dependencies'; Push-Location "$root/backend"; npm ci; Pop-Location }
 if (-not (Test-Path (Join-Path $root 'frontend/node_modules'))) { Step 'Installing frontend dependencies'; Push-Location "$root/frontend"; npm ci; Pop-Location }
-Push-Location "$root/backend"; npx prisma generate; npx playwright install chromium; Pop-Location
+Push-Location "$root/backend"
+if (-not (Test-Path 'node_modules/.prisma/client/query_engine-windows.dll.node')) { npx prisma generate }
+npx prisma migrate deploy
+npx playwright install chromium
+Pop-Location
 Pass 'Browser runtime'
-if (-not (PortOpen 3010)) { Start-Process powershell -ArgumentList '-NoExit','-Command',"cd '$root/backend'; `$env:ROCKBASE_MODE='local'; `$env:PORT='3010'; `$env:FRONTEND_URL='http://127.0.0.1:5173'; `$env:BACKEND_URL='http://127.0.0.1:3010'; npm run dev" }
+if (-not (PortOpen 3010)) { Start-Process powershell -ArgumentList '-NoExit','-Command',"cd '$root/backend'; `$env:ROCKBASE_MODE='local'; `$env:PORT='3010'; `$env:FRONTEND_URL='http://127.0.0.1:5173'; `$env:BACKEND_URL='http://127.0.0.1:3010'; `$env:RUN_WORKERS_SEPARATELY='false'; npm run dev" }
 if (-not (PortOpen 5173)) { Start-Process powershell -ArgumentList '-NoExit','-Command',"cd '$root/frontend'; `$env:VITE_ROCKBASE_MODE='local'; npm run dev -- --host 127.0.0.1" }
 for ($i=0; $i -lt 30; $i++) { try { if ((Invoke-WebRequest http://127.0.0.1:3010/readyz -UseBasicParsing -TimeoutSec 3).StatusCode -eq 200) { break } } catch {}; Start-Sleep 2 }
 if (-not (PortOpen 3010) -or -not (PortOpen 5173)) { throw 'RockBase did not become ready. Review the local backend/frontend windows.' }

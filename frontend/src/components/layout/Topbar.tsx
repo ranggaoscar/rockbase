@@ -36,10 +36,13 @@ export default function Topbar() {
   const { user, logout, sidebarCollapsed } = useAppStore()
   const location = useLocation()
   const navigate = useNavigate()
+  const isLocalMode = import.meta.env.VITE_ROCKBASE_MODE === 'local'
 
   const pageLabel = routeLabels[location.pathname] ?? 'ROCK BASE'
 
-  const initials = user?.name
+  const initials = isLocalMode
+    ? 'LO'
+    : user?.name
     ? user.name.split(' ').map((w) => w[0]).join('').toUpperCase().slice(0, 2)
     : 'SC'
 
@@ -70,8 +73,16 @@ export default function Topbar() {
           <span className="absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-purple-500" />
         </Button>
 
-        {/* User menu */}
-        <DropdownMenu>
+        {/* Local Mode intentionally has no RockBase account/login surface. */}
+        {isLocalMode ? (
+          <div className="flex items-center gap-2 rounded-lg px-2 py-1.5">
+            <Avatar className="h-7 w-7"><AvatarFallback className="text-xs">{initials}</AvatarFallback></Avatar>
+            <div className="hidden text-left sm:block">
+              <p className="text-xs font-medium leading-tight text-foreground">Local Operator</p>
+              <p className="text-[10px] leading-tight text-muted-foreground">Local Mode</p>
+            </div>
+          </div>
+        ) : <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-secondary transition-colors">
               <Avatar className="h-7 w-7">
@@ -102,7 +113,7 @@ export default function Topbar() {
               Sign Out
             </DropdownMenuItem>
           </DropdownMenuContent>
-        </DropdownMenu>
+        </DropdownMenu>}
       </div>
     </header>
   )
