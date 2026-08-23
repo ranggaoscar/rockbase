@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { Queue } from 'bullmq';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { needsOperatorAttention } from '../services/OperatorAttention';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -181,10 +182,10 @@ router.get('/operations-summary', async (_req: AuthRequest, res: Response) => {
       }),
     ]);
 
-    const attentionHealth = new Set(['NEEDS_RELOGIN', 'CHECKPOINT', 'EXPIRED']);
     const disconnected = accounts.filter((account) => ['error', 'logged_out', 'flagged'].includes(account.status)).length;
-    const attention = accounts.filter((account) => attentionHealth.has(account.sessionHealth || 'UNKNOWN')).length;
-    const ready = accounts.filter((account) => account.status === 'active' && ['HEALTHY', 'UNKNOWN'].includes(account.sessionHealth || 'UNKNOWN')).length;
+    const attention = accounts.filter(needsOperatorAttention).length;
+    const ready = accounts.filter((account) => account.status === 'active' && account.sessionHealth === 'HEALTHY').length;
+    const unverified = accounts.filter((account) => account.status === 'active' && (account.sessionHealth || 'UNKNOWN') === 'UNKNOWN').length;
 
     const accountIds = [...new Set(recentActivity.map((item) => item.accountId).filter(Boolean) as string[])];
     const campaignIds = [...new Set(recentActivity.map((item) => item.campaignId).filter(Boolean) as string[])];
@@ -196,7 +197,7 @@ router.get('/operations-summary', async (_req: AuthRequest, res: Response) => {
     const campaignNameById = new Map(campaignRows.map((item) => [item.id, item.name]));
 
     res.json({
-      accounts: { total: accounts.length, ready, attention, disconnected },
+      accounts: { total: accounts.length, ready, unverified, attention, disconnected },
       campaigns: {
         active: campaigns.filter((campaign) => campaign.status === 'running').length,
         draft: campaigns.filter((campaign) => ['pending', 'draft'].includes(campaign.status)).length,
@@ -234,7 +235,7 @@ router.get('/publishing-queue', async (_req: AuthRequest, res: Response) => {
       prisma.socialAccount.findMany({ select: { id: true, username: true, platform: true, sessionHealth: true, status: true } }),
     ]);
     const accountById = new Map(accounts.map((account) => [account.id, account]));
-    const attentionHealth = new Set(['NEEDS_RELOGIN', 'CHECKPOINT', 'EXPIRED']);
+
     const rows: Array<Record<string, unknown>> = [];
 
     for (const post of posts) {
@@ -245,7 +246,7 @@ router.get('/publishing-queue', async (_req: AuthRequest, res: Response) => {
       for (const accountId of accountIds) {
         const account = accountById.get(accountId);
         const result = results[accountId];
-        const needsAttention = Boolean(account && attentionHealth.has(account.sessionHealth || 'UNKNOWN'));
+        const needsAttention = Boolean(account && needsOperatorAttention(account));
         const status = needsAttention ? 'needs_attention' : result?.status === 'success' ? 'completed' : result?.status === 'failed' ? 'failed' : post.status === 'published' ? 'completed' : post.status === 'pending_verify' ? 'running' : post.status === 'scheduled' ? 'delayed' : 'queued';
         rows.push({
           id: `post:${post.id}:${accountId}`,
@@ -264,7 +265,7 @@ router.get('/publishing-queue', async (_req: AuthRequest, res: Response) => {
 
     for (const action of actions) {
       const account = accountById.get(action.accountId);
-      const needsAttention = Boolean(account && attentionHealth.has(account.sessionHealth || 'UNKNOWN'));
+      const needsAttention = Boolean(account && needsOperatorAttention(account));
       const status = needsAttention ? 'needs_attention' : action.status === 'completed' ? 'completed' : action.status === 'failed' ? 'failed' : ['running', 'in_progress'].includes(action.status) ? 'running' : action.status === 'delayed' ? 'delayed' : 'queued';
       rows.push({
         id: `campaign:${action.id}`,

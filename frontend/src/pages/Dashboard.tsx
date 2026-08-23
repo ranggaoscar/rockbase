@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Activity, AlertTriangle, CheckCircle2, Clock, MonitorPlay, SendHorizontal, Target, Users } from 'lucide-react'
+import { Activity, AlertTriangle, CheckCircle2, Clock, MonitorPlay, SendHorizontal, Target, Users, XCircle } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -8,7 +8,7 @@ import { activityApi } from '@/lib/api'
 import { timeAgo } from '@/lib/utils'
 
 interface OperationsSummary {
-  accounts: { total: number; ready: number; attention: number; disconnected: number }
+  accounts: { total: number; ready: number; unverified: number; attention: number; disconnected: number }
   campaigns: { active: number; draft: number }
   publishingQueue: { queued: number; running: number; delayed: number }
   recentActivity: Array<{
@@ -29,6 +29,14 @@ const statusVariant = (status: string) => {
   return 'outline'
 }
 
+const activityPresentation = (status: string, action: string) => {
+  const value = `${status} ${action}`.toLowerCase()
+  if (value.includes('failed') || value.includes('error')) return { Icon: XCircle, color: 'text-red-400', label: 'ERROR' }
+  if (value.includes('warning') || value.includes('attention') || value.includes('verify') || value.includes('unknown')) return { Icon: AlertTriangle, color: 'text-amber-400', label: 'WARNING' }
+  if (value.includes('queued') || value.includes('created') || value.includes('started')) return { Icon: Clock, color: 'text-blue-400', label: 'INFO' }
+  return { Icon: CheckCircle2, color: 'text-green-400', label: 'SUCCESS' }
+}
+
 export default function Dashboard() {
   const navigate = useNavigate()
   const [summary, setSummary] = useState<OperationsSummary | null>(null)
@@ -42,10 +50,10 @@ export default function Dashboard() {
   }, [])
 
   const cards = summary ? [
-    { label: 'Accounts', value: summary.accounts.total, detail: `${summary.accounts.ready} ready · ${summary.accounts.attention} attention · ${summary.accounts.disconnected} disconnected`, icon: Users, color: 'text-blue-400' },
+    { label: 'Accounts', value: summary.accounts.total, detail: `${summary.accounts.ready} ready · ${summary.accounts.unverified} unverified · ${summary.accounts.attention} attention`, icon: Users, color: 'text-blue-400' },
     { label: 'Campaigns', value: summary.campaigns.active, detail: `${summary.campaigns.active} active · ${summary.campaigns.draft} draft`, icon: Target, color: 'text-purple-400' },
     { label: 'Publishing queue', value: summary.publishingQueue.queued, detail: `${summary.publishingQueue.running} running · ${summary.publishingQueue.delayed} delayed`, icon: SendHorizontal, color: 'text-amber-400' },
-    { label: 'Needs attention', value: summary.accounts.attention, detail: summary.accounts.attention ? 'Open Sessions to reconnect affected accounts' : 'All account sessions are ready', icon: AlertTriangle, color: summary.accounts.attention ? 'text-red-400' : 'text-green-400' },
+    { label: 'Needs attention', value: summary.accounts.attention, detail: summary.accounts.attention ? 'Open Sessions to reconnect affected accounts' : 'No accounts currently need operator action', icon: AlertTriangle, color: summary.accounts.attention ? 'text-red-400' : 'text-green-400' },
   ] : []
 
   return (
@@ -80,14 +88,16 @@ export default function Dashboard() {
             <Card className="lg:col-span-2">
               <CardHeader><CardTitle className="flex items-center gap-2"><Activity className="h-4 w-4 text-purple-400" />Recent activity</CardTitle></CardHeader>
               <CardContent className="space-y-2">
-                {summary.recentActivity.length === 0 ? <div className="py-8 text-center"><p className="font-medium">No campaign activity yet</p><p className="mt-1 text-sm text-muted-foreground">Create a campaign or quick post when your team is ready to publish.</p></div> : summary.recentActivity.map((item) => (
-                  <div key={item.id} className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5"><CheckCircle2 className="h-4 w-4 shrink-0 text-muted-foreground" /><div className="min-w-0 flex-1"><p className="truncate text-sm">{item.message}</p><p className="text-xs text-muted-foreground">{item.campaignName || item.accountUsername || 'RockBase'} · {timeAgo(item.createdAt)}</p></div><Badge variant={statusVariant(item.status) as any} className="text-[10px]">{item.status}</Badge></div>
-                ))}
+                {summary.recentActivity.length === 0 ? <div className="py-8 text-center"><p className="font-medium">No campaign activity yet</p><p className="mt-1 text-sm text-muted-foreground">Create a campaign or quick post when your team is ready to publish.</p></div> : summary.recentActivity.map((item) => {
+                  const presentation = activityPresentation(item.status, item.action)
+                  const Icon = presentation.Icon
+                  return <div key={item.id} className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5"><Icon className={`h-4 w-4 shrink-0 ${presentation.color}`} /><div className="min-w-0 flex-1"><p className="truncate text-sm">{item.message}</p><p className="text-xs text-muted-foreground">{item.campaignName || item.accountUsername || 'RockBase'} · {timeAgo(item.createdAt)}</p></div><Badge variant={statusVariant(item.status) as any} className="text-[10px]">{presentation.label}</Badge></div>
+                })}
               </CardContent>
             </Card>
             <Card>
               <CardHeader><CardTitle className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-400" />Needs attention</CardTitle></CardHeader>
-              <CardContent>{summary.accounts.attention ? <><p className="text-3xl font-bold text-red-400">{summary.accounts.attention}</p><p className="mt-1 text-sm text-muted-foreground">Account sessions need operator recovery before they can safely execute campaign work.</p><Button className="mt-4 w-full" variant="outline" onClick={() => navigate('/farm')}>Open session control</Button></> : <div className="py-5 text-center"><CheckCircle2 className="mx-auto h-8 w-8 text-green-400" /><p className="mt-3 font-medium">All account sessions are ready</p><p className="mt-1 text-xs text-muted-foreground">Open Sessions when a login or verification needs human attention.</p></div>}</CardContent>
+              <CardContent>{summary.accounts.attention ? <><p className="text-3xl font-bold text-red-400">{summary.accounts.attention}</p><p className="mt-1 text-sm text-muted-foreground">Account sessions need operator recovery before they can safely execute campaign work.</p><Button className="mt-4 w-full" variant="outline" onClick={() => navigate('/farm')}>Open session control</Button></> : <div className="py-5 text-center"><CheckCircle2 className="mx-auto h-8 w-8 text-green-400" /><p className="mt-3 font-medium">No accounts need operator action</p><p className="mt-1 text-xs text-muted-foreground">Open Sessions to verify a session or resolve a login, checkpoint, or verification request.</p></div>}</CardContent>
             </Card>
           </div>
         </>

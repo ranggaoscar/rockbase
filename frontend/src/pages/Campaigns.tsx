@@ -1569,10 +1569,12 @@ function compactStatusLabel(status?: string | null) {
 export default function Campaigns() {
   const navigate = useNavigate()
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
+  const [campaignsError, setCampaignsError] = useState<string | null>(null)
   const [accounts, setAccounts] = useState<Account[]>([])
   const [showCreate, setShowCreate] = useState(false)
   const [detailId, setDetailId] = useState<string | null>(null)
   const [detailData, setDetailData] = useState<any>(null)
+  const [detailError, setDetailError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [generatingPlanIds, setGeneratingPlanIds] = useState<Set<string>>(new Set())
   const [preparingComposeIds, setPreparingComposeIds] = useState<Set<string>>(new Set())
@@ -1688,7 +1690,10 @@ export default function Campaigns() {
     try {
       const { data } = await campaignsApi.list({ includeArchived: showArchived })
       setCampaigns(data.campaigns || [])
-    } catch { /* silent */ }
+      setCampaignsError(null)
+    } catch {
+      setCampaignsError('Campaigns could not be loaded.')
+    }
   }
 
   useEffect(() => {
@@ -1776,12 +1781,17 @@ export default function Campaigns() {
 
   async function loadDetail(id: string) {
     setDetailId(id)
+    setDetailData(null)
+    setDetailError(null)
     try {
       const { data } = await campaignsApi.get(id)
       setDetailData(data)
       setVariationApprovals(data.planningSummary?.variationApprovals || {})
       loadCampaignMedia(id)
-    } catch { toast.error('Failed to load details') }
+    } catch {
+      setDetailError('Campaign details could not be loaded.')
+      toast.error('Failed to load details')
+    }
   }
 
   async function loadCampaignMedia(id: string) {
@@ -2383,7 +2393,14 @@ export default function Campaigns() {
           </div>
           
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {filteredPreparationRows.length === 0 ? (
+            {campaignsError ? (
+              <div className="col-span-full rounded-md border border-red-500/30 bg-red-500/10 p-6 text-center">
+                <AlertTriangle className="mx-auto h-8 w-8 text-red-300" />
+                <p className="mt-2 text-sm font-medium">Campaigns could not be loaded.</p>
+                <p className="mt-1 text-xs text-muted-foreground">Check the backend connection, then try again.</p>
+                <Button className="mt-4" size="sm" variant="outline" onClick={() => loadCampaigns()}>Retry loading campaigns</Button>
+              </div>
+            ) : filteredPreparationRows.length === 0 ? (
               <div className="col-span-full rounded-md border border-dashed border-border bg-background/40 p-6 text-center">
                 <ListChecks className="mx-auto h-8 w-8 text-muted-foreground/40" />
                 <p className="mt-2 text-sm font-medium">No campaigns yet</p>
@@ -3338,40 +3355,7 @@ export default function Campaigns() {
               onApply={applyCampaignTemplate}
               compact
             />
-            <div className="rounded-lg border border-border/60 bg-secondary/20 p-3">
-              <div className="mb-2">
-                <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Template Assist Fields</p>
-                <p className="text-[10px] text-muted-foreground">Saved to templates only. Create Campaign does not auto-post or schedule.</p>
-              </div>
-              <div className="space-y-2">
-                <textarea
-                  value={defaultCaptionSeed}
-                  onChange={event => setDefaultCaptionSeed(event.target.value)}
-                  placeholder="Default caption seed for Compose..."
-                  className="min-h-20 w-full rounded-lg border border-border bg-secondary/50 px-3 py-2 text-xs outline-none focus:border-orange-500/50"
-                />
-                <input
-                  value={defaultHashtags}
-                  onChange={event => setDefaultHashtags(event.target.value)}
-                  placeholder="#marmer #interior #jakarta"
-                  className="w-full rounded-lg border border-border bg-secondary/50 px-3 py-2 text-xs outline-none focus:border-orange-500/50"
-                />
-                <div className="grid grid-cols-2 gap-2">
-                  <input
-                    value={suggestedTone}
-                    onChange={event => setSuggestedTone(event.target.value)}
-                    placeholder="Suggested tone"
-                    className="w-full rounded-lg border border-border bg-secondary/50 px-3 py-2 text-xs outline-none focus:border-orange-500/50"
-                  />
-                  <input
-                    value={suggestedCTA}
-                    onChange={event => setSuggestedCTA(event.target.value)}
-                    placeholder="Suggested CTA"
-                    className="w-full rounded-lg border border-border bg-secondary/50 px-3 py-2 text-xs outline-none focus:border-orange-500/50"
-                  />
-                </div>
-              </div>
-            </div>
+
             <AccountLoadoutPresetManager
               selectedAccountIds={Array.from(selAccounts)}
               selectedGroupIds={Array.from(selGroups)}
@@ -3489,12 +3473,18 @@ export default function Campaigns() {
       </Dialog>
 
       {/* Detail Dialog */}
-      <Dialog open={!!detailId} onOpenChange={() => { setDetailId(null); setDetailData(null); setCampaignMedia([]); setVariationMediaRefs({}); setVariationApprovals({}); setSelectedMediaFile(null); setMediaNote(''); setApprovalFilter('ALL') }}>
+      <Dialog open={!!detailId} onOpenChange={() => { setDetailId(null); setDetailData(null); setDetailError(null); setCampaignMedia([]); setVariationMediaRefs({}); setVariationApprovals({}); setSelectedMediaFile(null); setMediaNote(''); setApprovalFilter('ALL') }}>
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Campaign Details</DialogTitle>
-            <DialogDescription>{detailData?.name || 'Loading...'}</DialogDescription>
+            <DialogDescription>{detailData?.name || (detailError ? 'Unable to load campaign details' : 'Loading...')}</DialogDescription>
           </DialogHeader>
+          {detailError && (
+            <div className="rounded-md border border-red-500/30 bg-red-500/10 p-4 text-center">
+              <p className="text-sm font-medium">{detailError}</p>
+              <Button className="mt-3" size="sm" variant="outline" onClick={() => detailId && loadDetail(detailId)}>Retry loading details</Button>
+            </div>
+          )}
           {detailData && (
             <div className="space-y-3 mt-2">
               <div className="grid grid-cols-4 gap-2 text-center">

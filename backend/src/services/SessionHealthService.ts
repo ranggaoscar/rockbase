@@ -56,7 +56,7 @@ export class SessionHealthService {
     }
 
     if (!account.cookies) {
-      return this.persistResult(account.id, account.workspaceId, account.username, 'EXPIRED', 'No saved Instagram cookies', checkedAt);
+      return this.persistResult(account.id, account.workspaceId, account.username, 'EXPIRED', `No saved ${account.platform} cookies`, checkedAt);
     }
 
     let context: BrowserContext | null = null;
@@ -66,10 +66,11 @@ export class SessionHealthService {
     try {
       context = await browserManager.getContext(account.id);
       page = await context.newPage();
-      await page.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+      const isTikTok = account.platform === 'TikTok' || account.platform === 'Tiktok';
+      await page.goto(isTikTok ? 'https://www.tiktok.com/' : 'https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
       await page.waitForTimeout(1500);
 
-      const detected = await this.detectInstagramHealth(page);
+      const detected = isTikTok ? await this.detectTikTokHealth(page) : await this.detectInstagramHealth(page);
       if (detected.health === 'HEALTHY') {
         await browserManager.saveCookies(account.id).catch((err: any) => {
           console.warn(`[SessionHealth] Cookie save failed for @${account.username}: ${err.message}`);
@@ -165,6 +166,27 @@ export class SessionHealthService {
     }
 
     return { health: 'UNKNOWN', reason: 'Could not confidently determine session state' };
+  }
+
+  private async detectTikTokHealth(page: Page): Promise<{ health: SessionHealthStatus; reason: string }> {
+    const url = page.url();
+    const bodyText = await page.locator('body').innerText({ timeout: 5000 }).catch(() => '');
+
+    if (/challenge|verify|suspend|appeal/i.test(url) || /verification|required|suspended|appeal/i.test(bodyText)) {
+      return { health: 'CHECKPOINT', reason: 'TikTok verification or challenge detected' };
+    }
+
+    const loginVisible = await page.locator('[data-e2e="login-button"], input[name="username"], input[type="password"]').first().isVisible({ timeout: 2500 }).catch(() => false);
+    if (loginVisible || /\/login/i.test(url) || /log in|sign up/i.test(bodyText)) {
+      return { health: 'NEEDS_RELOGIN', reason: 'TikTok login page detected' };
+    }
+
+    const loggedInSignal = await page.locator('[data-e2e="profile-icon"], [data-e2e="nav-profile"], a[href^="/@"]').first().isVisible({ timeout: 5000 }).catch(() => false);
+    if (loggedInSignal) {
+      return { health: 'HEALTHY', reason: 'Logged-in TikTok UI detected' };
+    }
+
+    return { health: 'UNKNOWN', reason: 'Could not confidently determine TikTok session state' };
   }
 
   private async persistResult(

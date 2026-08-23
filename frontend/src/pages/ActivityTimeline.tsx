@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Activity, AlertTriangle, Bot, CheckCircle2, Clock, Eye, Filter, Flame, HeartPulse, Layers, Radio, RefreshCw, SendHorizontal, Timer, Trash2, Users, XCircle } from 'lucide-react'
+import { Activity, AlertTriangle, Bot, CheckCircle2, Clock, Filter, Flame, HeartPulse, Layers, Radio, RefreshCw, SendHorizontal, Trash2, Users, XCircle } from 'lucide-react'
 import { activityApi } from '@/lib/api'
 import { cn, formatDateTime, timeAgo } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
@@ -94,17 +94,6 @@ function isQueueRunning(summary: QueueSummary | null) {
   return (summary.queued + summary.active + summary.delayed) > 0
 }
 
-function formatElapsed(startedAt: Date | null) {
-  if (!startedAt) return 'Idle'
-  const seconds = Math.max(0, Math.floor((Date.now() - startedAt.getTime()) / 1000))
-  const minutes = Math.floor(seconds / 60)
-  const hours = Math.floor(minutes / 60)
-  const remainingMinutes = minutes % 60
-  const remainingSeconds = seconds % 60
-  if (hours > 0) return `${hours}h ${remainingMinutes}m`
-  if (minutes > 0) return `${minutes}m ${remainingSeconds}s`
-  return `${remainingSeconds}s`
-}
 
 function inferAccountState(item?: ActivityLog | null) {
   if (!item) return 'No posting event observed'
@@ -133,8 +122,7 @@ export default function ActivityTimeline() {
   const [category, setCategory] = useState(initialCampaignId ? 'campaigns' : 'all')
   const [queueSummary, setQueueSummary] = useState<QueueSummary | null>(null)
   const [runtimeItems, setRuntimeItems] = useState<ActivityLog[]>([])
-  const [runtimeStartedAt, setRuntimeStartedAt] = useState<Date | null>(null)
-  const [runtimeTick, setRuntimeTick] = useState(0)
+
   const [cursor, setCursor] = useState<string | null>(null)
   const [hasMore, setHasMore] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -187,18 +175,11 @@ export default function ActivityTimeline() {
     loadRuntimeData().catch(() => {})
     const interval = window.setInterval(() => {
       loadRuntimeData().catch(() => {})
-      setRuntimeTick(value => value + 1)
+
     }, isQueueRunning(queueSummary) ? 5000 : 15000)
     return () => window.clearInterval(interval)
   }, [queueSummary?.queued, queueSummary?.active, queueSummary?.delayed])
 
-  useEffect(() => {
-    if (isQueueRunning(queueSummary)) {
-      setRuntimeStartedAt(prev => prev || new Date())
-      return
-    }
-    setRuntimeStartedAt(null)
-  }, [queueSummary?.queued, queueSummary?.active, queueSummary?.delayed, queueSummary?.unavailable])
 
   useEffect(() => {
     if (!isQueueRunning(queueSummary)) return
@@ -272,7 +253,6 @@ export default function ActivityTimeline() {
           )}
           <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-6">
             {[
-              ['Active Account', latestPostingEvent?.context?.accountUsername ? `@${latestPostingEvent.context.accountUsername}` : latestPostingEvent?.accountId || 'N/A'],
               ['Progress', `${runtimeProgress}%`],
               ['Completed', completedJobs],
               ['Failed', failedJobs],
@@ -286,7 +266,7 @@ export default function ActivityTimeline() {
             ))}
           </div>
 
-          <div className="grid gap-3 lg:grid-cols-3">
+          <div className="grid gap-3 lg:grid-cols-1">
             <div className="rounded-lg border border-border bg-secondary/25 p-3">
               <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase text-muted-foreground">
                 <Activity className="h-3.5 w-3.5" /> Current Account State
@@ -296,29 +276,7 @@ export default function ActivityTimeline() {
                 <p className="mt-1 text-[11px] text-muted-foreground">{latestPostingEvent.message}</p>
               )}
             </div>
-            <div className="rounded-lg border border-border bg-secondary/25 p-3">
-              <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase text-muted-foreground">
-                <Eye className="h-3.5 w-3.5" /> Playwright Runtime
-              </p>
-              <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-                <div>
-                  <p className="text-muted-foreground">Contexts</p>
-                  <p className="font-black">N/A</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Pages</p>
-                  <p className="font-black">N/A</p>
-                </div>
-              </div>
-              <p className="mt-2 text-[10px] text-muted-foreground">No read-only browser metrics endpoint is currently exposed.</p>
-            </div>
-            <div className="rounded-lg border border-border bg-secondary/25 p-3">
-              <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase text-muted-foreground">
-                <Timer className="h-3.5 w-3.5" /> Elapsed Runtime
-              </p>
-              <p className="mt-2 text-lg font-black">{formatElapsed(runtimeStartedAt)}</p>
-              <p className="mt-1 text-[10px] text-muted-foreground">Observed from this monitor session. Tick {runtimeTick}</p>
-            </div>
+
           </div>
 
           <div className="grid gap-3 lg:grid-cols-4">
