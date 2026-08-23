@@ -2367,25 +2367,16 @@ export default function Campaigns() {
 
   return (
     <div className="space-y-4">
-      <div className="mb-2 flex items-center border-b border-border/50">
-        {(['simple', 'advanced', 'debug'] as const).map(mode => (
-          <button
-            key={mode}
-            onClick={() => setCampaignMode(mode)}
-            className={cn(
-              "px-4 py-2 text-sm font-medium transition-colors border-b-2",
-              campaignMode === mode 
-                ? "border-cyan-500 text-cyan-400" 
-                : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
-            )}
-          >
-            {mode === 'simple' ? 'Campaign workflow' : mode === 'advanced' ? 'Advanced / Experimental' : 'Developer only'}
-          </button>
-        ))}
-      </div>
-
       {campaignMode === 'simple' && (
         <div className="space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-purple-400">Campaigns</p>
+              <h1 className="mt-1 text-2xl font-bold">Plan coordinated publishing</h1>
+              <p className="mt-1 text-sm text-muted-foreground">Add content, choose accounts or groups, then follow work in Queue.</p>
+            </div>
+            <Button variant="purple" onClick={() => setShowCreate(true)}><Plus className="h-4 w-4" />New campaign</Button>
+          </div>
           <div className="rounded-md border border-amber-500/20 bg-amber-500/10 p-3 text-sm text-amber-200 flex items-center">
             <AlertTriangle className="mr-2 h-5 w-5 shrink-0" />
             <p><strong>Campaign workflow:</strong> add campaign content, choose target accounts or groups, then review the next operational step. Use Queue to monitor publishing work and Sessions when an account needs human attention.</p>
@@ -2525,7 +2516,8 @@ export default function Campaigns() {
         </div>
       )}
 
-      <div className={cn("flex items-center justify-between", campaignMode === 'debug' && "hidden")}>
+      {campaignMode === 'advanced' && <>
+      <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold flex items-center gap-2"><Target className="h-5 w-5 text-orange-400" /> Campaign Manager</h1>
           <p className="text-sm text-muted-foreground mt-0.5">Rencanakan distribusi konten dan topik campaign.</p>
@@ -2541,11 +2533,8 @@ export default function Campaigns() {
         </div>
       </div>
 
-      <div className={cn("grid gap-3", campaignMode === 'simple' ? "md:grid-cols-4" : "md:grid-cols-5", campaignMode === 'debug' && "hidden")}>
-        {summaryCards.filter(card => {
-          if (campaignMode !== 'simple') return true
-          return ['Total Campaign', 'Perlu Dikerjakan', 'Siap ke Compose', 'Campaign Gagal'].includes(card.label)
-        }).map(({ label, value, Icon, color }) => (
+      <div className="grid gap-3 md:grid-cols-5">
+        {summaryCards.map(({ label, value, Icon, color }) => (
           <Card key={label}>
             <CardContent className="flex items-center justify-between p-3">
               <div>
@@ -2558,7 +2547,7 @@ export default function Campaigns() {
         ))}
       </div>
 
-      <Card className={cn("border-cyan-500/20 bg-cyan-500/[0.02]", campaignMode !== 'advanced' && "hidden")}>
+      <Card className="border-cyan-500/20 bg-cyan-500/[0.02]">
         <CardHeader className="pb-3">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
@@ -2789,7 +2778,7 @@ export default function Campaigns() {
         </CardContent>
       </Card>
 
-      <Card className={cn(campaignMode !== 'simple' && "hidden")}>
+      <Card>
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2">
             <BarChart3 className="h-4 w-4 text-cyan-400" />
@@ -3069,7 +3058,7 @@ export default function Campaigns() {
         </CardContent>
       </Card>
 
-      <Card className={cn(campaignMode !== 'simple' && "hidden")}>
+      <Card>
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2">
             <Target className="h-4 w-4 text-amber-400" />
@@ -3272,6 +3261,7 @@ export default function Campaigns() {
       )}
 
       </div>
+      </>}
 
       {/* Create Campaign Dialog */}
       <Dialog open={showCreate} onOpenChange={setShowCreate}>

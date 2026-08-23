@@ -3,6 +3,7 @@ import { Toaster } from '@/components/ui/toaster'
 import { useAppStore } from '@/store/useAppStore'
 import Layout from '@/components/layout/Layout'
 import ErrorBoundary from '@/components/common/ErrorBoundary'
+import ExperimentalUnavailable from '@/components/common/ExperimentalUnavailable'
 
 // Pages
 import Login from '@/pages/Login'
@@ -10,19 +11,19 @@ import Dashboard from '@/pages/Dashboard'
 import FarmView from '@/pages/FarmView'
 import Accounts from '@/pages/Accounts'
 import Compose from '@/pages/Compose'
-import Scheduler from '@/pages/Scheduler'
+
 import AIWriter from '@/pages/AIWriter'
 import WarmingManager from '@/pages/WarmingManager'
 import ProxyManager from '@/pages/ProxyManager'
-import Analytics from '@/pages/Analytics'
+
 import Settings from '@/pages/Settings'
 import Engagement from '@/pages/Engagement'
 import Campaigns from '@/pages/Campaigns'
-import CampaignEngine from '@/pages/CampaignEngine'
+
 import ActivityTimeline from '@/pages/ActivityTimeline'
 import Queue from '@/pages/Queue'
 import OperationalValidation from '@/pages/OperationalValidation'
-import ContentPlanner from '@/pages/ContentPlanner'
+
 
 function ProtectedRoute() {
   if (import.meta.env.VITE_ROCKBASE_MODE === 'local') return <Outlet />
@@ -77,16 +78,8 @@ export default function App() {
                 <Campaigns />
               </ErrorBoundary>
             } />
-            <Route path="campaign-engine" element={
-              <ErrorBoundary>
-                <CampaignEngine />
-              </ErrorBoundary>
-            } />
-            <Route path="content-planner" element={
-              <ErrorBoundary>
-                <ContentPlanner />
-              </ErrorBoundary>
-            } />
+            <Route path="campaign-engine" element={<ExperimentalUnavailable feature="Campaign Engine" />} />
+            <Route path="content-planner" element={<ExperimentalUnavailable feature="Content Planner" />} />
             <Route path="activity" element={
               <ErrorBoundary>
                 <ActivityTimeline />
@@ -107,11 +100,7 @@ export default function App() {
                 <Compose />
               </ErrorBoundary>
             } />
-            <Route path="scheduler" element={
-              <ErrorBoundary>
-                <Scheduler />
-              </ErrorBoundary>
-            } />
+            <Route path="scheduler" element={<ExperimentalUnavailable feature="Scheduler" />} />
             <Route path="ai-writer" element={
               <ErrorBoundary>
                 <AIWriter />
@@ -127,11 +116,7 @@ export default function App() {
                 <ProxyManager />
               </ErrorBoundary>
             } />
-            <Route path="analytics" element={
-              <ErrorBoundary>
-                <Analytics />
-              </ErrorBoundary>
-            } />
+            <Route path="analytics" element={<ExperimentalUnavailable feature="Analytics" />} />
             <Route path="settings" element={
               <ErrorBoundary>
                 <Settings />
