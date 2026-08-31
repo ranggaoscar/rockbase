@@ -1,6 +1,6 @@
 import assert from 'assert';
 import { authenticateHermesInternal } from '../middleware/hermesAuth';
-import { hermesSafeAccount, hermesSafeResult } from '../routes/hermesShadowCampaignRoutes';
+import { hermesSafeAccount, hermesSafeResult, isHermesAccountAvailable } from '../routes/hermesShadowCampaignRoutes';
 
 function response() {
   return { statusCode: 200, body: undefined as any, status(code: number) { this.statusCode = code; return this; }, json(body: any) { this.body = body; return this; } };
@@ -20,6 +20,9 @@ async function main() {
   assert(!('accountPassword' in account) && !('cookies' in account) && !('email' in account));
   const result = hermesSafeResult({ id: 'x', accountId: 'a1', actionType: 'post', status: 'failed', result: JSON.stringify({ error: 'failed' }), scheduledAt: null, executedAt: null });
   assert(!JSON.stringify(result).includes('cookie') && !JSON.stringify(result).includes('password'));
+  assert.equal(isHermesAccountAvailable({ status: 'active', sessionHealth: 'HEALTHY' }), true);
+  assert.equal(isHermesAccountAvailable({ status: 'warming_up', sessionHealth: 'UNKNOWN' }), false);
+  assert.equal(isHermesAccountAvailable({ status: 'active', sessionHealth: 'CHECKPOINT' }), false);
   if (previous === undefined) delete process.env.HERMES_INTERNAL_API_TOKEN; else process.env.HERMES_INTERNAL_API_TOKEN = previous;
   console.log('Hermes shadow API targeted tests passed');
 }

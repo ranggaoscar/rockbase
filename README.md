@@ -13,9 +13,25 @@ RockBase is a self-hosted campaign operations platform for teams that manage mul
 
 Connect accounts once, keep reusable browser sessions, prepare campaigns with humans or AI agents, and let RockBase coordinate queued publishing, pacing, execution, session recovery, and operational status from one control plane.
 
+![RockBase dashboard — account, session, campaign, and operational overview](docs/images/dashboard.png)
+
 ```text
 Prepare → Target → Queue → Publish → Monitor → Recover sessions when needed
 ```
+
+## Product tour
+
+| Dashboard | Engagement operations |
+|---|---|
+| ![RockBase dashboard](docs/images/dashboard.png) | ![RockBase engagement center](docs/images/engagement-center.png) |
+| Account/session health, campaign status, and quick actions in one operator view. | Bounded engagement operations with visible activity and account controls. |
+
+| Content scheduler | Warming manager |
+|---|---|
+| ![RockBase content scheduler](docs/images/content-scheduler.png) | ![RockBase warming manager](docs/images/warming-manager.png) |
+| Plan and review queued publishing work before execution. | Monitor optional account-warming work and manual attention requirements. |
+
+> Screenshots show representative product surfaces. Social-platform login, 2FA, and any checkpoint/challenge remain manual operator work.
 
 ## Quick start
 

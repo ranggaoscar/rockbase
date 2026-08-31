@@ -32,7 +32,6 @@ const INSTRUCTIONS = `📖 Cara Export Cookies dari Chrome:
 
 💡 Format yang didukung:
 • JSON array: [{"name":"sessionid","value":"abc123",...}]
-• String: sessionid=abc123; csrftoken=xyz789;
 • Export dari EditThisCookie`
 
 export default function CookiePasteModal({ account, open, onClose, onSuccess }: CookiePasteModalProps) {
@@ -53,14 +52,12 @@ export default function CookiePasteModal({ account, open, onClose, onSuccess }: 
 
     setImporting(true)
     try {
-      // Try parsing as JSON
-      let cookiesPayload: any = text
+      let cookiesPayload: unknown
       try {
-        const parsed = JSON.parse(text)
-        cookiesPayload = parsed
+        cookiesPayload = JSON.parse(text)
       } catch {
-        // Plain string — send as-is
-        cookiesPayload = text
+        toast.error('Invalid cookie format', 'Paste a JSON cookie array exported from the browser.')
+        return
       }
 
       const { data } = await accountsApi.importCookies(account.id, cookiesPayload)
@@ -98,17 +95,16 @@ export default function CookiePasteModal({ account, open, onClose, onSuccess }: 
             <CheckCircle2 className="h-12 w-12 text-green-400 mx-auto mb-3" />
             <p className="text-lg font-bold text-green-300">Cookies Imported!</p>
             <p className="text-sm text-muted-foreground mt-1">
-              @{account.username} is now <strong>ACTIVE</strong> and <strong>HEALTHY</strong>.
-              No Playwright needed — ready for warming & posting.
+              Cookies terenkripsi sudah tersimpan. Jalankan <strong>Check Session</strong> sebelum warming atau posting.
             </p>
           </div>
         ) : (
           <div className="space-y-4 py-2">
             {/* Info banner */}
             <div className="rounded-lg border border-yellow-500/20 bg-yellow-500/10 p-3 text-xs text-yellow-300">
-              <p className="font-semibold">✨ No Playwright required!</p>
+              <p className="font-semibold">🔒 Simpan session dari browser</p>
               <p className="mt-0.5">
-                Paste cookies directly from your browser. Account will be marked ACTIVE immediately.
+                Paste export JSON cookies dari browser. Account perlu diverifikasi lewat Check Session sebelum automation.
               </p>
             </div>
 
@@ -140,7 +136,7 @@ export default function CookiePasteModal({ account, open, onClose, onSuccess }: 
 
             {/* Tips */}
             <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 p-3 text-xs text-blue-300">
-              <p>💡 Cookies disimpan terenkripsi (AES-256). Pastikan cookies masih fresh sebelum import.</p>
+              <p>💡 Cookies disimpan terenkripsi dan belum dianggap sehat sampai Check Session selesai.</p>
             </div>
 
             {/* Action */}

@@ -36,6 +36,10 @@ export function hermesSafeResult(action: any) {
     result, scheduledAt: action.scheduledAt ?? null, executedAt: action.executedAt ?? null };
 }
 
+export function isHermesAccountAvailable(account: { status?: string | null; sessionHealth?: string | null }): boolean {
+  return account.status === 'active' && account.sessionHealth === 'HEALTHY';
+}
+
 function campaignInput(body: any) {
   return {
     name: String(body.name || ''), type: String(body.type || ''), targetType: String(body.targetType || ''),
@@ -53,7 +57,7 @@ router.use(authenticateHermesInternal);
 
 router.get('/accounts/available', async (_req, res) => {
   const accounts = await prisma.socialAccount.findMany({
-    where: { status: { in: ['active', 'warming_up'] }, sessionHealth: { in: ['HEALTHY', 'UNKNOWN'] } },
+    where: { status: 'active', sessionHealth: 'HEALTHY' },
     select: { id: true, username: true, platform: true, status: true, brandTag: true, lastActive: true, sessionHealth: true, sessionHealthCheckedAt: true },
     orderBy: { username: 'asc' },
   });
@@ -61,7 +65,7 @@ router.get('/accounts/available', async (_req, res) => {
 });
 
 router.get('/accounts/available/count', async (_req, res) => {
-  const availableCount = await prisma.socialAccount.count({ where: { status: { in: ['active', 'warming_up'] }, sessionHealth: { in: ['HEALTHY', 'UNKNOWN'] } } });
+  const availableCount = await prisma.socialAccount.count({ where: { status: 'active', sessionHealth: 'HEALTHY' } });
   res.json({ availableCount });
 });
 

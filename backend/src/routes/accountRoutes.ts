@@ -7,6 +7,7 @@ import multer from 'multer';
 import { parse } from 'csv-parse';
 import * as fs from 'fs';
 import { sessionHealthService } from '../services/SessionHealthService';
+import { accountPublicPayload, accountPublicSelect, normalizeAccountInput, normalizeImportedCookies } from '../utils/accountPayload';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -19,7 +20,11 @@ router.use(authenticateToken);
 // GET /api/accounts — list all accounts
 router.get('/', async (req: AuthRequest, res: Response) => {
   try {
-    const accounts = await prisma.socialAccount.findMany();
+    const accounts = await prisma.socialAccount.findMany({
+      where: { workspaceId: 'workspace-default' },
+      select: accountPublicSelect as any,
+      orderBy: { createdAt: 'desc' },
+    });
     res.json({ accounts });
   } catch (err) {
     console.error('List accounts error:', err);
@@ -30,15 +35,17 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 // GET /api/accounts/stats — summary stats for dashboard
 router.get('/stats', async (req: AuthRequest, res: Response) => {
   try {
-    const accounts = await prisma.socialAccount.findMany();
+    const [total, active, warming_up, idle, error, instagram, tiktok] = await prisma.$transaction([
+      prisma.socialAccount.count({ where: { workspaceId: 'workspace-default' } }),
+      prisma.socialAccount.count({ where: { workspaceId: 'workspace-default', status: 'active' } }),
+      prisma.socialAccount.count({ where: { workspaceId: 'workspace-default', status: 'warming_up' } }),
+      prisma.socialAccount.count({ where: { workspaceId: 'workspace-default', status: 'idle' } }),
+      prisma.socialAccount.count({ where: { workspaceId: 'workspace-default', status: 'error' } }),
+      prisma.socialAccount.count({ where: { workspaceId: 'workspace-default', platform: 'Instagram' } }),
+      prisma.socialAccount.count({ where: { workspaceId: 'workspace-default', platform: 'TikTok' } }),
+    ]);
     const stats = {
-      total: accounts.length,
-      active: accounts.filter((a: any) => a.status === 'active').length,
-      warming_up: accounts.filter((a: any) => a.status === 'warming_up').length,
-      idle: accounts.filter((a: any) => a.status === 'idle').length,
-      error: accounts.filter((a: any) => a.status === 'error').length,
-      instagram: accounts.filter((a: any) => a.platform === 'Instagram').length,
-      tiktok: accounts.filter((a: any) => a.platform === 'TikTok').length,
+      total, active, warming_up, idle, error, instagram, tiktok,
     };
     res.json(stats);
   } catch (err) {
@@ -127,9 +134,9 @@ router.post('/session-sweep', automationGuard, async (req: AuthRequest, res: Res
 router.get('/:id', async (req: AuthRequest, res: Response) => {
   const id = String(req.params.id);
   try {
-    const account = await prisma.socialAccount.findUnique({ where: { id } });
+    const account = await prisma.socialAccount.findUnique({ where: { id }, select: accountPublicSelect as any });
     if (!account) { res.status(404).json({ error: 'Account not found' }); return; }
-    res.json({ account });
+    res.json({ account: accountPublicPayload(account as any) });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch account' });
   }
@@ -149,9 +156,9 @@ router.get('/:id/credentials', async (req: AuthRequest, res: Response) => {
     if (account.accountPassword) {
       try {
         decryptedPassword = decrypt(account.accountPassword);
-      } catch (e) {
-        // Maybe the password was not encrypted for some reason
-        decryptedPassword = account.accountPassword;
+      } catch {
+        res.status(409).json({ error: 'Stored password cannot be decrypted safely' });
+        return;
       }
     }
 
@@ -181,21 +188,17 @@ router.post('/:id/check-session', automationGuard, async (req: AuthRequest, res:
 router.post('/', async (req: AuthRequest, res: Response) => {
   const { username, password, platform, email, proxy, brandTag, notes } = req.body;
 
-  if (!username || !platform) {
-    res.status(400).json({ error: 'Username and platform are required' });
-    return;
-  }
-
   try {
+    const normalized = normalizeAccountInput({ username, platform });
     // Encrypt account password if provided
     let encryptedPassword: string | undefined;
     if (password) {
-      try { encryptedPassword = encrypt(password); } catch { encryptedPassword = password; }
+      encryptedPassword = encrypt(String(password));
     }
 
     const data: any = {
-      username,
-      platform,
+      username: normalized.username,
+      platform: normalized.platform,
       status: 'warming_up',
       warmingDay: 0,
       warmingStartDate: new Date(),
@@ -210,10 +213,14 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     // Parse proxy string "host:port:user:pass" and store as notes for now
     if (proxy) data.notes = `${notes ? notes + '\n' : ''}proxy:${proxy}`;
 
-    const account = await prisma.socialAccount.create({ data });
-    res.status(201).json({ account });
-  } catch (err) {
+    const account = await prisma.socialAccount.create({ data, select: accountPublicSelect as any });
+    res.status(201).json({ account: accountPublicPayload(account as any) });
+  } catch (err: any) {
     console.error('Create account error:', err);
+    if (/Username is required|Username is too long|Unsupported platform/.test(err.message || '')) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
     res.status(500).json({ error: 'Failed to create account' });
   }
 });
@@ -222,18 +229,35 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 router.patch('/:id', async (req: AuthRequest, res: Response) => {
   const id = String(req.params.id);
   try {
-    const { password, ...rest } = req.body;
-    const data: any = { ...rest, updatedAt: new Date() };
+    const { password } = req.body;
+    const data: any = {};
 
-    if (password) {
-      try { data.accountPassword = encrypt(password); } catch { data.accountPassword = password; }
+    if (req.body.username !== undefined || req.body.platform !== undefined) {
+      const existing = await prisma.socialAccount.findUnique({ where: { id }, select: { username: true, platform: true } });
+      if (!existing) { res.status(404).json({ error: 'Account not found' }); return; }
+      const normalized = normalizeAccountInput({
+        username: req.body.username ?? existing.username,
+        platform: req.body.platform ?? existing.platform,
+      });
+      if (req.body.username !== undefined) data.username = normalized.username;
+      if (req.body.platform !== undefined) data.platform = normalized.platform;
+    }
+    for (const field of ['email', 'proxyId', 'brandTag', 'notes', 'autoReplyEnabled', 'autoDmEnabled', 'replyTemplate', 'dmTemplate'] as const) {
+      if (req.body[field] !== undefined) data[field] = req.body[field];
     }
 
-    await prisma.socialAccount.update({ where: { id }, data });
-    const account = await prisma.socialAccount.findUnique({ where: { id } });
-    res.json({ account });
-  } catch (err) {
+    if (password) {
+      data.accountPassword = encrypt(String(password));
+    }
+
+    const account = await prisma.socialAccount.update({ where: { id }, data, select: accountPublicSelect as any });
+    res.json({ account: accountPublicPayload(account as any) });
+  } catch (err: any) {
     console.error('Update account error:', err);
+    if (/Username is required|Username is too long|Unsupported platform/.test(err.message || '')) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
     res.status(500).json({ error: 'Failed to update account' });
   }
 });
@@ -297,13 +321,15 @@ router.post('/import', upload.single('file'), async (req: AuthRequest, res: Resp
 
         let encryptedPassword: string | undefined;
         if (password) {
-          try { encryptedPassword = encrypt(password); } catch { encryptedPassword = password; }
+          encryptedPassword = encrypt(String(password));
         }
+
+        const normalized = normalizeAccountInput({ username, platform });
 
         await prisma.socialAccount.create({
           data: {
-            username,
-            platform: platform.charAt(0).toUpperCase() + platform.slice(1).toLowerCase(), // Normalize e.g. "instagram" -> "Instagram"
+            username: normalized.username,
+            platform: normalized.platform,
             email: email || null,
             accountPassword: encryptedPassword || null,
             brandTag: brandTag || null,
@@ -362,41 +388,32 @@ router.post('/:id/cookies', async (req: AuthRequest, res: Response) => {
   }
 
   try {
-    // Support both JSON array and plain string formats
-    let cookiesStr: string;
-    if (typeof cookies === 'string') {
-      cookiesStr = cookies;
-    } else if (Array.isArray(cookies)) {
-      cookiesStr = JSON.stringify(cookies);
-    } else if (typeof cookies === 'object') {
-      cookiesStr = JSON.stringify(cookies);
-    } else {
-      res.status(400).json({ error: 'cookies must be a string or JSON array' });
-      return;
-    }
+    const normalized = normalizeImportedCookies(cookies);
 
     // Encrypt cookies before storing
-    const encrypted = encrypt(cookiesStr);
+    const encrypted = encrypt(normalized.serialized);
 
     await prisma.socialAccount.update({
       where: { id },
       data: {
         cookies: encrypted,
-        sessionHealth: 'HEALTHY',
-        sessionHealthReason: 'Cookies imported manually',
-        sessionHealthCheckedAt: new Date(),
-        status: 'active',
-        lastActive: new Date(),
+        sessionHealth: 'UNKNOWN',
+        sessionHealthReason: `Imported ${normalized.cookieCount} cookies; verification required`,
+        sessionHealthCheckedAt: null,
+        status: 'warming_up',
       },
     });
 
     res.json({
       success: true,
-      message: 'Cookies imported successfully. Account is now active.',
+      message: 'Cookies imported securely. Run Check Session before automation.',
+      requiresVerification: true,
+      cookieCount: normalized.cookieCount,
     });
   } catch (err: any) {
     console.error('Cookie import error:', err);
-    res.status(500).json({ error: 'Failed to import cookies', details: err.message });
+    const status = /Cookies must|Cookie \d+|limited to 250/.test(err.message || '') ? 400 : 500;
+    res.status(status).json({ error: status === 400 ? err.message : 'Failed to import cookies' });
   }
 });
 
@@ -433,24 +450,17 @@ router.post('/import-cookies-bulk', async (req: AuthRequest, res: Response) => {
         continue;
       }
 
-      let cookiesStr: string;
-      if (typeof entry.cookies === 'string') {
-        cookiesStr = entry.cookies;
-      } else {
-        cookiesStr = JSON.stringify(entry.cookies);
-      }
-
-      const encrypted = encrypt(cookiesStr);
+      const normalized = normalizeImportedCookies(entry.cookies);
+      const encrypted = encrypt(normalized.serialized);
 
       await prisma.socialAccount.update({
         where: { id: account.id },
         data: {
           cookies: encrypted,
-          sessionHealth: 'HEALTHY',
-          sessionHealthReason: 'Cookies imported manually',
-          sessionHealthCheckedAt: new Date(),
-          status: 'active',
-          lastActive: new Date(),
+          sessionHealth: 'UNKNOWN',
+          sessionHealthReason: `Imported ${normalized.cookieCount} cookies; verification required`,
+          sessionHealthCheckedAt: null,
+          status: 'warming_up',
         },
       });
 
@@ -488,7 +498,8 @@ router.get('/:id/cookies', async (req: AuthRequest, res: Response) => {
     try {
       decrypted = decrypt(account.cookies);
     } catch {
-      decrypted = account.cookies; // fallback if not encrypted
+      res.status(409).json({ error: 'Stored cookies cannot be decrypted safely' });
+      return;
     }
 
     // Try to parse as JSON for pretty display

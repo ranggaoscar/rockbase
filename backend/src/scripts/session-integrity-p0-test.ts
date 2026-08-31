@@ -36,8 +36,14 @@ function assertLegacyCookieCiphertextCompatibility(): void {
   const validKey = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
   withEncryptionKey(validKey, () => {
     const ciphertext = encrypt(JSON.stringify([{ name: 'sessionid', value: 'test' }]));
-    assert.match(ciphertext, /^[a-f0-9]{32}:[a-f0-9]+$/i);
+    assert.match(ciphertext, /^v2:[a-f0-9]{24}:[a-f0-9]{32}:[a-f0-9]+$/i);
     assert.deepEqual(JSON.parse(decrypt(ciphertext)), [{ name: 'sessionid', value: 'test' }]);
+
+    const key = Buffer.from(validKey, 'hex');
+    const iv = Buffer.alloc(16, 7);
+    const cipher = require('crypto').createCipheriv('aes-256-cbc', key, iv);
+    const legacy = `${iv.toString('hex')}:${Buffer.concat([cipher.update('legacy-session'), cipher.final()]).toString('hex')}`;
+    assert.equal(decrypt(legacy), 'legacy-session');
   });
 }
 

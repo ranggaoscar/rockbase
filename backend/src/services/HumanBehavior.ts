@@ -1,7 +1,7 @@
 /**
- * HumanBehavior — Centralized human-like behavior simulation module.
+ * HumanBehavior — Centralized pacing and interaction helper.
  *
- * ALL engagement actions MUST use this module to appear human.
+ * ALL engagement actions MUST use this module for bounded pacing.
  * Rules:
  *   - NEVER navigate directly to target URL without browsing first
  *   - Always randomize scroll duration and click timing
@@ -120,20 +120,8 @@ async function warmupBrowse(page: Page): Promise<void> {
     await humanScroll(page);
     await randomDelay(1000, 3000);
 
-    // Randomly like a post (5% chance) — natural behavior
-    if (Math.random() < 0.05) {
-      try {
-        const likeBtn = await page.$('svg[aria-label="Like"]');
-        if (likeBtn) {
-          const parent = await likeBtn.$('xpath=..');
-          if (parent) {
-            await parent.click();
-            await shortPause();
-            console.log('[HumanBehavior] Liked a feed post (natural)');
-          }
-        }
-      } catch { /* ignore */ }
-    }
+    // Warmup is intentionally read-only. Never create an unrequested like,
+    // follow, comment, save, or view side effect outside the explicit target.
   }
 
   // 3. Visit 1-2 random profiles

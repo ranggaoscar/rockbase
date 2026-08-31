@@ -9,6 +9,12 @@ import { automationGuard } from '../middleware/automation';
 import { targetedEngagementService } from '../services/TargetedEngagementService';
 import { sessionPool } from '../services/SessionPool';
 import { HumanBehavior } from '../services/HumanBehavior';
+import {
+  calculateSequentialWaits,
+  normalizeInstagramUsername,
+  parseExplicitAccountIds,
+  validateInstagramPostUrl,
+} from '../services/EngagementPolicy';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -32,11 +38,8 @@ const runningTasks = new Map<string, { aborted: boolean }>();
 // ── POST /api/engagement/like — All selected accounts like a post ─────────
 router.post('/like', automationGuard, async (req: AuthRequest, res: Response) => {
   try {
-    const { postUrl, accountIds } = req.body;
-    if (!postUrl || !accountIds?.length) {
-      res.status(400).json({ error: 'postUrl and accountIds are required' });
-      return;
-    }
+    const postUrl = validateInstagramPostUrl(req.body?.postUrl);
+    const accountIds = parseExplicitAccountIds(req.body?.accountIds);
 
     const taskId = `like-${Date.now()}`;
     runningTasks.set(taskId, { aborted: false });
@@ -54,7 +57,6 @@ router.post('/like', automationGuard, async (req: AuthRequest, res: Response) =>
       accountIds,
       actionType: 'like',
       target: postUrl,
-      force: true,
       checkAborted: () => runningTasks.get(taskId)?.aborted || false,
     }).catch((err) => {
       console.error(`[Engagement] Like task failed:`, err.message);
@@ -63,18 +65,15 @@ router.post('/like', automationGuard, async (req: AuthRequest, res: Response) =>
     });
 
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(400).json({ error: err.message });
   }
 });
 
 // ── POST /api/engagement/follow — All selected accounts follow a user ─────
 router.post('/follow', automationGuard, async (req: AuthRequest, res: Response) => {
   try {
-    const { username, accountIds } = req.body;
-    if (!username || !accountIds?.length) {
-      res.status(400).json({ error: 'username and accountIds are required' });
-      return;
-    }
+    const username = normalizeInstagramUsername(req.body?.username);
+    const accountIds = parseExplicitAccountIds(req.body?.accountIds);
 
     const taskId = `follow-${Date.now()}`;
     runningTasks.set(taskId, { aborted: false });
@@ -90,7 +89,6 @@ router.post('/follow', automationGuard, async (req: AuthRequest, res: Response) 
       accountIds,
       actionType: 'follow',
       target: username,
-      force: true,
       checkAborted: () => runningTasks.get(taskId)?.aborted || false,
     }).catch((err) => {
       console.error(`[Engagement] Follow task failed:`, err.message);
@@ -99,18 +97,15 @@ router.post('/follow', automationGuard, async (req: AuthRequest, res: Response) 
     });
 
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(400).json({ error: err.message });
   }
 });
 
 // ── POST /api/engagement/comment — All selected accounts comment on a post ─
 router.post('/comment', automationGuard, async (req: AuthRequest, res: Response) => {
   try {
-    const { postUrl, accountIds } = req.body;
-    if (!postUrl || !accountIds?.length) {
-      res.status(400).json({ error: 'postUrl and accountIds are required' });
-      return;
-    }
+    const postUrl = validateInstagramPostUrl(req.body?.postUrl);
+    const accountIds = parseExplicitAccountIds(req.body?.accountIds);
 
     const taskId = `comment-${Date.now()}`;
     runningTasks.set(taskId, { aborted: false });
@@ -127,7 +122,6 @@ router.post('/comment', automationGuard, async (req: AuthRequest, res: Response)
       actionType: 'comment',
       target: postUrl,
       aiComment: true,
-      force: true,
       checkAborted: () => runningTasks.get(taskId)?.aborted || false,
     }).catch((err) => {
       console.error(`[Engagement] Comment task failed:`, err.message);
@@ -136,18 +130,15 @@ router.post('/comment', automationGuard, async (req: AuthRequest, res: Response)
     });
 
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(400).json({ error: err.message });
   }
 });
 
 // ── POST /api/engagement/follow-and-like — Follow + like their posts ──────
 router.post('/follow-and-like', automationGuard, async (req: AuthRequest, res: Response) => {
   try {
-    const { username, accountIds } = req.body;
-    if (!username || !accountIds?.length) {
-      res.status(400).json({ error: 'username and accountIds are required' });
-      return;
-    }
+    const username = normalizeInstagramUsername(req.body?.username);
+    const accountIds = parseExplicitAccountIds(req.body?.accountIds);
 
     const taskId = `fal-${Date.now()}`;
     runningTasks.set(taskId, { aborted: false });
@@ -162,7 +153,6 @@ router.post('/follow-and-like', automationGuard, async (req: AuthRequest, res: R
       accountIds,
       actionType: 'follow_and_like',
       target: username,
-      force: true,
       checkAborted: () => runningTasks.get(taskId)?.aborted || false,
     }).catch((err) => {
       console.error(`[Engagement] Follow+Like task failed:`, err.message);
@@ -171,7 +161,7 @@ router.post('/follow-and-like', automationGuard, async (req: AuthRequest, res: R
     });
 
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(400).json({ error: err.message });
   }
 });
 
@@ -196,7 +186,7 @@ router.post('/hashtag', automationGuard, async (req: AuthRequest, res: Response)
     // Process accounts sequentially with stagger in the background
     (async () => {
       try {
-        const delays = HumanBehavior.calculateStaggerDelays(accountIds.length);
+        const delays = calculateSequentialWaits(HumanBehavior.calculateStaggerDelays(accountIds.length));
         for (let i = 0; i < accountIds.length; i++) {
           if (runningTasks.get(taskId)?.aborted) {
             console.log(`[Engagement] Hashtag engagement campaign aborted.`);

@@ -1,12 +1,7 @@
-import { chromium } from 'playwright-extra';
-import { Browser, BrowserContext, Page } from 'playwright';
-// @ts-ignore
-import stealthPlugin from 'puppeteer-extra-plugin-stealth';
+import { chromium, Browser, BrowserContext, Page } from 'playwright';
 import { PrismaClient } from '@prisma/client';
 import { encrypt, decrypt } from '../utils/encryption';
 import { assertAutomationEnabled } from '../middleware/automation';
-
-chromium.use(stealthPlugin());
 
 const prisma = new PrismaClient();
 // Default headless=true (no desktop popup). Set ROCKBASE_BROWSER_HEADLESS=false to force visible window.
@@ -50,12 +45,6 @@ export class BrowserManager {
       console.log('Launching Playwright browser...');
       this.browser = await chromium.launch({
         headless: BROWSER_HEADLESS,
-        args: [
-          '--disable-blink-features=AutomationControlled',
-          '--disable-features=IsolateOrigins,site-per-process',
-          '--autoplay-policy=no-user-gesture-required',
-          '--use-fake-ui-for-media-stream',
-        ]
       });
     }
     return this.browser;

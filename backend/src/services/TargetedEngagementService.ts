@@ -18,6 +18,7 @@ import { HumanBehavior } from './HumanBehavior';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { getGeminiApiKey, getGeminiModel } from './GeminiConfig';
 import { trySelectors, clickSvgParent, IG_SELECTORS } from './InstagramSelectors';
+import { calculateSequentialWaits, containsPlatformChallenge } from './EngagementPolicy';
 
 const prisma = new PrismaClient();
 
@@ -151,6 +152,8 @@ export class TargetedEngagementService {
       await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await HumanBehavior.mediumPause();
 
+      await this._assertNoChallenge(page, accountId);
+
       // 3. Simulate reading the post
       await HumanBehavior.simulateReading(page, 5, 15);
 
@@ -231,6 +234,8 @@ export class TargetedEngagementService {
         waitUntil: 'domcontentloaded', timeout: 30000,
       });
       await HumanBehavior.mediumPause();
+
+      await this._assertNoChallenge(page, accountId);
 
       // 3. Simulate reading the profile
       await HumanBehavior.simulateReading(page, 5, 12);
@@ -648,9 +653,10 @@ export class TargetedEngagementService {
     }
 
     // Calculate staggered delays
-    const delays = force 
+    const cumulativeDelays = force
       ? accountIds.map((_, i) => i * 3000) 
       : HumanBehavior.calculateStaggerDelays(accountIds.length);
+    const delays = calculateSequentialWaits(cumulativeDelays);
 
     console.log(`[Engagement] Starting ${actionType} campaign for ${accountIds.length} accounts on target: ${target} (Force: ${force})`);
     if (force) {
@@ -746,6 +752,22 @@ export class TargetedEngagementService {
   }
 
   // ── Private helpers ────────────────────────────────────────────────────────
+
+  private async _assertNoChallenge(page: Page, accountId: string): Promise<void> {
+    const pageText = await page.locator('body').innerText({ timeout: 5000 }).catch(() => '');
+    if (!containsPlatformChallenge(`${page.url()}\n${pageText}`)) return;
+
+    await prisma.socialAccount.update({
+      where: { id: accountId },
+      data: {
+        status: 'idle',
+        sessionHealth: 'CHECKPOINT',
+        sessionHealthReason: 'Platform challenge detected during engagement; manual review required',
+        sessionHealthCheckedAt: new Date(),
+      },
+    }).catch(() => {});
+    throw new Error('PLATFORM_CHALLENGE_DETECTED');
+  }
 
   private async _logEngagement(result: ActionResult): Promise<void> {
     try {
