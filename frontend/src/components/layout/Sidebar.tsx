@@ -3,6 +3,7 @@ import type { LucideIcon } from 'lucide-react'
 import {
   LayoutDashboard,
   Tv2,
+  Smartphone,
   Users,
   SendHorizontal,
   Sparkles,
@@ -117,6 +118,7 @@ export default function Sidebar() {
 
         <nav className="flex-1 space-y-0.5 overflow-y-auto px-2 py-3">
           {primaryNavItems.map(renderItem)}
+          {import.meta.env.VITE_ROCKBASE_MODE === 'local' && renderItem({ label: 'Android Farm', path: '/android-farm', icon: Smartphone })}
           {!sidebarCollapsed && (
             <p className="px-2.5 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               Advanced

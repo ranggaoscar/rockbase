@@ -98,6 +98,7 @@ import accountGroupRoutes from './routes/accountGroupRoutes';
 import activityRoutes from './routes/activityRoutes';
 import rockSocialRoutes from './routes/rockSocialRoutes';
 import hermesShadowCampaignRoutes from './routes/hermesShadowCampaignRoutes';
+import androidDeviceRoutes from './routes/androidDeviceRoutes';
 app.get('/livez', (_req, res) => {
   res.status(200).json({ status: 'live' });
 });
@@ -147,6 +148,7 @@ app.use('/api/account-groups', accountGroupRoutes);
 app.use('/api/activity', activityRoutes);
 app.use('/api/rock-social', rockSocialRoutes);
 app.use('/api/system', systemRoutes); // Improvement #9 — log access
+app.use('/api/android/devices', androidDeviceRoutes);
 
 // Health check
 app.get('/api/health', async (req, res) => {

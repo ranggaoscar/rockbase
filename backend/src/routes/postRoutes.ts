@@ -90,9 +90,6 @@ function parseBoolean(value: unknown): boolean {
 
 async function filterPostableAccounts(accountIds: string[], allowUnhealthy: boolean) {
   const uniqueIds = [...new Set(accountIds.filter(Boolean))];
-  if (allowUnhealthy) {
-    return { postableAccountIds: uniqueIds, skippedAccounts: [] as any[] };
-  }
 
   const accounts = await prisma.socialAccount.findMany({
     where: { id: { in: uniqueIds } },
@@ -100,6 +97,7 @@ async function filterPostableAccounts(accountIds: string[], allowUnhealthy: bool
       id: true,
       username: true,
       platform: true,
+      executionEngine: true,
       sessionHealth: true,
       sessionHealthReason: true,
       sessionHealthCheckedAt: true,
@@ -111,6 +109,16 @@ async function filterPostableAccounts(accountIds: string[], allowUnhealthy: bool
 
   for (const accountId of uniqueIds) {
     const account = byId.get(accountId);
+
+    if (account?.executionEngine === 'android') {
+      skippedAccounts.push({ accountId, username: account.username, platform: account.platform,
+        health: 'N/A', reason: 'Android posting worker is not implemented yet', checkedAt: null });
+      continue;
+    }
+    if (allowUnhealthy) {
+      postableAccountIds.push(accountId);
+      continue;
+    }
 
     // Block unsupported platforms (only Instagram + TikTok are automated now)
         if (account && account.platform !== 'Instagram' && account.platform !== 'TikTok' && account.platform !== 'Tiktok') {

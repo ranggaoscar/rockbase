@@ -48,8 +48,10 @@ Pass 'Redis'
 if (-not (Test-Path (Join-Path $root 'backend/node_modules'))) { Step 'Installing backend dependencies'; Push-Location "$root/backend"; npm ci; Pop-Location }
 if (-not (Test-Path (Join-Path $root 'frontend/node_modules'))) { Step 'Installing frontend dependencies'; Push-Location "$root/frontend"; npm ci; Pop-Location }
 Push-Location "$root/backend"
-if (-not (Test-Path 'node_modules/.prisma/client/query_engine-windows.dll.node')) { npx prisma generate }
+npx prisma generate
+if ($LASTEXITCODE -ne 0) { throw 'Prisma client generation failed.' }
 npx prisma migrate deploy
+if ($LASTEXITCODE -ne 0) { throw 'Prisma migration failed.' }
 npx playwright install chromium
 Pop-Location
 Pass 'Browser runtime'

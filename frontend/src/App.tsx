@@ -9,6 +9,7 @@ import ExperimentalUnavailable from '@/components/common/ExperimentalUnavailable
 import Login from '@/pages/Login'
 import Dashboard from '@/pages/Dashboard'
 import FarmView from '@/pages/FarmView'
+import AndroidFarm from '@/pages/AndroidFarm'
 import Accounts from '@/pages/Accounts'
 import Compose from '@/pages/Compose'
 
@@ -63,6 +64,7 @@ export default function App() {
                 <FarmView />
               </ErrorBoundary>
             } />
+            <Route path="android-farm" element={<ErrorBoundary><AndroidFarm /></ErrorBoundary>} />
             <Route path="accounts" element={
               <ErrorBoundary>
                 <Accounts />

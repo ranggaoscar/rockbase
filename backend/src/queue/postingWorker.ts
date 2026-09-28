@@ -16,6 +16,7 @@ import { postingWorkerDeliveryIdentity } from '../utils/socialPostingIdempotency
 import { AccountExecutionLease, accountExecutionLockService } from '../services/AccountExecutionLockService';
 import { AccountPostingBudgetReservation, accountPostingBudgetService } from '../services/AccountPostingBudgetService';
 import { postResultService } from '../services/PostResultService';
+import { requireChromiumEngine } from '../services/ExecutionEngine';
 
 const prisma = new PrismaClient();
 const durableIdempotency = new DurableIdempotencyService(prisma);
@@ -264,6 +265,7 @@ export const postingWorker = new Worker<PostJobData>(
     try {
       account = await prisma.socialAccount.findUnique({ where: { id: accountId } });
       if (!account) throw new Error(`Account ${accountId} not found`);
+      requireChromiumEngine(account);
 
       // Resolve media path: use explicit path, or fall back to an uploads filename/URL in mediaUrls.
       let resolvedMediaPath: string | undefined = rawMediaPath;

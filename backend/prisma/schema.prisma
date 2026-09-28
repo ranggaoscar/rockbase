@@ -45,6 +45,8 @@ model SocialAccount {
   workspaceId            String
   platform               String
   username               String
+  executionEngine        String               @default("chromium")
+  homeDeviceId           String?
   accountPassword        String?
   email                  String?
   status                 String               @default("warming_up")
@@ -68,7 +70,26 @@ model SocialAccount {
   analytics              Analytics[]
   proxy                  Proxy?               @relation(fields: [proxyId], references: [id])
   workspace              Workspace            @relation(fields: [workspaceId], references: [id])
+  homeDevice             AndroidDevice?       @relation(fields: [homeDeviceId], references: [id], onDelete: SetNull)
   warmingLogs            WarmingLog[]
+
+  @@index([homeDeviceId])
+}
+
+model AndroidDevice {
+  id                String          @id @default(uuid())
+  name              String          @unique
+  avdName           String          @unique
+  adbSerial         String?
+  status            String          @default("OFFLINE")
+  ramMb             Int             @default(2048)
+  cpuCores          Int             @default(2)
+  enabled           Boolean         @default(true)
+  lastBootAt        DateTime?
+  lastHealthcheckAt DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  accounts          SocialAccount[]
 }
 
 model AccountGroup {

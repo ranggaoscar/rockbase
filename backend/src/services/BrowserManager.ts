@@ -2,6 +2,7 @@ import { chromium, Browser, BrowserContext, Page } from 'playwright';
 import { PrismaClient } from '@prisma/client';
 import { encrypt, decrypt } from '../utils/encryption';
 import { assertAutomationEnabled } from '../middleware/automation';
+import { requireChromiumEngine } from './ExecutionEngine';
 
 const prisma = new PrismaClient();
 // Default headless=true (no desktop popup). Set ROCKBASE_BROWSER_HEADLESS=false to force visible window.
@@ -76,6 +77,7 @@ export class BrowserManager {
     });
 
     if (!account) throw new Error(`Account ${accountId} not found`);
+    requireChromiumEngine(account);
 
     let proxyConfig = undefined;
     if (account.proxy && account.proxy.isActive) {

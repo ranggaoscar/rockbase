@@ -8,10 +8,22 @@ import { parse } from 'csv-parse';
 import * as fs from 'fs';
 import { sessionHealthService } from '../services/SessionHealthService';
 import { accountPublicPayload, accountPublicSelect, normalizeAccountInput, normalizeImportedCookies } from '../utils/accountPayload';
+import { getRockBaseMode } from '../middleware/runtimeMode';
 
 const router = Router();
 const prisma = new PrismaClient();
 const upload = multer({ dest: 'uploads/' });
+async function validateEngine(engine: unknown, deviceId: unknown, platform: string) {
+  if (engine === 'chromium' && !deviceId) return { executionEngine: 'chromium', homeDeviceId: null };
+  if (engine !== 'android') throw new Error('Invalid execution engine or home device');
+  if (getRockBaseMode() !== 'local' || process.platform !== 'win32' || platform !== 'Instagram') {
+    throw new Error('Android accounts require Instagram on Windows Local Mode');
+  }
+  if (typeof deviceId !== 'string' || !deviceId || !(await prisma.androidDevice.findUnique({ where: { id: deviceId, enabled: true } }))) {
+    throw new Error('Android accounts require a registered enabled home device');
+  }
+  return { executionEngine: 'android', homeDeviceId: deviceId };
+}
 const MAX_BULK_SESSION_CHECK = Math.max(1, Number(process.env.MAX_BULK_SESSION_CHECK || 3));
 
 // All account routes require authentication
@@ -186,7 +198,7 @@ router.post('/:id/check-session', automationGuard, async (req: AuthRequest, res:
 });
 
 router.post('/', async (req: AuthRequest, res: Response) => {
-  const { username, password, platform, email, proxy, brandTag, notes } = req.body;
+  const { username, password, platform, email, proxy, brandTag, notes, executionEngine, homeDeviceId } = req.body;
 
   try {
     const normalized = normalizeAccountInput({ username, platform });
@@ -204,6 +216,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       warmingStartDate: new Date(),
       workspaceId: 'workspace-default',
     };
+    if (executionEngine !== undefined || homeDeviceId !== undefined) Object.assign(data, await validateEngine(executionEngine ?? 'chromium', homeDeviceId, normalized.platform));
 
     if (encryptedPassword) data.accountPassword = encryptedPassword;
     if (email) data.email = email;
@@ -217,7 +230,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     res.status(201).json({ account: accountPublicPayload(account as any) });
   } catch (err: any) {
     console.error('Create account error:', err);
-    if (/Username is required|Username is too long|Unsupported platform/.test(err.message || '')) {
+    if (/Username is required|Username is too long|Unsupported platform|execution engine|Android accounts/.test(err.message || '')) {
       res.status(400).json({ error: err.message });
       return;
     }
@@ -245,6 +258,13 @@ router.patch('/:id', async (req: AuthRequest, res: Response) => {
     for (const field of ['email', 'proxyId', 'brandTag', 'notes', 'autoReplyEnabled', 'autoDmEnabled', 'replyTemplate', 'dmTemplate'] as const) {
       if (req.body[field] !== undefined) data[field] = req.body[field];
     }
+    if (req.body.executionEngine !== undefined || req.body.homeDeviceId !== undefined || req.body.platform !== undefined) {
+      const current = await prisma.socialAccount.findUnique({ where: { id }, select: { executionEngine: true, homeDeviceId: true, platform: true } });
+      if (!current) { res.status(404).json({ error: 'Account not found' }); return; }
+      Object.assign(data, await validateEngine(req.body.executionEngine ?? current.executionEngine,
+        req.body.homeDeviceId !== undefined ? req.body.homeDeviceId : (req.body.executionEngine === 'chromium' ? null : current.homeDeviceId),
+        data.platform ?? current.platform));
+    }
 
     if (password) {
       data.accountPassword = encrypt(String(password));
@@ -254,7 +274,7 @@ router.patch('/:id', async (req: AuthRequest, res: Response) => {
     res.json({ account: accountPublicPayload(account as any) });
   } catch (err: any) {
     console.error('Update account error:', err);
-    if (/Username is required|Username is too long|Unsupported platform/.test(err.message || '')) {
+    if (/Username is required|Username is too long|Unsupported platform|execution engine|Android accounts/.test(err.message || '')) {
       res.status(400).json({ error: err.message });
       return;
     }

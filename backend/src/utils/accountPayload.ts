@@ -8,6 +8,8 @@ const ACCOUNT_PUBLIC_FIELDS = [
   'workspaceId',
   'platform',
   'username',
+  'executionEngine',
+  'homeDeviceId',
   'email',
   'status',
   'proxyId',
