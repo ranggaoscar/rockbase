@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { Smartphone } from 'lucide-react'
 import api from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { timeAgo } from '@/lib/utils'
+import AndroidControlPanel from '@/components/farm/AndroidControlPanel'
 
 interface Lease { ownerId: string; jobId: string; expiresAt: string }
 interface Device {
@@ -68,6 +71,10 @@ export default function AndroidFarm() {
   const [busy, setBusy] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [avdName, setAvdName] = useState('')
+  // Deep link: /android-farm?device=<id> opens the operator panel for that device.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [controlTarget, setControlTarget] = useState<Device | null>(null)
+  const requestedDeviceId = searchParams.get('device')
   const reload = useCallback(async () => {
     try {
       const [deviceResponse, toolingResponse] = await Promise.all([
@@ -82,6 +89,23 @@ export default function AndroidFarm() {
     } catch (err: any) { setError(err.response?.data?.error || err.message) }
   }, [])
   useEffect(() => { void reload() }, [reload])
+
+  // Open the control panel when a device id arrives via the `device` query param.
+  useEffect(() => {
+    if (!requestedDeviceId || controlTarget) return
+    const match = devices.find(device => device.id === requestedDeviceId)
+    if (match) setControlTarget(match)
+  }, [requestedDeviceId, devices, controlTarget])
+
+  function closeControl() {
+    setControlTarget(null)
+    if (requestedDeviceId) {
+      const next = new URLSearchParams(searchParams)
+      next.delete('device')
+      setSearchParams(next, { replace: true })
+    }
+    void reload()
+  }
 
   async function action(id: string, operation: string) {
     setBusy(id)
@@ -146,9 +170,14 @@ export default function AndroidFarm() {
         <Metric label="Last shutdown" value={device.lastShutdownReason ?? '—'} />
       </dl>
       {device.lastError && <p className="rounded border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-400">Reason: {device.lastError}</p>}
-      <div className="flex flex-wrap gap-2">{(['start', 'stop', 'restart', 'health'] as const).map(op => <Button key={op} size="sm" variant="outline" disabled={busy !== null || (op === 'start' && device.status !== 'OFFLINE' && device.status !== 'ERROR')} onClick={() => action(device.id, op)}>{op === 'health' ? 'Health Check' : op[0].toUpperCase() + op.slice(1)}</Button>)}</div>
-      {device.status === 'READY' && <a className="text-sm text-purple-400 underline" href={`/api/android/devices/${device.id}/screenshot`} target="_blank" rel="noreferrer">Screenshot</a>}
+      <div className="flex flex-wrap items-center gap-2">{(['start', 'stop', 'restart', 'health'] as const).map(op => <Button key={op} size="sm" variant="outline" disabled={busy !== null || (op === 'start' && device.status !== 'OFFLINE' && device.status !== 'ERROR')} onClick={() => action(device.id, op)}>{op === 'health' ? 'Health Check' : op[0].toUpperCase() + op.slice(1)}</Button>)}
+        <Button size="sm" variant="purple" className="gap-1.5" disabled={busy !== null || device.enabled === false} onClick={() => setControlTarget(device)}>
+          <Smartphone className="h-3.5 w-3.5" /> Control Device
+        </Button>
+      </div>
+      <p className="text-[10px] text-muted-foreground">Live screenshot, tap / swipe, Back / Home, text entry, Wake and Open Instagram run inside the device panel. A busy or leased device rejects controls until it is free.</p>
     </div>
     })}</div>
+    {controlTarget && <AndroidControlPanel device={controlTarget} onClose={closeControl} />}
   </div>
 }

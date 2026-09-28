@@ -100,6 +100,7 @@ import rockSocialRoutes from './routes/rockSocialRoutes';
 import hermesShadowCampaignRoutes from './routes/hermesShadowCampaignRoutes';
 import androidDeviceRoutes from './routes/androidDeviceRoutes';
 import androidJobRoutes from './routes/androidJobRoutes';
+import androidImageDraftRoutes from './routes/androidImageDraftRoutes';
 app.get('/livez', (_req, res) => {
   res.status(200).json({ status: 'live' });
 });
@@ -151,6 +152,7 @@ app.use('/api/rock-social', rockSocialRoutes);
 app.use('/api/system', systemRoutes); // Improvement #9 — log access
 app.use('/api/android/devices', androidDeviceRoutes);
 app.use('/api/android/jobs', androidJobRoutes);
+app.use('/api/android/image-drafts', androidImageDraftRoutes);
 
 // Health check
 app.get('/api/health', async (req, res) => {

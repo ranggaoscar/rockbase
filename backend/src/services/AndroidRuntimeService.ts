@@ -70,6 +70,11 @@ export class AndroidRuntimeService {
     if (!(await this.listAvds()).includes(avdName)) throw new Error(`AVD ${avdName} not found in Android SDK`);
     if (await this.resolveSerial(avdName)) throw new Error(`AVD ${avdName} is already running`);
     const args = ['-avd', avdName, '-memory', String(ramMb), '-cores', String(cpuCores)];
+    const gpu = process.env.ANDROID_EMULATOR_GPU;
+    if (gpu) {
+      if (!['auto', 'auto-no-window', 'host', 'swiftshader_indirect', 'angle_indirect'].includes(gpu)) throw new Error('Unsupported ANDROID_EMULATOR_GPU renderer');
+      args.push('-gpu', gpu);
+    }
     if (process.platform === 'win32' || process.env.DISPLAY === undefined) args.push('-no-window');
     const child = spawn(this.sdkPath('emulator'), args, { stdio: 'ignore', windowsHide: true });
     child.unref();
@@ -107,11 +112,52 @@ export class AndroidRuntimeService {
     return stdout as Buffer;
   }
 
+  async control(serial: string, command: { action: string; x?: number; y?: number; x2?: number; y2?: number; durationMs?: number; text?: string }): Promise<void> {
+    if (!/^emulator-\d+$/.test(serial)) throw new Error('Only local emulator serials are supported');
+    const adb = async (...args: string[]) => { await this.run('adb', ['-s', serial, 'shell', ...args]); };
+    if (command.action === 'open-instagram') return this.launchApp(serial, 'com.instagram.android');
+    if (command.action === 'back' || command.action === 'home' || command.action === 'wake') {
+      await adb('input', 'keyevent', command.action === 'back' ? 'KEYCODE_BACK' : command.action === 'home' ? 'KEYCODE_HOME' : 'KEYCODE_WAKEUP');
+      return;
+    }
+    if (command.action === 'text') {
+      // adb input text has shell metacharacter and Unicode limitations; reject rather than corrupting input.
+      if (!command.text || command.text.length > 250 || !/^[a-zA-Z0-9 @._-]+$/.test(command.text)) throw new Error('ADB text input supports up to 250 ASCII letters, numbers, spaces, @ . _ -; use device keyboard for other characters');
+      await adb('input', 'text', command.text.replace(/ /g, '%s'));
+      return;
+    }
+    if (command.action === 'tap' || command.action === 'swipe') {
+      const image = await this.screenshot(serial);
+      if (image.subarray(1, 4).toString('ascii') !== 'PNG') throw new Error('Cannot determine Android display bounds');
+      const width = image.readUInt32BE(16), height = image.readUInt32BE(20);
+      const valid = (x: unknown, max: number) => Number.isSafeInteger(x) && (x as number) >= 0 && (x as number) < max;
+      if (!valid(command.x, width) || !valid(command.y, height)) throw new Error('Tap position is outside Android display');
+      if (command.action === 'tap') { await adb('input', 'tap', String(command.x), String(command.y)); return; }
+      if (!valid(command.x2, width) || !valid(command.y2, height) || !Number.isSafeInteger(command.durationMs) || (command.durationMs as number) < 100 || (command.durationMs as number) > 2000) throw new Error('Invalid swipe coordinates or duration');
+      await adb('input', 'swipe', String(command.x), String(command.y), String(command.x2), String(command.y2), String(command.durationMs));
+      return;
+    }
+    throw new Error('Unsupported Android control action');
+  }
+
   async launchApp(serial: string, packageName: string): Promise<void> {
     if (!/^emulator-\d+$/.test(serial) || !/^[a-zA-Z][a-zA-Z0-9_.]{1,200}$/.test(packageName)) {
       throw new Error('Invalid emulator serial or package name');
     }
-    await this.run('adb', ['-s', serial, 'shell', 'monkey', '-p', packageName, '-c', 'android.intent.category.LAUNCHER', '1']);
+    if (!await this.packageInstalled(serial, packageName)) throw new Error(`Android app ${packageName} is not installed on this device; install it through the official store with the operator`);
+    const result = await this.run('adb', ['-s', serial, 'shell', 'monkey', '-p', packageName, '-c', 'android.intent.category.LAUNCHER', '1']);
+    if (!/Events injected:\s*1/.test(result)) throw new Error(`Could not launch ${packageName}; review device screen`);
+  }
+
+  async packageInstalled(serial: string, packageName: string): Promise<boolean> {
+    if (!/^emulator-\d+$/.test(serial) || !/^[a-zA-Z][a-zA-Z0-9_.]{1,200}$/.test(packageName)) throw new Error('Invalid emulator serial or package name');
+    try {
+      const { stdout } = await runFile(this.sdkPath('adb'), ['-s', serial, 'shell', 'pm', 'path', packageName], { timeout: 12000, windowsHide: true });
+      return String(stdout).includes('package:');
+    } catch (error: any) {
+      if (Number(error?.code) === 1 && !String(error?.stderr || '').trim()) return false;
+      throw error;
+    }
   }
 }
 

@@ -37,7 +37,7 @@ export function startAndroidQueueWorker() {
       const shutdowns = await androidScheduler.sweepIdle();
       if (recovered || shutdowns) logger.info('Android scheduler sweep', { recovered, shutdowns });
       // Re-enqueue orphan QUEUED records. Duplicate deliveries are safe: status and device lease are checked.
-      const pending = await prisma.androidJob.findMany({ where: { status: 'QUEUED' }, take: 100, orderBy: { createdAt: 'asc' }, select: { id: true } });
+      const pending = await prisma.androidJob.findMany({ where: { status: 'QUEUED', type: 'ANDROID_SMOKE' }, take: 100, orderBy: { createdAt: 'asc' }, select: { id: true } });
       const waiting = await androidQueue.getJobs(['waiting', 'delayed', 'active']);
       const known = new Set(waiting.map(item => item.data.jobId));
       for (const item of pending) if (!known.has(item.id)) await enqueueAndroidJob(item.id);

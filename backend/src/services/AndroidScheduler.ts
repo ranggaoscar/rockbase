@@ -37,6 +37,10 @@ export class AndroidScheduler {
   async run(jobId: string): Promise<AndroidOutcome> {
     const job = await this.prisma.androidJob.findUnique({ where: { id: jobId }, include: { account: true, device: true } });
     if (!job) throw new Error('Android job not found');
+    if (job.type !== 'ANDROID_SMOKE') {
+      // A draft must never be mistaken for a smoke job or traverse the ADB path.
+      return { status: 'SKIPPED', reason: 'Android image publishing is not enabled until identity verification and a tested worker exist' };
+    }
     if (job.status === 'COMPLETED' || job.status === 'INTERRUPTED' || job.status === 'SKIPPED' || job.status === 'FAILED') {
       return { status: 'SKIPPED', reason: `Job already ${job.status}` };
     }

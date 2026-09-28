@@ -12,6 +12,8 @@ const ACCOUNT_PUBLIC_FIELDS = [
   'homeDeviceId',
   'androidHealth',
   'androidHealthReason',
+  'androidLastVerifiedAt',
+  'androidVerifiedUsername',
   'email',
   'status',
   'proxyId',

@@ -49,6 +49,8 @@ model SocialAccount {
   homeDeviceId           String?
   androidHealth          String               @default("HEALTHY")
   androidHealthReason    String?
+  androidLastVerifiedAt DateTime?
+  androidVerifiedUsername String?
   accountPassword        String?
   email                  String?
   status                 String               @default("warming_up")
@@ -115,6 +117,14 @@ model AndroidJob {
   status       String        @default("QUEUED")
   reason       String?
   result       Json?
+  idempotencyKey String?      @unique
+  mediaPath    String?
+  mediaSha256  String?
+  caption      String?
+  approvedAt   DateTime?
+  publishBoundaryAt DateTime?
+  verificationResult String?
+  evidencePath String?
   attempts     Int           @default(0)
   createdAt    DateTime      @default(now())
   startedAt    DateTime?

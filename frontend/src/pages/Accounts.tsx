@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Search, Upload, Plus, Trash2, Play, Square,
   Instagram, Music2, MoreHorizontal, Edit2, ChevronDown,
   Users, ShieldCheck, RefreshCw, KeyRound, Cookie, Globe, Smartphone,
@@ -132,6 +133,7 @@ export default function Accounts() {
   const [groupAccountsLoading, setGroupAccountsLoading] = useState(false)
   const [engineFilter, setEngineFilter] = useState('all')
   const [deviceNames, setDeviceNames] = useState<Record<string, string>>({})
+  const navigate = useNavigate()
 
   const fetchAccounts = useCallback(async () => {
     try {
@@ -847,6 +849,11 @@ export default function Accounts() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
+                        {account.executionEngine === 'android' && account.homeDeviceId && (
+                          <DropdownMenuItem onClick={() => navigate(`/android-farm?device=${account.homeDeviceId}`)}>
+                            <Smartphone className="h-3.5 w-3.5 text-purple-400" /> Open Device
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuItem onClick={() => setCookiePasteTarget(account)}>
                           <Cookie className="h-3.5 w-3.5 text-yellow-400" /> Import Cookies
                         </DropdownMenuItem>

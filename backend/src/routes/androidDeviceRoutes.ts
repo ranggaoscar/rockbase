@@ -4,9 +4,11 @@ import { AuthRequest, requireRole } from '../middleware/auth';
 import { getRockBaseMode } from '../middleware/runtimeMode';
 import { androidDevices, androidMaxConcurrent } from '../services/AndroidDeviceService';
 import { androidRuntime } from '../services/AndroidRuntimeService';
+import { AndroidDeviceLeaseService } from '../services/AndroidDeviceLeaseService';
 
 const router = Router();
 const prisma = new PrismaClient();
+const leases = new AndroidDeviceLeaseService(prisma);
 router.use((_req, res, next) => {
   if (getRockBaseMode() !== 'local' || process.platform !== 'win32') {
     res.status(501).json({ error: 'Android Farm requires Windows Local Mode' });
@@ -60,6 +62,25 @@ router.get('/:id/screenshot', async (req: AuthRequest, res: Response) => {
     res.setHeader('Content-Type', 'image/png');
     res.setHeader('Cache-Control', 'no-store');
     res.send(image);
+  } catch (error) { failure(res, error); }
+});
+
+router.post('/:id/control', async (req: AuthRequest, res: Response) => {
+  const id = String(req.params.id);
+  try {
+    const device = await prisma.androidDevice.findUnique({ where: { id } });
+    if (!device) { res.status(404).json({ error: 'Device not found' }); return; }
+    if (!device.enabled || device.status !== 'READY') { res.status(409).json({ error: 'Device must be enabled and READY for operator control' }); return; }
+    const lease = await leases.acquire(id, `operator:${req.user?.id || 'local'}`);
+    if (!lease) { res.status(409).json({ error: 'Device is leased by a job or needs operator attention' }); return; }
+    try {
+      const serial = await androidRuntime.resolveSerial(device.avdName);
+      if (!serial || !await androidRuntime.health(serial)) throw new Error('Device is not booted and responsive');
+      await lease.assertOwner();
+      await androidRuntime.control(serial, req.body || {});
+      await prisma.androidDevice.updateMany({ where: { id, leaseOwner: lease.ownerId }, data: { idleSince: new Date() } });
+      res.json({ success: true });
+    } finally { await lease.release(); }
   } catch (error) { failure(res, error); }
 });
 

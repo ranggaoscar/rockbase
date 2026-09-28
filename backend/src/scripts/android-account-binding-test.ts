@@ -28,11 +28,14 @@ async function main() {
     const publicAccount = await fetch(base);
     const payload = (await publicAccount.json() as any).account;
     assert.equal(payload.executionEngine, 'android');
-    assert.equal(payload.androidHealth, 'HEALTHY');
+    assert.equal(payload.androidHealth, 'NEEDS_ATTENTION');
     assert.equal(payload.cookies, undefined);
     const blocked = await patch({ androidHealth: 'NEEDS_ATTENTION', androidHealthReason: 'operator review' });
     assert.equal(blocked.status, 200);
     await assert.rejects(() => androidScheduler.submit(account.id), /NEEDS_ATTENTION/);
+    assert.equal((await patch({ androidHealth: 'HEALTHY' })).status, 409);
+    // Synthetic scratch-only identity fixture. No Instagram account is involved.
+    await prisma.socialAccount.update({ where: { id: account.id }, data: { androidLastVerifiedAt: new Date(), androidVerifiedUsername: 'synthetic-binding' } });
     assert.equal((await patch({ androidHealth: 'HEALTHY' })).status, 200);
     const pending = await androidScheduler.submit(account.id);
     assert.equal((await patch({ executionEngine: 'chromium', homeDeviceId: null })).status, 409);

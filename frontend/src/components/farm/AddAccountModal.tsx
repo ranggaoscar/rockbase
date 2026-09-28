@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Plus, Instagram, Music2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Plus, Instagram, Music2, Smartphone, Globe } from 'lucide-react'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
@@ -17,6 +17,16 @@ interface AddAccountModalProps {
   onSuccess: () => void
 }
 
+/** Minimal shape of GET /api/android/devices, used to bind an account to a home device. */
+interface AndroidDeviceOption {
+  id: string
+  name: string
+  status: string
+  enabled?: boolean
+}
+
+type ExecutionEngine = 'chromium' | 'android'
+
 const initialForm = {
   username: '',
   password: '',
@@ -30,9 +40,44 @@ const initialForm = {
 export default function AddAccountModal({ open, onClose, onSuccess }: AddAccountModalProps) {
   const [form, setForm] = useState(initialForm)
   const [loading, setLoading] = useState(false)
+  // Engine binding — offered for Instagram only, the backend rejects Android on other platforms.
+  const [engine, setEngine] = useState<ExecutionEngine>('chromium')
+  const [homeDeviceId, setHomeDeviceId] = useState('')
+  const [devices, setDevices] = useState<AndroidDeviceOption[]>([])
+  const [devicesNote, setDevicesNote] = useState('')
+
+  const enabledDevices = devices.filter((device) => device.enabled !== false)
+  const isAndroid = form.platform === 'Instagram' && engine === 'android'
+
+  // Load registerable devices when the dialog opens; a 501 (server mode) simply leaves the list empty.
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    api.get<{ devices: AndroidDeviceOption[] }>('/android/devices')
+      .then(({ data }) => {
+        if (cancelled) return
+        setDevices(data.devices ?? [])
+        setDevicesNote('')
+      })
+      .catch((err: any) => {
+        if (cancelled) return
+        setDevices([])
+        setDevicesNote(err?.response?.data?.error || 'Android devices are unavailable in this mode')
+      })
+    return () => { cancelled = true }
+  }, [open])
 
   function set(field: keyof typeof initialForm, value: string) {
     setForm((prev) => ({ ...prev, [field]: value }))
+  }
+
+  function setPlatform(value: string) {
+    set('platform', value)
+    // Android accounts are Instagram-only — fall back to Chromium for every other platform.
+    if (value !== 'Instagram') {
+      setEngine('chromium')
+      setHomeDeviceId('')
+    }
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -41,20 +86,35 @@ export default function AddAccountModal({ open, onClose, onSuccess }: AddAccount
       toast({ title: 'Username and platform are required', variant: 'destructive' })
       return
     }
+    if (isAndroid && !homeDeviceId) {
+      toast({ title: 'Home device required', description: 'Pick the Android device that owns this account.', variant: 'destructive' })
+      return
+    }
 
     setLoading(true)
     try {
-      await api.post('/accounts', {
+      const payload: Record<string, unknown> = {
         username: form.username.replace('@', ''),
-        password: form.password || undefined,
         platform: form.platform,
-        email: form.email || undefined,
-        proxy: form.proxy || undefined,
         brandTag: form.brandTag || undefined,
         notes: form.notes || undefined,
-      })
-      toast.success('Account added', `@${form.username} added to the farm.`)
+      }
+
+      if (isAndroid) {
+        // Android accounts sign in manually on the device: no password, email or proxy is sent.
+        payload.executionEngine = 'android'
+        payload.homeDeviceId = homeDeviceId
+      } else {
+        payload.password = form.password || undefined
+        payload.email = form.email || undefined
+        payload.proxy = form.proxy || undefined
+      }
+
+      await api.post('/accounts', payload)
+      toast.success('Account added', `@${form.username} added to the farm${isAndroid ? ' (Android engine)' : ''}.`)
       setForm(initialForm)
+      setEngine('chromium')
+      setHomeDeviceId('')
       onSuccess()
       onClose()
     } catch (err: any) {
@@ -79,7 +139,7 @@ export default function AddAccountModal({ open, onClose, onSuccess }: AddAccount
           {/* Platform */}
           <div className="space-y-1.5">
             <Label>Platform</Label>
-            <Select value={form.platform} onValueChange={(v) => set('platform', v)}>
+            <Select value={form.platform} onValueChange={setPlatform}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
@@ -100,6 +160,66 @@ export default function AddAccountModal({ open, onClose, onSuccess }: AddAccount
             </Select>
           </div>
 
+          {/* Execution engine — Instagram only */}
+          {form.platform === 'Instagram' && (
+            <div className="space-y-1.5">
+              <Label htmlFor="acc-engine">Execution Engine</Label>
+              <Select
+                value={engine}
+                onValueChange={(v) => {
+                  const next = v as ExecutionEngine
+                  setEngine(next)
+                  if (next !== 'android') setHomeDeviceId('')
+                }}
+              >
+                <SelectTrigger id="acc-engine">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="chromium">
+                    <div className="flex items-center gap-2">
+                      <Globe className="h-3.5 w-3.5 text-blue-400" />
+                      Chromium (browser)
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="android" disabled={enabledDevices.length === 0}>
+                    <div className="flex items-center gap-2">
+                      <Smartphone className="h-3.5 w-3.5 text-purple-400" />
+                      Android (local device)
+                    </div>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              {engine === 'android' && enabledDevices.length === 0 && (
+                <p className="text-[11px] text-yellow-400">
+                  No enabled Android device registered{devicesNote ? ` — ${devicesNote}` : ''}. Register one in Android Farm first.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Home device — Android engine only */}
+          {isAndroid && (
+            <div className="space-y-1.5">
+              <Label htmlFor="acc-home-device">Home Device</Label>
+              <Select value={homeDeviceId} onValueChange={setHomeDeviceId}>
+                <SelectTrigger id="acc-home-device">
+                  <SelectValue placeholder="Select Android device" />
+                </SelectTrigger>
+                <SelectContent>
+                  {enabledDevices.map((device) => (
+                    <SelectItem key={device.id} value={device.id}>
+                      {device.name} · {device.status}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">
+                This account runs only on the selected device. Work is rejected while the device is busy or leased.
+              </p>
+            </div>
+          )}
+
           {/* Username / Password row */}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
@@ -112,45 +232,63 @@ export default function AddAccountModal({ open, onClose, onSuccess }: AddAccount
                 required
               />
             </div>
+            {!isAndroid && (
+              <div className="space-y-1.5">
+                <Label htmlFor="acc-password">Password</Label>
+                <Input
+                  id="acc-password"
+                  type="password"
+                  placeholder="Account password"
+                  value={form.password}
+                  onChange={(e) => set('password', e.target.value)}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Android onboarding note: the sign-in stays manual on the device. */}
+          {isAndroid && (
+            <div className="rounded-md border border-blue-500/20 bg-blue-500/10 p-3 text-[11px] text-blue-300">
+              <p className="font-bold">Android onboarding</p>
+              <p className="mt-1">
+                Login stays manual on the device: open the account, then use Control Device to sign in yourself.
+                RockBase stores no password here, does not move browser cookies onto Android, and never logs in
+                automatically.
+              </p>
+            </div>
+          )}
+
+          {/* Email — browser engine only */}
+          {!isAndroid && (
             <div className="space-y-1.5">
-              <Label htmlFor="acc-password">Password</Label>
+              <Label htmlFor="acc-email">Email used to register</Label>
               <Input
-                id="acc-password"
-                type="password"
-                placeholder="Account password"
-                value={form.password}
-                onChange={(e) => set('password', e.target.value)}
+                id="acc-email"
+                type="email"
+                placeholder="account@email.com"
+                value={form.email}
+                onChange={(e) => set('email', e.target.value)}
               />
             </div>
-          </div>
+          )}
 
-          {/* Email */}
-          <div className="space-y-1.5">
-            <Label htmlFor="acc-email">Email used to register</Label>
-            <Input
-              id="acc-email"
-              type="email"
-              placeholder="account@email.com"
-              value={form.email}
-              onChange={(e) => set('email', e.target.value)}
-            />
-          </div>
-
-          {/* Proxy */}
-          <div className="space-y-1.5">
-            <Label htmlFor="acc-proxy">
-              Proxy{' '}
-              <span className="text-muted-foreground font-normal">
-                (host:port:user:pass)
-              </span>
-            </Label>
-            <Input
-              id="acc-proxy"
-              placeholder="123.45.67.89:8000:user:pass"
-              value={form.proxy}
-              onChange={(e) => set('proxy', e.target.value)}
-            />
-          </div>
+          {/* Proxy — browser engine only */}
+          {!isAndroid && (
+            <div className="space-y-1.5">
+              <Label htmlFor="acc-proxy">
+                Proxy{' '}
+                <span className="text-muted-foreground font-normal">
+                  (host:port:user:pass)
+                </span>
+              </Label>
+              <Input
+                id="acc-proxy"
+                placeholder="123.45.67.89:8000:user:pass"
+                value={form.proxy}
+                onChange={(e) => set('proxy', e.target.value)}
+              />
+            </div>
+          )}
 
           {/* Brand Tag */}
           <div className="space-y-1.5">

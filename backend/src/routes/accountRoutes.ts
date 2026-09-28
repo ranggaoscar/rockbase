@@ -203,6 +203,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 
   try {
     const normalized = normalizeAccountInput({ username, platform });
+    if (executionEngine === 'android' && password) { res.status(400).json({ error: 'Android login is manual; do not submit or store an Instagram password' }); return; }
     // Encrypt account password if provided
     let encryptedPassword: string | undefined;
     if (password) {
@@ -218,6 +219,10 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       workspaceId: 'workspace-default',
     };
     if (executionEngine !== undefined || homeDeviceId !== undefined) Object.assign(data, await validateEngine(executionEngine ?? 'chromium', homeDeviceId, normalized.platform));
+    if (data.executionEngine === 'android') {
+      data.androidHealth = 'NEEDS_ATTENTION';
+      data.androidHealthReason = 'Manual Instagram login and identity verification required';
+    }
 
     if (encryptedPassword) data.accountPassword = encryptedPassword;
     if (email) data.email = email;
@@ -270,6 +275,12 @@ router.patch('/:id', async (req: AuthRequest, res: Response) => {
         if (browserManager.hasContext(id)) { res.status(409).json({ error: 'Close the active browser session before switching engine or device; saved cookies are preserved' }); return; }
         const pending = await prisma.androidJob.count({ where: { accountId: id, status: { in: ['QUEUED', 'RUNNING'] } } });
         if (pending) { res.status(409).json({ error: 'Account has pending Android jobs; wait for them before changing device' }); return; }
+        if (data.executionEngine === 'android') {
+          data.androidHealth = 'NEEDS_ATTENTION';
+          data.androidHealthReason = 'Verify Instagram identity on this home device';
+          data.androidVerifiedUsername = null;
+          data.androidLastVerifiedAt = null;
+        }
       }
     }
     if (req.body.androidHealth !== undefined) {
@@ -277,11 +288,28 @@ router.patch('/:id', async (req: AuthRequest, res: Response) => {
       if (!['HEALTHY', 'NEEDS_ATTENTION', 'DISABLED'].includes(req.body.androidHealth)) {
         res.status(400).json({ error: 'Invalid Android health state' }); return;
       }
+      if (req.body.androidHealth === 'HEALTHY') {
+        const verified = await prisma.socialAccount.findUnique({ where: { id }, select: { androidLastVerifiedAt: true } });
+        if (!verified?.androidLastVerifiedAt || data.androidLastVerifiedAt === null) { res.status(409).json({ error: 'Verify Instagram identity on the home device first' }); return; }
+      }
       data.androidHealth = req.body.androidHealth;
       data.androidHealthReason = req.body.androidHealth === 'HEALTHY' ? null : String(req.body.androidHealthReason || 'Operator review required').slice(0, 500);
     }
 
+    if (data.username) {
+      const current = await prisma.socialAccount.findUnique({ where: { id }, select: { username: true, executionEngine: true } });
+      if (current?.executionEngine === 'android' && current.username.toLowerCase() !== data.username.toLowerCase()) {
+        if (await prisma.androidJob.count({ where: { accountId: id, status: { in: ['QUEUED', 'RUNNING'] } } })) { res.status(409).json({ error: 'Pending Android jobs must finish before changing username' }); return; }
+        data.androidHealth = 'NEEDS_ATTENTION';
+        data.androidHealthReason = 'Username changed; verify Instagram identity again';
+        data.androidLastVerifiedAt = null;
+        data.androidVerifiedUsername = null;
+      }
+    }
     if (password) {
+      if (data.executionEngine === 'android' || (await prisma.socialAccount.findUnique({ where: { id }, select: { executionEngine: true } }))?.executionEngine === 'android') {
+        res.status(400).json({ error: 'Android login is manual; do not submit or store an Instagram password' }); return;
+      }
       data.accountPassword = encrypt(String(password));
     }
 
