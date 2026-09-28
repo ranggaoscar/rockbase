@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Search, Upload, Plus, Trash2, Play, Square,
   Instagram, Music2, MoreHorizontal, Edit2, ChevronDown,
-  Users, ShieldCheck, RefreshCw, KeyRound, Cookie,
+  Users, ShieldCheck, RefreshCw, KeyRound, Cookie, Globe, Smartphone,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -40,6 +40,13 @@ interface Account {
   sessionHealth?: string
   sessionHealthReason?: string
   sessionHealthCheckedAt?: string
+  // Phase 2 engine routing. Optional so a Phase 1 payload still renders.
+  executionEngine?: string | null
+  homeDeviceId?: string | null
+  accountHealth?: string | null
+  androidHealth?: string | null
+  accountHealthReason?: string | null
+  androidHealthReason?: string | null
 }
 
 interface HealthSummary {
@@ -123,6 +130,8 @@ export default function Accounts() {
   const [availableGroupAccounts, setAvailableGroupAccounts] = useState<Account[]>([])
   const [groupsLoading, setGroupsLoading] = useState(false)
   const [groupAccountsLoading, setGroupAccountsLoading] = useState(false)
+  const [engineFilter, setEngineFilter] = useState('all')
+  const [deviceNames, setDeviceNames] = useState<Record<string, string>>({})
 
   const fetchAccounts = useCallback(async () => {
     try {
@@ -153,10 +162,18 @@ export default function Accounts() {
     fetchGroups()
   }, [fetchAccounts, fetchGroups])
 
+  // Best-effort device-name lookup for Android accounts; server mode answers 501 and is ignored.
+  useEffect(() => {
+    api.get<{ devices: { id: string; name: string }[] }>('/android/devices')
+      .then(({ data }) => setDeviceNames(Object.fromEntries((data.devices ?? []).map((device) => [device.id, device.name]))))
+      .catch(() => {})
+  }, [])
+
   // ── Derived lists ────────────────────────────────────────────────────────
   const brands = [...new Set(accounts.map((a) => a.brandTag).filter(Boolean))] as string[]
   const instagramCount = useMemo(() => accounts.filter((a) => a.platform === 'Instagram').length, [accounts])
   const tiktokCount = useMemo(() => accounts.filter((a) => a.platform === 'TikTok').length, [accounts])
+  const androidCount = useMemo(() => accounts.filter((a) => a.executionEngine === 'android').length, [accounts])
 
   const filtered = accounts.filter((a) => {
     const matchSearch = !search || a.username.toLowerCase().includes(search.toLowerCase()) ||
@@ -165,7 +182,8 @@ export default function Accounts() {
     const matchStatus   = statusFilter === 'all' || a.status === statusFilter
     const matchBrand    = brandFilter === 'all' || a.brandTag === brandFilter
     const matchSessionHealth = sessionHealthFilter === 'all' || (a.sessionHealth || 'UNKNOWN') === sessionHealthFilter
-    return matchSearch && matchPlatform && matchStatus && matchBrand && matchSessionHealth
+    const matchEngine = engineFilter === 'all' || (a.executionEngine || 'chromium') === engineFilter
+    return matchSearch && matchPlatform && matchStatus && matchBrand && matchSessionHealth && matchEngine
   })
 
   // ── Selection helpers ────────────────────────────────────────────────────
@@ -358,7 +376,7 @@ export default function Accounts() {
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             {accounts.length} accounts · {accounts.filter(a => a.status === 'active').length} active ·{' '}
-            {accounts.filter(a => a.status === 'warming_up').length} warming up
+            {accounts.filter(a => a.status === 'warming_up').length} warming up · {androidCount} android
           </p>
         </div>
         <div className="flex gap-2">
@@ -375,6 +393,9 @@ export default function Accounts() {
         <p className="font-bold">Onboarding Akun</p>
         <p className="text-xs mt-1">
           Login akun dilakukan manual satu per satu. Jangan bulk login. Setelah login, jalankan Check Session untuk memastikan cookies tersimpan.
+        </p>
+        <p className="text-xs mt-1">
+          Engine Android: cookies browser TIDAK dihapus dan tetap tersimpan, tapi login di device Android tetap manual — RockBase tidak memindahkan cookies ke Android dan tidak login otomatis.
         </p>
       </div>
 
@@ -591,6 +612,16 @@ export default function Accounts() {
             <SelectItem value="UNKNOWN">Unknown</SelectItem>
           </SelectContent>
         </Select>
+        <Select value={engineFilter} onValueChange={setEngineFilter}>
+          <SelectTrigger className="w-40 h-9">
+            <SelectValue placeholder="Engine" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Engines</SelectItem>
+            <SelectItem value="chromium">Chromium</SelectItem>
+            <SelectItem value="android">Android</SelectItem>
+          </SelectContent>
+        </Select>
         <span className="ml-auto self-center text-xs text-muted-foreground">
           {filtered.length} of {accounts.length}
         </span>
@@ -661,6 +692,7 @@ export default function Accounts() {
                 </TableHead>
                 <TableHead>Username</TableHead>
                 <TableHead>Platform</TableHead>
+                <TableHead>Engine</TableHead>
                 <TableHead>Email</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Session Health</TableHead>
@@ -701,6 +733,36 @@ export default function Accounts() {
                       }
                       <span className="text-muted-foreground">{account.platform}</span>
                     </div>
+                  </TableCell>
+
+                  {/* Engine + home device + Android health */}
+                  <TableCell>
+                    {(() => {
+                      const isAndroid = account.executionEngine === 'android'
+                      const androidHealth = account.accountHealth ?? account.androidHealth ?? null
+                      return (
+                        <div className="flex flex-col gap-1">
+                          <Badge variant={isAndroid ? 'purple' : 'outline'} className="w-fit gap-1 text-[10px]">
+                            {isAndroid ? <Smartphone className="h-3 w-3" /> : <Globe className="h-3 w-3" />}
+                            {isAndroid ? 'Android' : 'Chromium'}
+                          </Badge>
+                          {isAndroid && (
+                            <span className="text-[10px] text-muted-foreground" title={account.homeDeviceId ?? undefined}>
+                              {account.homeDeviceId ? (deviceNames[account.homeDeviceId] ?? 'assigned device') : 'No home device'}
+                            </span>
+                          )}
+                          {androidHealth && (
+                            <Badge
+                              variant={healthBadgeVariant[androidHealth] ?? 'outline'}
+                              className="w-fit text-[10px]"
+                              title={account.accountHealthReason ?? account.androidHealthReason ?? undefined}
+                            >
+                              {healthLabel[androidHealth] ?? androidHealth}
+                            </Badge>
+                          )}
+                        </div>
+                      )
+                    })()}
                   </TableCell>
 
                   {/* Email */}

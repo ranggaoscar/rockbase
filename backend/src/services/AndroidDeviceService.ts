@@ -4,7 +4,7 @@ import { androidRuntime } from './AndroidRuntimeService';
 const prisma = new PrismaClient();
 export const androidMaxConcurrent = () => {
   const value = Number(process.env.ANDROID_MAX_CONCURRENT ?? 3);
-  if (!Number.isSafeInteger(value) || value < 1 || value > 25) throw new Error('ANDROID_MAX_CONCURRENT must be an integer between 1 and 25');
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error('ANDROID_MAX_CONCURRENT must be a positive integer');
   return value;
 };
 
@@ -22,14 +22,21 @@ export const androidDevices = {
     const devices = await prisma.androidDevice.findMany({ include: { _count: { select: { accounts: true } } }, orderBy: { name: 'asc' } });
     // Reconcile persisted state after an emulator or RockBase process was shut down elsewhere.
     for (const device of devices) {
-      if (locks.has(device.id)) continue;
-      const serial = await androidRuntime.resolveSerial(device.avdName);
-      const ready = serial ? await androidRuntime.health(serial) : false;
-      const status = !serial ? 'OFFLINE' : ready ? (device.status === 'BUSY' ? 'BUSY' : 'READY') : 'BOOTING';
-      if (device.status !== status || device.adbSerial !== serial) {
-        await prisma.androidDevice.update({ where: { id: device.id }, data: { status, adbSerial: serial, lastHealthcheckAt: new Date() } });
-        device.status = status;
-        device.adbSerial = serial;
+      if (locks.has(device.id) || (device.status === 'BOOTING' && device.leaseOwner && device.leaseExpiresAt && device.leaseExpiresAt > new Date())) continue;
+      try {
+        const serial = await androidRuntime.resolveSerial(device.avdName);
+        const ready = serial ? await androidRuntime.health(serial) : false;
+        const status = ['ATTENTION', 'ERROR'].includes(device.status) ? device.status
+          : !serial ? 'OFFLINE' : ready ? (device.status === 'BUSY' ? 'BUSY' : 'READY') : 'BOOTING';
+        if (device.status !== status || device.adbSerial !== serial) {
+          await prisma.androidDevice.update({ where: { id: device.id }, data: { status, adbSerial: serial, lastHealthcheckAt: new Date() } });
+          device.status = status;
+          device.adbSerial = serial;
+        }
+      } catch (error: any) {
+        device.status = 'ERROR';
+        device.lastError = `ADB unavailable: ${error.message || String(error)}`;
+        await prisma.androidDevice.update({ where: { id: device.id }, data: { status: 'ERROR', lastError: device.lastError } });
       }
     }
     return devices;
@@ -48,20 +55,23 @@ export const androidDevices = {
     return prisma.androidDevice.create({ data: { name, avdName, ramMb, cpuCores } });
   },
 
-  async refresh(id: string) {
+  async refresh(id: string, clearAttention = false) {
     return exclusive(id, async () => {
       const device = await prisma.androidDevice.findUniqueOrThrow({ where: { id } });
       const serial = await androidRuntime.resolveSerial(device.avdName);
       const ready = serial ? await androidRuntime.health(serial) : false;
-      const status = !serial ? 'OFFLINE' : ready ? (device.status === 'BUSY' ? 'BUSY' : 'READY') : 'BOOTING';
-      return prisma.androidDevice.update({ where: { id }, data: { adbSerial: serial, status, lastHealthcheckAt: new Date() } });
+      const status = !clearAttention && ['ATTENTION', 'ERROR'].includes(device.status) ? device.status
+        : !serial ? 'OFFLINE' : ready ? (device.status === 'BUSY' ? 'BUSY' : 'READY') : 'BOOTING';
+      return prisma.androidDevice.update({ where: { id }, data: { adbSerial: serial, status,
+        lastError: clearAttention && ready ? null : device.lastError, lastHealthcheckAt: new Date() } });
     });
   },
 
-  async start(id: string) {
+  async start(id: string, ownerId?: string) {
     return exclusive(id, async () => {
       const device = await prisma.androidDevice.findUniqueOrThrow({ where: { id } });
       if (!device.enabled) throw new Error('Device is disabled');
+      if (device.leaseOwner && device.leaseExpiresAt && device.leaseExpiresAt > new Date() && device.leaseOwner !== ownerId) throw new Error('Device is leased by another job');
       const existing = await androidRuntime.resolveSerial(device.avdName);
       if (existing) throw new Error(`AVD already running as ${existing}; run Health Check`);
       // Reservations are taken before the first await, including boots not yet visible to ADB.
@@ -70,11 +80,15 @@ export const androidDevices = {
       let bootAttempted = false;
       try {
         const running = await androidRuntime.connected();
-        const booting = await prisma.androidDevice.count({ where: { status: 'BOOTING' } });
-        if (Math.max(running.length, booting) + bootReservations.size > androidMaxConcurrent()) {
-          throw new Error(`Android concurrent limit reached (${androidMaxConcurrent()})`);
-        }
-        await prisma.androidDevice.update({ where: { id }, data: { status: 'BOOTING', adbSerial: null } });
+        await prisma.$transaction(async (tx) => {
+          const active = await tx.androidDevice.count({ where: { status: { in: ['BOOTING', 'READY', 'BUSY', 'ATTENTION'] } } });
+          const represented = await tx.androidDevice.count({ where: { id: { in: [...bootReservations] }, status: { in: ['BOOTING', 'READY', 'BUSY', 'ATTENTION'] } } });
+          if (Math.max(running.length, active) + bootReservations.size - represented > androidMaxConcurrent()) {
+            throw new Error(`Android concurrent limit reached (${androidMaxConcurrent()})`);
+          }
+          const claimed = await tx.androidDevice.updateMany({ where: { id, status: { in: ['OFFLINE', 'ERROR'] } }, data: { status: 'BOOTING', adbSerial: null, lastError: null } });
+          if (claimed.count !== 1) throw new Error('Device is not offline');
+        });
         bootAttempted = true;
         const serial = await androidRuntime.start(device.avdName, device.ramMb, device.cpuCores);
         return prisma.androidDevice.update({ where: { id }, data: { status: 'READY', adbSerial: serial, lastBootAt: new Date(), lastHealthcheckAt: new Date() } });
@@ -91,13 +105,14 @@ export const androidDevices = {
     });
   },
 
-  async stop(id: string) {
+  async stop(id: string, ownerId?: string, reason = 'operator') {
     return exclusive(id, async () => {
       const device = await prisma.androidDevice.findUniqueOrThrow({ where: { id } });
       if (device.status === 'BUSY') throw new Error('Device is busy; cannot stop an active job');
+      if (device.leaseOwner && device.leaseExpiresAt && device.leaseExpiresAt > new Date() && device.leaseOwner !== ownerId) throw new Error('Device is leased by another job');
       const serial = await androidRuntime.resolveSerial(device.avdName);
       if (serial) await androidRuntime.stop(serial);
-      return prisma.androidDevice.update({ where: { id }, data: { status: 'OFFLINE', adbSerial: null, lastHealthcheckAt: new Date() } });
+      return prisma.androidDevice.update({ where: { id }, data: { status: 'OFFLINE', adbSerial: null, idleSince: null, lastShutdownReason: reason, lastHealthcheckAt: new Date() } });
     });
   },
 

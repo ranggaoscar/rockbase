@@ -47,6 +47,8 @@ model SocialAccount {
   username               String
   executionEngine        String               @default("chromium")
   homeDeviceId           String?
+  androidHealth          String               @default("HEALTHY")
+  androidHealthReason    String?
   accountPassword        String?
   email                  String?
   status                 String               @default("warming_up")
@@ -72,6 +74,7 @@ model SocialAccount {
   workspace              Workspace            @relation(fields: [workspaceId], references: [id])
   homeDevice             AndroidDevice?       @relation(fields: [homeDeviceId], references: [id], onDelete: SetNull)
   warmingLogs            WarmingLog[]
+  androidJobs            AndroidJob[]
 
   @@index([homeDeviceId])
 }
@@ -90,6 +93,38 @@ model AndroidDevice {
   createdAt         DateTime        @default(now())
   updatedAt         DateTime        @updatedAt
   accounts          SocialAccount[]
+  jobs              AndroidJob[]
+  leaseOwner        String?
+  leaseJobId        String?
+  leaseExpiresAt    DateTime?
+  leaseHeartbeatAt  DateTime?
+  idleSince         DateTime?
+  lastBootDurationMs Int?
+  lastError         String?
+  lastShutdownReason String?
+
+  @@index([status, idleSince])
+  @@index([leaseExpiresAt])
+}
+
+model AndroidJob {
+  id           String        @id @default(uuid())
+  accountId    String
+  deviceId     String
+  type         String        @default("ANDROID_SMOKE")
+  status       String        @default("QUEUED")
+  reason       String?
+  result       Json?
+  attempts     Int           @default(0)
+  createdAt    DateTime      @default(now())
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  updatedAt    DateTime      @updatedAt
+  account      SocialAccount @relation(fields: [accountId], references: [id])
+  device       AndroidDevice @relation(fields: [deviceId], references: [id])
+
+  @@index([status, createdAt])
+  @@index([deviceId, status, createdAt])
 }
 
 model AccountGroup {

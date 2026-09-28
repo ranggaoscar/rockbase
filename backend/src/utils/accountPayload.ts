@@ -10,6 +10,8 @@ const ACCOUNT_PUBLIC_FIELDS = [
   'username',
   'executionEngine',
   'homeDeviceId',
+  'androidHealth',
+  'androidHealthReason',
   'email',
   'status',
   'proxyId',

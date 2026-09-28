@@ -26,6 +26,7 @@ require('./queue/postingWorker');
 require('./queue/scheduledPostConsumer');
 require('./queue/analyticsWorker');
 require('./queue/engagementWorker');
+require('./queue/androidDeviceWorker').startAndroidQueueWorker();
 
 const prisma = new PrismaClient();
 const connection = {

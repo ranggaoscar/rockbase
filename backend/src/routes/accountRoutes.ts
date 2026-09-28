@@ -9,6 +9,7 @@ import * as fs from 'fs';
 import { sessionHealthService } from '../services/SessionHealthService';
 import { accountPublicPayload, accountPublicSelect, normalizeAccountInput, normalizeImportedCookies } from '../utils/accountPayload';
 import { getRockBaseMode } from '../middleware/runtimeMode';
+import { browserManager } from '../services/BrowserManager';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -264,6 +265,20 @@ router.patch('/:id', async (req: AuthRequest, res: Response) => {
       Object.assign(data, await validateEngine(req.body.executionEngine ?? current.executionEngine,
         req.body.homeDeviceId !== undefined ? req.body.homeDeviceId : (req.body.executionEngine === 'chromium' ? null : current.homeDeviceId),
         data.platform ?? current.platform));
+      if (data.executionEngine !== current.executionEngine || data.homeDeviceId !== current.homeDeviceId) {
+        if (req.user?.role !== 'Admin') { res.status(403).json({ error: 'Admin required to change execution assignment' }); return; }
+        if (browserManager.hasContext(id)) { res.status(409).json({ error: 'Close the active browser session before switching engine or device; saved cookies are preserved' }); return; }
+        const pending = await prisma.androidJob.count({ where: { accountId: id, status: { in: ['QUEUED', 'RUNNING'] } } });
+        if (pending) { res.status(409).json({ error: 'Account has pending Android jobs; wait for them before changing device' }); return; }
+      }
+    }
+    if (req.body.androidHealth !== undefined) {
+      if (req.user?.role !== 'Admin') { res.status(403).json({ error: 'Admin required to change Android health' }); return; }
+      if (!['HEALTHY', 'NEEDS_ATTENTION', 'DISABLED'].includes(req.body.androidHealth)) {
+        res.status(400).json({ error: 'Invalid Android health state' }); return;
+      }
+      data.androidHealth = req.body.androidHealth;
+      data.androidHealthReason = req.body.androidHealth === 'HEALTHY' ? null : String(req.body.androidHealthReason || 'Operator review required').slice(0, 500);
     }
 
     if (password) {
@@ -286,6 +301,10 @@ router.patch('/:id', async (req: AuthRequest, res: Response) => {
 router.delete('/:id', async (req: AuthRequest, res: Response) => {
   const id = String(req.params.id);
   try {
+    if (await prisma.androidJob.count({ where: { accountId: id } })) {
+      res.status(409).json({ error: 'Android job history exists; disable this account instead of deleting its audit trail' });
+      return;
+    }
     await prisma.socialAccount.delete({ where: { id } });
     res.json({ success: true });
   } catch (err) {

@@ -99,6 +99,7 @@ import activityRoutes from './routes/activityRoutes';
 import rockSocialRoutes from './routes/rockSocialRoutes';
 import hermesShadowCampaignRoutes from './routes/hermesShadowCampaignRoutes';
 import androidDeviceRoutes from './routes/androidDeviceRoutes';
+import androidJobRoutes from './routes/androidJobRoutes';
 app.get('/livez', (_req, res) => {
   res.status(200).json({ status: 'live' });
 });
@@ -149,6 +150,7 @@ app.use('/api/activity', activityRoutes);
 app.use('/api/rock-social', rockSocialRoutes);
 app.use('/api/system', systemRoutes); // Improvement #9 — log access
 app.use('/api/android/devices', androidDeviceRoutes);
+app.use('/api/android/jobs', androidJobRoutes);
 
 // Health check
 app.get('/api/health', async (req, res) => {
@@ -216,6 +218,10 @@ app.get('/api/health', async (req, res) => {
 // Initialize Workers
 const workerMode = getWorkerMode();
 const workerStartupPlan = getWorkerStartupPlan(isAutomationEnabled(), workerMode);
+if (runtimeMode === 'local' && workerMode === 'internal') {
+  // Android smoke jobs are infrastructure checks, not social automation.
+  require('./queue/androidDeviceWorker').startAndroidQueueWorker();
+}
 console.log(`[Server] Worker mode: ${workerMode}`);
 if (workerStartupPlan === 'disabled') {
   console.log('[Server] Automation disabled; workers will not start.');
@@ -395,6 +401,10 @@ function gracefulShutdown(signal: string) {
   campaignSchedulerService.stop();
   scheduledPostConsumerService.stop();
   sessionHealthScheduler.stop();
+  if (runtimeMode === 'local' && workerMode === 'internal') {
+    void require('./queue/androidDeviceWorker').closeAndroidQueueWorker().catch((error: unknown) =>
+      logger.error('Android worker shutdown failed', { error: String(error) }));
+  }
 
   // Close socket.io
   server.close(() => {

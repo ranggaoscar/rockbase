@@ -56,6 +56,9 @@ export class BrowserManager {
    */
   public async getContext(accountId: string): Promise<BrowserContext> {
     assertAutomationEnabled();
+    const assignment = await prisma.socialAccount.findUnique({ where: { id: accountId }, select: { executionEngine: true } });
+    if (!assignment) throw new Error(`Account ${accountId} not found`);
+    requireChromiumEngine(assignment);
     if (!this.browser) await this.initBrowser();
     
     if (this.activeContexts.has(accountId)) {

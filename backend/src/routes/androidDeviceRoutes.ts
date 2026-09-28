@@ -1,11 +1,12 @@
 import { Router, Response } from 'express';
-import { Prisma } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { AuthRequest, requireRole } from '../middleware/auth';
 import { getRockBaseMode } from '../middleware/runtimeMode';
 import { androidDevices, androidMaxConcurrent } from '../services/AndroidDeviceService';
 import { androidRuntime } from '../services/AndroidRuntimeService';
 
 const router = Router();
+const prisma = new PrismaClient();
 router.use((_req, res, next) => {
   if (getRockBaseMode() !== 'local' || process.platform !== 'win32') {
     res.status(501).json({ error: 'Android Farm requires Windows Local Mode' });
@@ -31,7 +32,15 @@ router.get('/tooling', async (_req, res) => {
   res.json({ ...tooling, avds, maxConcurrent: androidMaxConcurrent() });
 });
 router.get('/', async (_req, res) => {
-  try { res.json({ devices: await androidDevices.list() }); } catch (error) { failure(res, error); }
+  try {
+    const devices = await androidDevices.list();
+    const queued = await prisma.androidJob.groupBy({ by: ['deviceId'], where: { status: 'QUEUED' }, _count: { id: true } });
+    const counts = new Map(queued.map(item => [item.deviceId, item._count.id]));
+    const running = await androidRuntime.connected().catch(() => null);
+    res.json({ devices: devices.map(device => ({ ...device, queueCount: counts.get(device.id) || 0,
+      lease: device.leaseOwner ? { ownerId: device.leaseOwner, jobId: device.leaseJobId, expiresAt: device.leaseExpiresAt } : null })),
+      running: running?.length ?? null, maxConcurrent: androidMaxConcurrent() });
+  } catch (error) { failure(res, error); }
 });
 router.post('/', async (req: AuthRequest, res: Response) => {
   try { res.status(201).json({ device: await androidDevices.register(req.body || {}) }); } catch (error) { failure(res, error); }
@@ -40,7 +49,7 @@ for (const action of ['start', 'stop', 'restart', 'health'] as const) {
   router.post('/:id/' + action, async (req: AuthRequest, res: Response) => {
     try {
       const id = String(req.params.id);
-      const device = action === 'health' ? await androidDevices.refresh(id) : await androidDevices[action](id);
+      const device = action === 'health' ? await androidDevices.refresh(id, true) : await androidDevices[action](id);
       res.json({ device });
     } catch (error) { failure(res, error); }
   });
