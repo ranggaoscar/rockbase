@@ -28,6 +28,7 @@ async function main() {
   await prisma.socialAccount.deleteMany({ where: { homeDeviceId: { in: staleIds } } });
   await prisma.androidDevice.deleteMany({ where: { id: { in: staleIds } } });
   const device = await prisma.androidDevice.create({ data: { name: `Identity-Test-${Date.now()}`, avdName: online ? avd : 'No-Such-AVD', status: 'READY' } });
+  let onlineOutcome = '';
   const account = await prisma.socialAccount.create({ data: { workspaceId: 'workspace-default', platform: 'Instagram',
     username: 'identity.wiring.test', executionEngine: 'android', homeDeviceId: device.id,
     androidHealth: 'NEEDS_ATTENTION', androidHealthReason: 'test fixture' } });
@@ -51,13 +52,20 @@ async function main() {
     assert.match(((await offline.json()) as any).error, /Start the home device/);
 
     if (online) {
-      // 3. Device online but Instagram not installed → 409 "not installed" (no guessed UI work).
+      // 3. Device online: fail closed, never 500 and never HEALTHY. With the official app absent the
+      //    endpoint reports "not installed"; with it installed and signed in to a different account
+      //    it reports the mismatch (or the unexpected screen, when the device is mid-flow). The
+      //    fixture account name can never match a real one, so a 2xx here would be a bug.
       await prisma.androidDevice.update({ where: { id: device.id }, data: { avdName: avd } });
-      const notInstalled = await verify();
-      assert.equal(notInstalled.status, 409);
-      assert.match(((await notInstalled.json()) as any).error, /not installed/);
+      const onlineResult = await verify();
+      const body = (await onlineResult.json()) as any;
+      assert.equal(onlineResult.status, 409, `online device must answer 409, got ${onlineResult.status}: ${JSON.stringify(body)}`);
+      assert.ok(typeof body.error === 'string' && body.error.length > 0, 'a 409 must explain what the operator has to do');
+      const after = await prisma.socialAccount.findUniqueOrThrow({ where: { id: account.id } });
+      assert.notEqual(after.androidHealth, 'HEALTHY', 'an unmatched device must never mark the account HEALTHY');
+      onlineOutcome = body.error;
     }
-    console.log(JSON.stringify({ status: 'PASS', onlineDevicePath: online, checks: online ? 3 : 2 }));
+    console.log(JSON.stringify({ status: 'PASS', onlineDevicePath: online, checks: online ? 3 : 2, onlineOutcome }));
   } finally {
     server.close();
     await prisma.socialAccount.deleteMany({ where: { id: { in: [account.id] } } });

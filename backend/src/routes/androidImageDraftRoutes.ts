@@ -72,6 +72,13 @@ router.post('/:id/approve', async (req, res) => {
   if (job.publishBoundaryAt || ['PUBLISHING', 'AMBIGUOUS', 'COMPLETED'].includes(job.status)) {
     res.status(409).json({ error: `Job already crossed the publish boundary (${job.status}); Share is never re-attempted — verify the account manually` }); return;
   }
+  if (job.status === 'READY_FOR_REAL_POST') {
+    // Preparation is already complete on the device: re-approving must not rebuild the post, and
+    // Share stays unpressed — publishing needs its own explicit approval.
+    res.json({ job, reused: true, prepared: true,
+      message: 'Preparation is already complete on the device; Share requires an explicit publish approval and was not pressed' });
+    return;
+  }
   if (['QUEUED', 'RUNNING', 'READY_TO_PUBLISH'].includes(job.status)) { res.json({ job, reused: true }); return; }
   if (job.status !== 'DRAFT') { res.status(409).json({ error: `Job is ${job.status}; only drafts can be approved` }); return; }
   const account = job.account;

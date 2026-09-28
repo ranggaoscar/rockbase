@@ -14,6 +14,7 @@
     "test:idempotency-foundation": "ts-node --files src/scripts/idempotency-foundation-test.ts",
     "test:android-scheduler": "ts-node --files src/scripts/android-scheduler-test.ts",
     "test:android-instagram": "ts-node --files src/scripts/android-instagram-worker-test.ts",
+    "test:android-instagram-prep": "ts-node --files src/scripts/android-instagram-preparation-test.ts",
     "migrate-safe": "ts-node src/scripts/backup-now.ts && npx prisma migrate dev",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

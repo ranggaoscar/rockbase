@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!-- SYNTHESIZED, NOT A REAL DUMP: built from the strings the official app shows on this build. The sign-in screen's resource-ids were never dumped (inspection happened while signed in), so this fixture deliberately carries no invented resource-ids. -->
+<hierarchy rotation="0">
+  <node index="0" text="Username, email or mobile number" resource-id="" class="android.widget.EditText" package="com.instagram.android" content-desc="" clickable="true" enabled="true" bounds="[60,900][1020,1000]" />
+  <node index="1" text="Password" resource-id="" class="android.widget.EditText" package="com.instagram.android" content-desc="" clickable="true" enabled="true" bounds="[60,1020][1020,1120]" />
+  <node index="2" text="Log in" resource-id="" class="android.widget.Button" package="com.instagram.android" content-desc="" clickable="true" enabled="true" bounds="[60,1200][1020,1300]" />
+  <node index="3" text="Forgot password?" resource-id="" class="android.widget.Button" package="com.instagram.android" content-desc="" clickable="true" enabled="true" bounds="[60,1330][1020,1400]" />
+  <node index="4" text="Create new account" resource-id="" class="android.widget.Button" package="com.instagram.android" content-desc="" clickable="true" enabled="true" bounds="[60,1500][1020,1600]" />
+</hierarchy>

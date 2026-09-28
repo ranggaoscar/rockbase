@@ -13,7 +13,9 @@ import { browserManager } from '../services/BrowserManager';
 import { androidRuntime } from '../services/AndroidRuntimeService';
 import { AndroidDeviceLeaseService } from '../services/AndroidDeviceLeaseService';
 import { AdbInstagramUiAdapter } from '../services/instagram/AdbInstagramUiAdapter';
-import { InstagramUiNotInspectedError } from '../services/instagram/InstagramUiAdapter';
+import {
+  InstagramScreenExpectationError, InstagramSecurityError, InstagramUiNotInspectedError,
+} from '../services/instagram/InstagramUiAdapter';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -394,6 +396,8 @@ router.post('/:id/android/verify-identity', async (req: AuthRequest, res: Respon
     }
   } catch (err: any) {
     if (err instanceof InstagramUiNotInspectedError) { res.status(501).json({ error: err.message }); return; }
+    if (err instanceof InstagramSecurityError) { res.status(409).json({ error: err.message, state: err.securityState }); return; }
+    if (err instanceof InstagramScreenExpectationError) { res.status(409).json({ error: err.message }); return; }
     if (/is not installed/.test(err?.message || '')) { res.status(409).json({ error: err.message }); return; }
     console.error('Android identity verification error:', err);
     res.status(500).json({ error: 'Identity verification failed', details: err?.message });

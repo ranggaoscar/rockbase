@@ -1,0 +1,6 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!-- SYNTHESIZED, NOT A REAL DUMP: built from the strings the official app shows on this build. The sign-in screen's resource-ids were never dumped (inspection happened while signed in), so this fixture deliberately carries no invented resource-ids. -->
+<hierarchy rotation="0">
+  <node index="0" text="Something RockBase has never seen" resource-id="" class="android.widget.TextView" package="com.example.other" content-desc="" clickable="false" enabled="true" bounds="[60,900][1020,1000]" />
+  <node index="1" text="" resource-id="" class="android.widget.FrameLayout" package="com.example.other" content-desc="" clickable="false" enabled="true" bounds="[0,0][1080,2400]" />
+</hierarchy>

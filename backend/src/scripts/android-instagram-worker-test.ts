@@ -1,5 +1,9 @@
 /**
- * Phase 3B — Instagram Android worker tests.
+ * Phase 3B/3C — Instagram Android worker tests for the PUBLISH-APPROVED path.
+ *
+ * This suite deliberately enables the publish gate (ANDROID_PUBLISH_APPROVED=true) so the Share
+ * boundary, post-Share verification and the fail-closed paths stay covered. The preparation-only
+ * path (Share never pressed) is covered by android-instagram-preparation-test.ts.
  *
  * Exercises the publish state machine, fail-closed boundaries and idempotency semantics with a
  * scripted fake UI adapter — no real device and no real Instagram are touched. The scratch DB must
@@ -18,7 +22,7 @@ import {
   InstagramPublishVerification, InstagramSecurityState, InstagramUiAdapter,
 } from '../services/instagram/InstagramUiAdapter';
 
-type Step = 'ensure' | 'open' | 'select' | 'caption' | 'boundary' | 'share' | 'verify';
+type Step = 'ensure' | 'open' | 'select' | 'caption' | 'boundary' | 'prepare' | 'share' | 'verify';
 
 /** Scripted adapter: every Instagram interaction is programmable and recorded. */
 class FakeAdapter implements InstagramUiAdapter {
@@ -28,6 +32,8 @@ class FakeAdapter implements InstagramUiAdapter {
   errors: Partial<Record<Step, Error>> = {};
   beforeOpen: (() => Promise<void>) | null = null;
   sharePresses = 0;
+  prepareChecks = 0;
+  preparedCaption = 'Phase 3B disposable test caption';
   evidenceCount = 0;
   steps: string[] = [];
 
@@ -35,9 +41,23 @@ class FakeAdapter implements InstagramUiAdapter {
   async detectSecurityState() { const state = this.security.shift() ?? 'OK'; this.steps.push(`security:${state}`); return state; }
   async readActiveUsername() { this.steps.push('username'); return this.username; }
   async openCreatePost() { this.steps.push('open'); if (this.beforeOpen) await this.beforeOpen(); if (this.errors.open) throw this.errors.open; }
-  async selectStagedImage(_remote: string) { this.steps.push('select'); if (this.errors.select) throw this.errors.select; }
+  async selectStagedImage(_remote: string) {
+    this.steps.push('select');
+    if (this.errors.select) throw this.errors.select;
+    return { selectedTile: 'Unselected Photo thumbnail created on September 28, 2026 3:45 PM', selectedImageCount: 1 };
+  }
   async enterCaption(_caption: string) { this.steps.push('caption'); if (this.errors.caption) throw this.errors.caption; }
   async reachPublishBoundary() { this.steps.push('boundary'); if (this.errors.boundary) throw this.errors.boundary; }
+  async verifyPreparedState(_expected: { caption: string }) {
+    this.steps.push('verify-prepared');
+    this.prepareChecks++;
+    if (this.errors.prepare) throw this.errors.prepare;
+    return {
+      ok: true, detail: 'prepared',
+      shareSelector: 'com.instagram.android:id/share_footer_button (content-desc "Share", class android.widget.Button)',
+      captionText: this.preparedCaption, selectedImageCount: 1,
+    };
+  }
   async pressShare() { this.steps.push('share'); this.sharePresses++; if (this.errors.share) throw this.errors.share; }
   async verifyPublished(_at: Date) { this.steps.push('verify'); if (this.errors.verify) throw this.errors.verify; return this.verification; }
   async captureEvidence(tag: string) { this.evidenceCount++; return path.join(TMP, `evidence-${tag.replace(/[^a-z0-9-]+/gi, '-')}.png`); }
@@ -98,6 +118,10 @@ async function main() {
     throw new Error('Scratch DB + Local Mode required');
   }
   await prisma.androidJob.count(); // fail fast when the DB is not migrated
+
+  // This suite covers the explicitly approved publish path: without this gate the worker stops at
+  // READY_FOR_REAL_POST and never presses Share (see android-instagram-preparation-test.ts).
+  process.env.ANDROID_PUBLISH_APPROVED = 'true';
 
   mediaPath = path.join(TMP, 'rockbase-instagram-worker-media.png');
   await fsp.writeFile(mediaPath, PNG);

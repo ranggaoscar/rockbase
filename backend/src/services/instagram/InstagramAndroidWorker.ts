@@ -4,11 +4,12 @@ import { PrismaClient } from '@prisma/client';
 import { logActivity } from '../ActivityLogService';
 import { androidMedia } from '../AndroidMediaService';
 import {
-  InstagramIdentityMismatchError, InstagramSecurityError, InstagramUiAdapter,
-  InstagramUiNotInspectedError,
+  InstagramIdentityMismatchError, InstagramPublishNotApprovedError, InstagramScreenExpectationError,
+  InstagramSecurityError, InstagramUiAdapter, InstagramUiNotInspectedError,
 } from './InstagramUiAdapter';
 
-export type InstagramOutcomeStatus = 'COMPLETED' | 'FAILED' | 'AMBIGUOUS' | 'NEEDS_ATTENTION' | 'SKIPPED';
+export type InstagramOutcomeStatus =
+  | 'COMPLETED' | 'FAILED' | 'AMBIGUOUS' | 'NEEDS_ATTENTION' | 'SKIPPED' | 'READY_FOR_REAL_POST';
 
 export interface InstagramJobOutcome {
   status: InstagramOutcomeStatus;
@@ -25,20 +26,31 @@ const normalized = (username: string) => username.trim().replace(/^@/, '').toLow
  * The Instagram Android publish pipeline for a single image post.
  *
  * Runs only while the scheduler holds the device lease and the device is claimed BUSY, so the
- * device is never shared with operator control or another job. Responsibilities for Phase 3B:
+ * device is never shared with operator control or another job. Responsibilities:
  * verifyIdentity → stageSingleImage → openCreatePost → selectImage → enterCaption →
- * reachPublishBoundary → publishOnce → verifyResult. Nothing else.
+ * reachPublishBoundary → [publishOnce → verifyResult]. Nothing else.
  *
  * Safety contract:
  * - identity must MATCH the account bound to the job; anything else is NEEDS_ATTENTION, no post;
  * - login walls / checkpoints / security prompts are NEVER bypassed: stop, one evidence artifact,
  *   NEEDS_ATTENTION, no retries;
+ * - preparation-only by default: the flow stops at READY_FOR_REAL_POST with the post fully built on
+ *   the final Share screen and Share never pressed. Crossing the boundary additionally requires
+ *   ANDROID_PUBLISH_APPROVED=true (an explicit operator publish approval);
  * - the Share boundary is crossed at most once per job, enforced by an atomic publishBoundaryAt
  *   claim; a worker crash or re-delivery after the boundary can never press Share again;
  * - SUCCESS is recorded only from explicit post-publication verification; anything unverifiable
  *   after the boundary is AMBIGUOUS (fail closed), never auto-retried.
  */
 export class InstagramAndroidWorker {
+  /**
+   * Publish approval is read per run (never cached): with it unset the worker can only prepare.
+   * It must stay unset until pressShare is implemented and an operator grants publish approval.
+   */
+  private get publishApproved(): boolean {
+    return process.env.ANDROID_PUBLISH_APPROVED === 'true';
+  }
+
   constructor(
     private readonly prisma: PrismaClient,
     private readonly adapter: InstagramUiAdapter,
@@ -53,6 +65,14 @@ export class InstagramAndroidWorker {
     if (job.type !== 'ANDROID_IMAGE_POST') throw new Error('Instagram worker received a non image-post job');
     if (job.status === 'COMPLETED') {
       return { status: 'COMPLETED', reason: 'Job already completed', result: (job.result as Record<string, unknown>) || undefined };
+    }
+    if (job.status === 'READY_FOR_REAL_POST') {
+      // Re-delivery of an already prepared post must never rebuild or publish it.
+      return {
+        status: 'READY_FOR_REAL_POST',
+        reason: 'Post is already prepared and awaits publish approval; the device was left untouched',
+        result: (job.result as Record<string, unknown>) || undefined,
+      };
     }
     if (job.publishBoundaryAt) {
       // The Share boundary was already crossed (by this or an earlier attempt). Never again.
@@ -115,16 +135,62 @@ export class InstagramAndroidWorker {
       // 4. Build the post, checking for security surfaces after every navigation step.
       await this.adapter.openCreatePost();
       await this.assertNoSecurityPrompt('create-post');
-      await this.adapter.selectStagedImage(staged.remote);
+      const selection = await this.adapter.selectStagedImage(staged.remote);
       await this.assertNoSecurityPrompt('select-image');
+      this.activity(account.workspaceId, account.id, jobId, 'select-image', 'completed', {
+        selectedTile: selection.selectedTile, selectedImageCount: selection.selectedImageCount,
+      });
       await this.adapter.enterCaption(job.caption);
       await this.assertNoSecurityPrompt('caption');
       await this.adapter.reachPublishBoundary();
       await this.assertNoSecurityPrompt('share-screen');
+
+      // 5. Preparation-only stop: the post is built up to the final Share screen and nothing is
+      //    published. Share is a separate, explicitly approved decision.
+      if (!this.publishApproved) {
+        const prepared = await this.adapter.verifyPreparedState({ caption: job.caption });
+        const preparedAt = new Date();
+        const holdMinutes = Number(process.env.ANDROID_PREPARED_HOLD_MINUTES || process.env.ANDROID_IDLE_GRACE_MINUTES || 30);
+        const result = {
+          preparedAt: preparedAt.toISOString(),
+          detectedUsername: detected,
+          selectedImage: selection.selectedTile,
+          selectedImageCount: selection.selectedImageCount,
+          caption: job.caption,
+          captionVerified: prepared.captionText === job.caption,
+          shareSelector: prepared.shareSelector,
+          shareInvocationCount: 0,
+          publishApproved: false,
+          hold: {
+            until: new Date(preparedAt.getTime() + holdMinutes * 60000).toISOString(),
+            minutes: holdMinutes,
+            mechanism: 'device idle grace: the prepared screen is held while the AVD stays booted',
+          },
+          evidence: null as string | null,
+        };
+        if (!prepared.ok) {
+          const evidence = await this.evidence(job, 'preparation-incomplete');
+          result.evidence = evidence;
+          await this.finish(jobId, 'NEEDS_ATTENTION', 'PREPARATION_INCOMPLETE',
+            `Post preparation did not reach a verifiable final Share screen: ${prepared.detail}`, result, evidence);
+          this.activity(account.workspaceId, account.id, jobId, 'prepare', 'incomplete', { detail: prepared.detail });
+          return { status: 'NEEDS_ATTENTION', reason: prepared.detail, result };
+        }
+        const evidence = await this.evidence(job, 'ready-for-real-post');
+        result.evidence = evidence;
+        await this.finish(jobId, 'READY_FOR_REAL_POST', 'PREPARED',
+          'Post prepared up to the final Share screen; publish approval not granted, Share was not pressed',
+          result, evidence);
+        this.activity(account.workspaceId, account.id, jobId, 'prepare', 'ready-for-real-post', {
+          detectedUsername: detected, captionVerified: true, shareSelector: prepared.shareSelector, shareInvocationCount: 0,
+        });
+        return { status: 'READY_FOR_REAL_POST', result };
+      }
+
       await this.prisma.androidJob.updateMany({ where: { id: jobId, publishBoundaryAt: null }, data: { status: 'READY_TO_PUBLISH' } });
       this.activity(account.workspaceId, account.id, jobId, 'publish-boundary', 'ready', {});
 
-      // 5. Cross the boundary exactly once (atomic claim; losers never press Share).
+      // 6. Cross the boundary exactly once (atomic claim; losers never press Share).
       const crossedAt = new Date();
       const crossed = await this.prisma.androidJob.updateMany({ where: { id: jobId, publishBoundaryAt: null },
         data: { status: 'PUBLISHING', publishBoundaryAt: crossedAt } });
@@ -136,7 +202,7 @@ export class InstagramAndroidWorker {
       let shareError: Error | null = null;
       try { await this.adapter.pressShare(); } catch (error: any) { shareError = error; }
 
-      // 6. Verify the result — the only source of SUCCESS.
+      // 7. Verify the result — the only source of SUCCESS.
       let verification: { published: boolean | null; detail?: string };
       try { verification = await this.adapter.verifyPublished(crossedAt); }
       catch (error: any) { verification = { published: null, detail: `verification failed: ${error.message}` }; }
@@ -174,6 +240,21 @@ export class InstagramAndroidWorker {
       if (error instanceof InstagramUiNotInspectedError) {
         // A RockBase gap, not an account problem: leave account health alone, fail closed.
         await this.finish(jobId, 'NEEDS_ATTENTION', 'IG_UI_INSPECTION_REQUIRED', error.message, null, null);
+        return { status: 'NEEDS_ATTENTION', reason: error.message };
+      }
+      if (error instanceof InstagramScreenExpectationError) {
+        // The device is not where the flow expects it (or a post-condition failed). Nothing was
+        // published and the screen needs a human look — never blind-tapped, never retried.
+        const evidence = await this.evidence(job, 'screen-expectation');
+        await this.finish(jobId, 'NEEDS_ATTENTION', 'SCREEN_EXPECTATION_FAILED', error.message, null, evidence);
+        this.activity(account.workspaceId, account.id, jobId, 'prepare', 'screen-expectation-failed', { reason: error.message });
+        return { status: 'NEEDS_ATTENTION', reason: error.message };
+      }
+      if (error instanceof InstagramPublishNotApprovedError) {
+        // Defensive: the preparation gate is checked before the boundary, so this can only happen
+        // when someone forced publish approval without an implementation behind it.
+        const evidence = await this.evidence(job, 'publish-not-approved');
+        await this.finish(jobId, 'NEEDS_ATTENTION', 'PUBLISH_NOT_APPROVED', error.message, null, evidence);
         return { status: 'NEEDS_ATTENTION', reason: error.message };
       }
       return this.failBeforeShare(job, error?.message || String(error));

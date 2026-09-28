@@ -12,7 +12,7 @@ export const androidIdleGraceMinutes = () => {
   return value;
 };
 
-export type AndroidOutcome = { status: 'COMPLETED' | 'WAITING' | 'SKIPPED' | 'FAILED' | 'AMBIGUOUS' | 'NEEDS_ATTENTION'; reason?: string; result?: Record<string, unknown> };
+export type AndroidOutcome = { status: 'COMPLETED' | 'WAITING' | 'SKIPPED' | 'FAILED' | 'AMBIGUOUS' | 'NEEDS_ATTENTION' | 'READY_FOR_REAL_POST'; reason?: string; result?: Record<string, unknown> };
 
 export interface InstagramRunner { run(jobId: string): Promise<InstagramJobOutcome>; }
 export type InstagramRunnerFactory = (serial: string) => InstagramRunner;
@@ -52,7 +52,8 @@ export class AndroidScheduler {
     if (job.type === 'ANDROID_IMAGE_POST') {
       // Drafts are operator work-in-progress: they must never traverse the ADB path before approval,
       // and a job that crossed the publish boundary is never re-attempted automatically.
-      if (job.status === 'NEEDS_ATTENTION' || job.status === 'AMBIGUOUS' || job.status === 'PUBLISHING') {
+      if (job.status === 'NEEDS_ATTENTION' || job.status === 'AMBIGUOUS' || job.status === 'PUBLISHING'
+        || job.status === 'READY_FOR_REAL_POST') {
         return { status: 'SKIPPED', reason: `Job already ${job.status}` };
       }
       if (job.publishBoundaryAt) return { status: 'AMBIGUOUS', reason: 'Publish boundary already crossed; manual verification required' };
@@ -71,10 +72,17 @@ export class AndroidScheduler {
       await this.prisma.androidJob.update({ where: { id: jobId }, data: { status: 'SKIPPED', reason, finishedAt: new Date() } });
       return { status: 'SKIPPED', reason };
     }
+    if (job.type === 'ANDROID_IMAGE_POST') {
+      // A prepared post reserves its device for a bounded window: another job must not navigate away
+      // from the screen that is waiting for a publish decision. The job waits instead of failing.
+      const hold = await this.preparedHold(job.deviceId);
+      if (hold) return this.wait(jobId, `Device is holding a prepared post until ${hold.until.toISOString()}; publish approval or hold expiry required`);
+    }
     const lease = await this.leases.acquire(job.deviceId, jobId);
     if (!lease) return this.wait(jobId, 'Device leased or needs operator attention');
     const started = Date.now();
     let busy = false;
+    let prepared = false;
     try {
       let serial = await this.runtime.resolveSerial(job.device.avdName);
       if (!serial) {
@@ -106,6 +114,7 @@ export class AndroidScheduler {
         // The Instagram worker owns its statuses (READY_TO_PUBLISH / PUBLISHING / final) and the
         // Share boundary; the scheduler only guarantees exclusive lease + a claimed BUSY device.
         const outcome = await this.instagramFactory(serial).run(jobId);
+        prepared = outcome.status === 'READY_FOR_REAL_POST';
         this.activity(jobId, account.workspaceId, account.id, 'image-post', outcome.status.toLowerCase(), { reason: outcome.reason ?? null });
         return { status: outcome.status, reason: outcome.reason, result: outcome.result };
       }
@@ -130,10 +139,51 @@ export class AndroidScheduler {
       if (busy) {
         const pending = await this.prisma.androidJob.count({ where: { deviceId: job.deviceId, status: 'QUEUED' } });
         await this.prisma.androidDevice.updateMany({ where: { id: job.deviceId, leaseOwner: lease.ownerId, status: 'BUSY' },
-          data: { status: 'READY', idleSince: pending ? null : new Date() } });
+          // A prepared post keeps the device booted for its hold window instead of starting the
+          // idle countdown immediately; sweepPreparedHolds() starts that countdown when it expires.
+          data: { status: 'READY', idleSince: pending || prepared ? null : new Date() } });
       }
       await lease.release();
     }
+  }
+
+  /** Whether this device is currently reserving a prepared post, and until when. */
+  private async preparedHold(deviceId: string): Promise<{ until: Date } | null> {
+    const jobs = await this.prisma.androidJob.findMany({
+      where: { deviceId, status: 'READY_FOR_REAL_POST' }, select: { result: true },
+    });
+    for (const job of jobs) {
+      const raw = (job.result as any)?.hold?.until;
+      const until = raw ? new Date(raw) : null;
+      if (until && !Number.isNaN(until.getTime()) && until.getTime() > Date.now()) return { until };
+    }
+    return null;
+  }
+
+  /**
+   * Release expired prepared holds so the normal idle grace can reclaim the device. Bounded by
+   * construction: a prepared post never reserves a device forever.
+   */
+  async sweepPreparedHolds(): Promise<number> {
+    const jobs = await this.prisma.androidJob.findMany({
+      where: { status: 'READY_FOR_REAL_POST' }, select: { id: true, deviceId: true, result: true },
+    });
+    let released = 0;
+    for (const job of jobs) {
+      const raw = (job.result as any)?.hold?.until;
+      const until = raw ? new Date(raw) : null;
+      if (!until || Number.isNaN(until.getTime()) || until.getTime() > Date.now()) continue;
+      const device = await this.prisma.androidDevice.findUnique({ where: { id: job.deviceId } });
+      if (!device || device.status !== 'READY' || device.idleSince) continue;
+      // Queued work does not keep the reservation alive: once the window closes the prepared screen
+      // is abandoned on purpose, otherwise a re-queued job could reserve a device indefinitely.
+      await this.prisma.androidDevice.update({ where: { id: job.deviceId }, data: { idleSince: new Date() } });
+      this.activity(job.id, 'workspace-default', '', 'prepared-hold', 'released', {
+        holdUntil: until.toISOString(), note: 'prepared screen released; the normal idle grace now applies',
+      });
+      released++;
+    }
+    return released;
   }
 
   private async wait(jobId: string, reason: string): Promise<AndroidOutcome> {
@@ -142,6 +192,7 @@ export class AndroidScheduler {
   }
 
   async sweepIdle() {
+    await this.sweepPreparedHolds();
     const cutoff = new Date(Date.now() - androidIdleGraceMinutes() * 60_000);
     const candidates = await this.prisma.androidDevice.findMany({ where: { status: 'READY', idleSince: { lte: cutoff } } });
     let shutdowns = 0;
