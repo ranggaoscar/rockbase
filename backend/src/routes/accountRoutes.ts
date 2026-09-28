@@ -10,6 +10,10 @@ import { sessionHealthService } from '../services/SessionHealthService';
 import { accountPublicPayload, accountPublicSelect, normalizeAccountInput, normalizeImportedCookies } from '../utils/accountPayload';
 import { getRockBaseMode } from '../middleware/runtimeMode';
 import { browserManager } from '../services/BrowserManager';
+import { androidRuntime } from '../services/AndroidRuntimeService';
+import { AndroidDeviceLeaseService } from '../services/AndroidDeviceLeaseService';
+import { AdbInstagramUiAdapter } from '../services/instagram/AdbInstagramUiAdapter';
+import { InstagramUiNotInspectedError } from '../services/instagram/InstagramUiAdapter';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -337,6 +341,62 @@ router.delete('/:id', async (req: AuthRequest, res: Response) => {
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Failed to delete account' });
+  }
+});
+
+// POST /api/accounts/:id/android/verify-identity — read the signed-in Instagram account from the
+// home device and bind it to this account. Operator-triggered; RockBase never automates login,
+// checkpoints or 2FA. Only a strict username match marks the account HEALTHY.
+router.post('/:id/android/verify-identity', async (req: AuthRequest, res: Response) => {
+  const id = String(req.params.id);
+  try {
+    if (req.user?.role !== 'Admin') { res.status(403).json({ error: 'Admin required to verify Android identity' }); return; }
+    const account = await prisma.socialAccount.findUnique({ where: { id }, include: { homeDevice: true } });
+    if (!account) { res.status(404).json({ error: 'Account not found' }); return; }
+    if (account.platform !== 'Instagram' || account.executionEngine !== 'android' || !account.homeDevice) {
+      res.status(400).json({ error: 'Not an Android Instagram account with a home device' }); return;
+    }
+    const device = account.homeDevice;
+    if (!device.enabled) { res.status(409).json({ error: 'Home device disabled' }); return; }
+    const serial = await androidRuntime.resolveSerial(device.avdName).catch(() => null);
+    if (!serial) { res.status(409).json({ error: 'Start the home device from Android Farm and log in to Instagram first' }); return; }
+    const lease = await new AndroidDeviceLeaseService(prisma).acquire(device.id, `verify:${account.id}`);
+    if (!lease) { res.status(409).json({ error: 'Device is busy (leased by a job); wait for it to finish' }); return; }
+    try {
+      await lease.assertOwner();
+      const adapter = new AdbInstagramUiAdapter(serial);
+      await adapter.ensureInstagramForeground();
+      const state = await adapter.detectSecurityState();
+      if (state !== 'OK') {
+        const evidence = await adapter.captureEvidence(`identity-${state.toLowerCase()}`).catch(() => null);
+        await prisma.socialAccount.update({ where: { id },
+          data: { androidHealth: 'NEEDS_ATTENTION', androidHealthReason: `Instagram shows ${state}; operator action required` } });
+        res.status(409).json({ error: `Instagram shows ${state}; finish it manually on the device, then verify again`, state, evidence }); return;
+      }
+      const detectedRaw = await adapter.readActiveUsername();
+      if (!detectedRaw) {
+        const evidence = await adapter.captureEvidence('identity-unknown').catch(() => null);
+        res.status(409).json({ error: 'Could not read the signed-in Instagram account from the UI', evidence }); return;
+      }
+      const detected = detectedRaw.replace(/^@/, '');
+      const expected = (account.username || '').replace(/^@/, '');
+      if (detected.toLowerCase() !== expected.toLowerCase()) {
+        await prisma.socialAccount.update({ where: { id },
+          data: { androidHealth: 'NEEDS_ATTENTION', androidHealthReason: `ACCOUNT_MISMATCH: device shows @${detected}, account expects @${expected}`.slice(0, 500) } });
+        res.status(409).json({ error: `ACCOUNT_MISMATCH: device shows @${detected} but this account expects @${expected}`, detected }); return;
+      }
+      const updated = await prisma.socialAccount.update({ where: { id },
+        data: { androidVerifiedUsername: detected, androidLastVerifiedAt: new Date(), androidHealth: 'HEALTHY', androidHealthReason: null },
+        select: accountPublicSelect as any });
+      res.json({ account: accountPublicPayload(updated as any), detected });
+    } finally {
+      await lease.release().catch(() => undefined);
+    }
+  } catch (err: any) {
+    if (err instanceof InstagramUiNotInspectedError) { res.status(501).json({ error: err.message }); return; }
+    if (/is not installed/.test(err?.message || '')) { res.status(409).json({ error: err.message }); return; }
+    console.error('Android identity verification error:', err);
+    res.status(500).json({ error: 'Identity verification failed', details: err?.message });
   }
 });
 

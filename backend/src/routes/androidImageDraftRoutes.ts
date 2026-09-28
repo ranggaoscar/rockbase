@@ -67,9 +67,28 @@ router.post('/', upload.single('media'), async (req, res) => {
 });
 
 router.post('/:id/approve', async (req, res) => {
-  const job = await prisma.androidJob.findUnique({ where: { id: String(req.params.id) } });
+  const job = await prisma.androidJob.findUnique({ where: { id: String(req.params.id) }, include: { account: true, device: true } });
   if (!job || job.type !== 'ANDROID_IMAGE_POST') { res.status(404).json({ error: 'Android image draft not found' }); return; }
-  res.status(409).json({ error: 'Publishing is disabled until the official Instagram app, designated test account, identity verifier and worker are validated. Draft retained; no job dispatched.' });
+  if (job.publishBoundaryAt || ['PUBLISHING', 'AMBIGUOUS', 'COMPLETED'].includes(job.status)) {
+    res.status(409).json({ error: `Job already crossed the publish boundary (${job.status}); Share is never re-attempted — verify the account manually` }); return;
+  }
+  if (['QUEUED', 'RUNNING', 'READY_TO_PUBLISH'].includes(job.status)) { res.json({ job, reused: true }); return; }
+  if (job.status !== 'DRAFT') { res.status(409).json({ error: `Job is ${job.status}; only drafts can be approved` }); return; }
+  const account = job.account;
+  if (account.platform !== 'Instagram' || account.executionEngine !== 'android' || !account.homeDeviceId || account.homeDeviceId !== job.deviceId) {
+    res.status(409).json({ error: 'Android Instagram account with its original home device required' }); return;
+  }
+  if (!account.androidLastVerifiedAt || !account.androidVerifiedUsername || account.androidHealth !== 'HEALTHY') {
+    res.status(409).json({ error: 'Verify the Instagram identity on the home device first; account health must be HEALTHY' }); return;
+  }
+  if (!job.device.enabled) { res.status(409).json({ error: 'Home device disabled' }); return; }
+  if (!job.mediaPath || !job.caption) { res.status(409).json({ error: 'Draft is missing media or caption' }); return; }
+  const approved = await prisma.androidJob.update({ where: { id: job.id }, data: { status: 'QUEUED', approvedAt: new Date(), reason: null } });
+  // Best-effort fire-and-forget enqueue; the worker sweep (every 30 s) re-enqueues approved
+  // QUEUED jobs that are not in the queue, so approval never depends on Redis being reachable here.
+  void (await import('../queue/androidDeviceWorker')).enqueueAndroidJob(job.id)
+    .catch((error) => console.error('Android image job enqueue failed:', error));
+  res.json({ job: approved, reused: false });
 });
 
 export default router;

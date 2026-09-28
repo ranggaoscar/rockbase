@@ -3,6 +3,8 @@ import { AndroidDeviceLeaseService } from './AndroidDeviceLeaseService';
 import { androidDevices, androidMaxConcurrent } from './AndroidDeviceService';
 import { androidRuntime } from './AndroidRuntimeService';
 import { logActivity } from './ActivityLogService';
+import { AdbInstagramUiAdapter } from './instagram/AdbInstagramUiAdapter';
+import { InstagramAndroidWorker, InstagramJobOutcome } from './instagram/InstagramAndroidWorker';
 
 export const androidIdleGraceMinutes = () => {
   const value = Number(process.env.ANDROID_IDLE_GRACE_MINUTES ?? 30);
@@ -10,7 +12,10 @@ export const androidIdleGraceMinutes = () => {
   return value;
 };
 
-export type AndroidOutcome = { status: 'COMPLETED' | 'WAITING' | 'SKIPPED' | 'FAILED'; reason?: string; result?: Record<string, unknown> };
+export type AndroidOutcome = { status: 'COMPLETED' | 'WAITING' | 'SKIPPED' | 'FAILED' | 'AMBIGUOUS' | 'NEEDS_ATTENTION'; reason?: string; result?: Record<string, unknown> };
+
+export interface InstagramRunner { run(jobId: string): Promise<InstagramJobOutcome>; }
+export type InstagramRunnerFactory = (serial: string) => InstagramRunner;
 
 type DeviceController = Pick<typeof androidDevices, 'start' | 'stop' | 'refresh'>;
 type Runtime = Pick<typeof androidRuntime, 'resolveSerial' | 'health' | 'screenshot' | 'connected'>;
@@ -18,7 +23,8 @@ type Runtime = Pick<typeof androidRuntime, 'resolveSerial' | 'health' | 'screens
 export class AndroidScheduler {
   private leases: AndroidDeviceLeaseService;
   constructor(private readonly prisma: PrismaClient, private readonly devices: DeviceController = androidDevices,
-    private readonly runtime: Runtime = androidRuntime, leases?: AndroidDeviceLeaseService) {
+    private readonly runtime: Runtime = androidRuntime, leases?: AndroidDeviceLeaseService,
+    private readonly instagramFactory: InstagramRunnerFactory = (serial) => new InstagramAndroidWorker(prisma, new AdbInstagramUiAdapter(serial), serial)) {
     this.leases = leases ?? new AndroidDeviceLeaseService(prisma);
   }
 
@@ -37,12 +43,22 @@ export class AndroidScheduler {
   async run(jobId: string): Promise<AndroidOutcome> {
     const job = await this.prisma.androidJob.findUnique({ where: { id: jobId }, include: { account: true, device: true } });
     if (!job) throw new Error('Android job not found');
-    if (job.type !== 'ANDROID_SMOKE') {
-      // A draft must never be mistaken for a smoke job or traverse the ADB path.
-      return { status: 'SKIPPED', reason: 'Android image publishing is not enabled until identity verification and a tested worker exist' };
+    if (job.type !== 'ANDROID_SMOKE' && job.type !== 'ANDROID_IMAGE_POST') {
+      return { status: 'SKIPPED', reason: 'Unsupported Android job type' };
     }
     if (job.status === 'COMPLETED' || job.status === 'INTERRUPTED' || job.status === 'SKIPPED' || job.status === 'FAILED') {
       return { status: 'SKIPPED', reason: `Job already ${job.status}` };
+    }
+    if (job.type === 'ANDROID_IMAGE_POST') {
+      // Drafts are operator work-in-progress: they must never traverse the ADB path before approval,
+      // and a job that crossed the publish boundary is never re-attempted automatically.
+      if (job.status === 'NEEDS_ATTENTION' || job.status === 'AMBIGUOUS' || job.status === 'PUBLISHING') {
+        return { status: 'SKIPPED', reason: `Job already ${job.status}` };
+      }
+      if (job.publishBoundaryAt) return { status: 'AMBIGUOUS', reason: 'Publish boundary already crossed; manual verification required' };
+      if (job.status !== 'QUEUED' || !job.approvedAt) {
+        return { status: 'SKIPPED', reason: 'Image post awaits a verified Instagram identity and operator approval' };
+      }
     }
     const account = job.account;
     if (account.executionEngine !== 'android' || !account.homeDeviceId || account.homeDeviceId !== job.deviceId || account.androidHealth !== 'HEALTHY') {
@@ -71,7 +87,8 @@ export class AndroidScheduler {
           await this.prisma.androidDevice.update({ where: { id: job.deviceId }, data: { lastBootDurationMs: Date.now() - started } });
           this.activity(jobId, account.workspaceId, account.id, 'boot', 'completed', { bootMs: Date.now() - started });
         } catch (error: any) {
-          if (/concurrent limit|boot slots|not offline|database is locked|P2034/i.test(error?.message || '')) {
+          // "already running" covers a transient resolveSerial miss: the AVD is up, so wait instead of failing the job.
+          if (/concurrent limit|boot slots|not offline|already running|database is locked|P2034/i.test(error?.message || '')) {
             return this.wait(jobId, `Waiting for concurrency slot (${androidMaxConcurrent()} max)`);
           }
           throw error;
@@ -85,6 +102,13 @@ export class AndroidScheduler {
         data: { status: 'BUSY', idleSince: null } });
       if (!claimed.count) throw new Error('Device no longer READY or lease lost');
       busy = true;
+      if (job.type === 'ANDROID_IMAGE_POST') {
+        // The Instagram worker owns its statuses (READY_TO_PUBLISH / PUBLISHING / final) and the
+        // Share boundary; the scheduler only guarantees exclusive lease + a claimed BUSY device.
+        const outcome = await this.instagramFactory(serial).run(jobId);
+        this.activity(jobId, account.workspaceId, account.id, 'image-post', outcome.status.toLowerCase(), { reason: outcome.reason ?? null });
+        return { status: outcome.status, reason: outcome.reason, result: outcome.result };
+      }
       await this.prisma.androidJob.update({ where: { id: jobId }, data: { status: 'RUNNING', startedAt: new Date(), attempts: { increment: 1 }, reason: null } });
       const image = await this.runtime.screenshot(serial);
       await lease.assertOwner();
@@ -94,8 +118,10 @@ export class AndroidScheduler {
       return { status: 'COMPLETED', result };
     } catch (error: any) {
       const reason = error?.message || String(error);
-      await this.prisma.androidJob.updateMany({ where: { id: jobId, status: { not: 'COMPLETED' } },
-        data: { status: 'FAILED', reason, finishedAt: new Date() } });
+      const current = await this.prisma.androidJob.findUnique({ where: { id: jobId }, select: { publishBoundaryAt: true } });
+      const afterBoundary = job.type === 'ANDROID_IMAGE_POST' && Boolean(current?.publishBoundaryAt);
+      await this.prisma.androidJob.updateMany({ where: { id: jobId, status: { notIn: ['COMPLETED', 'AMBIGUOUS'] } },
+        data: { status: afterBoundary ? 'AMBIGUOUS' : 'FAILED', reason, finishedAt: new Date() } });
       await this.prisma.androidDevice.updateMany({ where: { id: job.deviceId, leaseOwner: lease.ownerId },
         data: { status: busy ? 'ATTENTION' : 'ERROR', lastError: reason } });
       this.activity(jobId, account.workspaceId, account.id, 'smoke', 'failed', { reason });
