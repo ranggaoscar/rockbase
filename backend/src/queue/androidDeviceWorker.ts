@@ -19,6 +19,16 @@ export async function enqueueAndroidJob(jobId: string, delay = 0) {
 
 let worker: Worker<{ jobId: string }> | null = null;
 let sweep: NodeJS.Timeout | null = null;
+let lastSweepAt: number | null = null;
+let lastSweepError: string | null = null;
+
+export async function androidOrchestrationHealth() {
+  const redis = await androidQueue.client.then(client => client.ping()).then(value => value === 'PONG').catch(() => false);
+  const workerHealthy = Boolean(worker?.isRunning());
+  const schedulerHealthy = Boolean(sweep && lastSweepAt && Date.now() - lastSweepAt < 90_000 && !lastSweepError);
+  return { healthy: redis && workerHealthy && schedulerHealthy, redis, workerHealthy, schedulerHealthy, lastSweepAt, lastSweepError,
+    publishApprovalEnabled: process.env.ANDROID_PUBLISH_APPROVED === 'true' };
+}
 export function startAndroidQueueWorker() {
   if (getRockBaseMode() !== 'local' || process.platform !== 'win32' || worker) return;
   worker = new Worker<{ jobId: string }>('androidDeviceQueue', async (job) => {
@@ -42,7 +52,9 @@ export function startAndroidQueueWorker() {
       const waiting = await androidQueue.getJobs(['waiting', 'delayed', 'active']);
       const known = new Set(waiting.map(item => item.data.jobId));
       for (const item of pending) if (!known.has(item.id)) await enqueueAndroidJob(item.id);
-    })().catch((error) => logger.error('Android scheduler sweep failed', { error: String(error) }))
+      lastSweepAt = Date.now();
+      lastSweepError = null;
+    })().catch((error) => { lastSweepError = String(error); logger.error('Android scheduler sweep failed', { error: String(error) }); })
       .finally(() => { sweeping = false; });
   }, 30_000);
   sweep.unref?.();

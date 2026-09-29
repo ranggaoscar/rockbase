@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { AndroidDeviceLeaseService } from './AndroidDeviceLeaseService';
 import { androidDevices, androidMaxConcurrent } from './AndroidDeviceService';
 import { androidRuntime } from './AndroidRuntimeService';
+import { AndroidPreparedStateService, isSafeToExpire, preparedHoldUntil } from './AndroidPreparedStateService';
 import { logActivity } from './ActivityLogService';
 import { AdbInstagramUiAdapter } from './instagram/AdbInstagramUiAdapter';
 import { InstagramAndroidWorker, InstagramJobOutcome } from './instagram/InstagramAndroidWorker';
@@ -17,15 +18,29 @@ export type AndroidOutcome = { status: 'COMPLETED' | 'WAITING' | 'SKIPPED' | 'FA
 export interface InstagramRunner { run(jobId: string): Promise<InstagramJobOutcome>; }
 export type InstagramRunnerFactory = (serial: string) => InstagramRunner;
 
+/**
+ * Read-only confirmation that a prepared Share screen still exists on the device. Implementations
+ * must NEVER navigate, tap or rebuild the post — they only look at what is on screen.
+ */
+export interface PreparedScreenValidator {
+  verifyPreparedState(expected: { caption: string }): Promise<{ ok: boolean; detail: string }>;
+}
+export type PreparedValidatorFactory = (serial: string) => PreparedScreenValidator;
+
 type DeviceController = Pick<typeof androidDevices, 'start' | 'stop' | 'refresh'>;
 type Runtime = Pick<typeof androidRuntime, 'resolveSerial' | 'health' | 'screenshot' | 'connected'>;
 
 export class AndroidScheduler {
   private leases: AndroidDeviceLeaseService;
+  private readonly preparedStates: AndroidPreparedStateService;
   constructor(private readonly prisma: PrismaClient, private readonly devices: DeviceController = androidDevices,
     private readonly runtime: Runtime = androidRuntime, leases?: AndroidDeviceLeaseService,
-    private readonly instagramFactory: InstagramRunnerFactory = (serial) => new InstagramAndroidWorker(prisma, new AdbInstagramUiAdapter(serial), serial)) {
+    private readonly instagramFactory: InstagramRunnerFactory = (serial) => new InstagramAndroidWorker(prisma, new AdbInstagramUiAdapter(serial), serial),
+    preparedStates?: AndroidPreparedStateService,
+    // Optional DI: pass null to disable on-device validation (e.g. hermetic tests).
+    private readonly preparedValidatorFactory: PreparedValidatorFactory | null = (serial) => new AdbInstagramUiAdapter(serial)) {
     this.leases = leases ?? new AndroidDeviceLeaseService(prisma);
+    this.preparedStates = preparedStates ?? new AndroidPreparedStateService(prisma);
   }
 
   async submit(accountId: string) {
@@ -86,6 +101,9 @@ export class AndroidScheduler {
     try {
       let serial = await this.runtime.resolveSerial(job.device.avdName);
       if (!serial) {
+        // The AVD is not running, so any prepared screen it hosted is gone. Expire the hold before the
+        // boot so a stale prepared state never outlives the runtime that carried it.
+        await this.preparedStates.expireForDevice(job.deviceId, 'runtime_lost');
         // Reconcile all persisted statuses after a crash before counting running slots.
         await androidDevices.list();
         // start() atomically checks the global BOOTING/READY/BUSY budget before launching.
@@ -153,9 +171,8 @@ export class AndroidScheduler {
       where: { deviceId, status: 'READY_FOR_REAL_POST' }, select: { result: true },
     });
     for (const job of jobs) {
-      const raw = (job.result as any)?.hold?.until;
-      const until = raw ? new Date(raw) : null;
-      if (until && !Number.isNaN(until.getTime()) && until.getTime() > Date.now()) return { until };
+      const until = preparedHoldUntil(job.result);
+      if (until && until.getTime() > Date.now()) return { until };
     }
     return null;
   }
@@ -165,25 +182,95 @@ export class AndroidScheduler {
    * construction: a prepared post never reserves a device forever.
    */
   async sweepPreparedHolds(): Promise<number> {
-    const jobs = await this.prisma.androidJob.findMany({
-      where: { status: 'READY_FOR_REAL_POST' }, select: { id: true, deviceId: true, result: true },
-    });
-    let released = 0;
-    for (const job of jobs) {
-      const raw = (job.result as any)?.hold?.until;
-      const until = raw ? new Date(raw) : null;
-      if (!until || Number.isNaN(until.getTime()) || until.getTime() > Date.now()) continue;
+    // Expire first, release second. The prepared screen is gone whether the device is READY, offline,
+    // already counting down, or idle from a crashed RockBase process — the job must stop advertising
+    // the hold in every one of those cases, not just the happy path.
+    const released = await this.preparedStates.expireClosedHolds('hold_expired');
+    for (const job of released.jobs) {
       const device = await this.prisma.androidDevice.findUnique({ where: { id: job.deviceId } });
-      if (!device || device.status !== 'READY' || device.idleSince) continue;
-      // Queued work does not keep the reservation alive: once the window closes the prepared screen
-      // is abandoned on purpose, otherwise a re-queued job could reserve a device indefinitely.
-      await this.prisma.androidDevice.update({ where: { id: job.deviceId }, data: { idleSince: new Date() } });
+      if (device && device.status === 'READY' && !device.idleSince) {
+        // Queued work does not keep the reservation alive: once the window closes the prepared screen
+        // is abandoned on purpose, otherwise a re-queued job could reserve a device indefinitely.
+        await this.prisma.androidDevice.update({ where: { id: job.deviceId }, data: { idleSince: new Date() } });
+      }
       this.activity(job.id, 'workspace-default', '', 'prepared-hold', 'released', {
-        holdUntil: until.toISOString(), note: 'prepared screen released; the normal idle grace now applies',
+        note: 'prepared screen expired; the normal idle grace now applies',
       });
-      released++;
     }
-    return released;
+    return released.expired;
+  }
+
+  /**
+   * Confirm that every trusted prepared screen still exists on its device. A prepared post can be
+   * destroyed without any lifecycle transition we control: the Instagram process restarts, the
+   * composer is reclaimed, the app is updated or uninstalled, the emulator is cold-booted. The only
+   * trustworthy answer comes from the device itself, read under the lease and never navigated.
+   *
+   * The validator verdict decides: anything it cannot confirm (not ok, thrown, no runtime) expires
+   * the job — fail closed rather than keep advertising a hold that no longer exists. Devices that are
+   * BUSY or leased by an in-flight run are skipped so an active run is never scanned mid-navigation.
+   * Validator failures are recorded with their own reason so an operator can tell them apart.
+   */
+  async sweepPreparedTrust(): Promise<number> {
+    if (!this.preparedValidatorFactory) return 0;
+    const jobs = await this.prisma.androidJob.findMany({
+      where: { status: 'READY_FOR_REAL_POST' },
+      select: { id: true, deviceId: true, caption: true, result: true, publishBoundaryAt: true },
+    });
+    const byDevice = new Map<string, typeof jobs>();
+    for (const job of jobs) {
+      const list = byDevice.get(job.deviceId) ?? [];
+      list.push(job);
+      byDevice.set(job.deviceId, list);
+    }
+    let expired = 0;
+    for (const [deviceId, deviceJobs] of byDevice) {
+      // Never scan the device an active run owns, is booting, or is otherwise mid-transition.
+      const device = await this.prisma.androidDevice.findUnique({ where: { id: deviceId } });
+      if (!device || device.status === 'BUSY' || device.status === 'BOOTING' || device.leaseOwner) continue;
+      // A publish intent is never expired by a screen read — the same fail-closed gate as the sweep.
+      const eligible = deviceJobs.filter((job) => isSafeToExpire(job));
+      if (!eligible.length) continue;
+      if (device.status !== 'READY') {
+        expired += (await this.preparedStates.expireForDevice(deviceId, 'runtime_lost')).expired;
+        continue;
+      }
+      let serial: string | null = null;
+      let healthy = false;
+      try { serial = await this.runtime.resolveSerial(device.avdName); } catch { serial = null; }
+      if (serial) { try { healthy = await this.runtime.health(serial); } catch { healthy = false; } }
+      if (!serial || !healthy) {
+        // The runtime that hosted the prepared screen is gone: the screen is gone with it.
+        expired += (await this.preparedStates.expireForDevice(deviceId, 'runtime_lost')).expired;
+        continue;
+      }
+      const lease = await this.leases.acquire(deviceId, `prepared-trust:${deviceId}`);
+      if (!lease) continue; // an active run claimed the device between the read and the lease
+      try {
+        const validator = this.preparedValidatorFactory(serial);
+        for (const job of eligible) {
+          const current = await this.prisma.androidJob.findUnique({ where: { id: job.id }, select: { status: true, publishBoundaryAt: true } });
+          if (!current || current.status !== 'READY_FOR_REAL_POST' || current.publishBoundaryAt) continue;
+          let ok = false;
+          let detail = '';
+          try {
+            const verdict = await validator.verifyPreparedState({ caption: job.caption ?? '' });
+            ok = verdict.ok;
+            detail = verdict.detail || '';
+          } catch (error: any) {
+            ok = false; // read failures fail closed: an unreadable screen is not a trusted screen
+            detail = error?.message || String(error);
+          }
+          if (ok) continue;
+          const out = await this.preparedStates.expireJobs([job.id], 'validator_failed');
+          expired += out.expired;
+          this.activity(job.id, 'workspace-default', '', 'prepared-trust', 'invalid', { detail });
+        }
+      } finally {
+        await lease.release();
+      }
+    }
+    return expired;
   }
 
   private async wait(jobId: string, reason: string): Promise<AndroidOutcome> {
@@ -193,6 +280,7 @@ export class AndroidScheduler {
 
   async sweepIdle() {
     await this.sweepPreparedHolds();
+    await this.sweepPreparedTrust();
     const cutoff = new Date(Date.now() - androidIdleGraceMinutes() * 60_000);
     const candidates = await this.prisma.androidDevice.findMany({ where: { status: 'READY', idleSince: { lte: cutoff } } });
     let shutdowns = 0;
@@ -211,7 +299,14 @@ export class AndroidScheduler {
     return shutdowns;
   }
 
-  async reconcile() { return this.leases.recoverStale(); }
+  async reconcile() {
+    const recovered = await this.leases.recoverStale();
+    // Startup reconciliation also expires stale prepared holds so a restart never leaves a
+    // READY_FOR_REAL_POST pointing at a screen the fresh runtime cannot host.
+    await this.sweepPreparedHolds();
+    await this.sweepPreparedTrust();
+    return recovered;
+  }
 
   private activity(jobId: string, workspaceId: string, accountId: string, action: string, status: string, metadata: unknown) {
     logActivity({ workspaceId, type: 'android', entityType: 'android_job', entityId: jobId,

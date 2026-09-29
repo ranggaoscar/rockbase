@@ -7,6 +7,8 @@ import multer from 'multer';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { requireRole } from '../middleware/auth';
 import { getRockBaseMode } from '../middleware/runtimeMode';
+import { InstagramPreparationRecovery } from '../services/instagram/InstagramPreparationRecovery';
+import { AdbInstagramUiAdapter } from '../services/instagram/AdbInstagramUiAdapter';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -64,6 +66,24 @@ router.post('/', upload.single('media'), async (req, res) => {
     // The original media remains in uploads only when a new draft references it.
     if (file && !retainFile) await fsp.unlink(file.path).catch(() => undefined);
   }
+});
+
+router.get('/orchestration-health', async (_req, res) => {
+  const health = await (await import('../queue/androidDeviceWorker')).androidOrchestrationHealth();
+  res.status(health.healthy ? 200 : 503).json(health);
+});
+
+router.post('/:id/recover-preparation', async (req, res) => {
+  if (!['reprepare', 'revalidate'].includes(req.body?.mode) || typeof req.body?.idempotencyKey !== 'string') {
+    res.status(400).json({ error: 'Explicit mode and original idempotencyKey required' }); return;
+  }
+  const health = await (await import('../queue/androidDeviceWorker')).androidOrchestrationHealth();
+  if (!health.healthy) { res.status(503).json({ error: 'Android orchestration unavailable', health }); return; }
+  try {
+    const outcome = await new InstagramPreparationRecovery(prisma, serial => new AdbInstagramUiAdapter(serial))
+      .recover(String(req.params.id), req.body.idempotencyKey, req.body.mode);
+    res.json({ outcome, job: await prisma.androidJob.findUnique({ where: { id: String(req.params.id) } }), reused: true });
+  } catch (error: any) { res.status(409).json({ error: error.message }); }
 });
 
 router.post('/:id/approve', async (req, res) => {

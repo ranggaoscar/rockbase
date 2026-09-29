@@ -59,7 +59,7 @@ export class InstagramAndroidWorker {
     private readonly media: MediaStager = androidMedia,
   ) {}
 
-  async run(jobId: string): Promise<InstagramJobOutcome> {
+  async run(jobId: string, preparationOnly = false): Promise<InstagramJobOutcome> {
     const job = await this.prisma.androidJob.findUnique({ where: { id: jobId }, include: { account: true } });
     if (!job) throw new Error('Android job not found');
     if (job.type !== 'ANDROID_IMAGE_POST') throw new Error('Instagram worker received a non image-post job');
@@ -147,11 +147,12 @@ export class InstagramAndroidWorker {
 
       // 5. Preparation-only stop: the post is built up to the final Share screen and nothing is
       //    published. Share is a separate, explicitly approved decision.
-      if (!this.publishApproved) {
+      if (preparationOnly || !this.publishApproved) {
         const prepared = await this.adapter.verifyPreparedState({ caption: job.caption });
         const preparedAt = new Date();
         const holdMinutes = Number(process.env.ANDROID_PREPARED_HOLD_MINUTES || process.env.ANDROID_IDLE_GRACE_MINUTES || 30);
         const result = {
+          preparationAttempt: Number((job.result as any)?.preparationAttempt || ((job.result as any)?.preparedAt ? 1 : 0)) + 1,
           preparedAt: preparedAt.toISOString(),
           detectedUsername: detected,
           selectedImage: selection.selectedTile,
