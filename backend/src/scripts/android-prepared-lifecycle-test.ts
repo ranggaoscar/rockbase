@@ -17,6 +17,7 @@ import { androidRuntime } from '../services/AndroidRuntimeService';
 import { androidDevices } from '../services/AndroidDeviceService';
 import { AndroidDeviceLeaseService } from '../services/AndroidDeviceLeaseService';
 import { AndroidScheduler } from '../services/AndroidScheduler';
+import { androidIdentity, type AndroidIdentityTransport } from '../services/AndroidIdentityService';
 import {
   AndroidPreparedStateService, PREPARATION_EXPIRED, READY_FOR_REAL_POST,
   isHoldClosed, isSafeToExpire, preparedHoldUntil,
@@ -25,6 +26,17 @@ import {
 const AVD = 'prepared-lifecycle-avd';
 const prisma = new PrismaClient();
 const service = new AndroidPreparedStateService(prisma);
+
+// ── faked device identity transport: the runtime is mocked, so the ADB marker read/write must be too ──
+// `identityMarker` is the on-device marker file; the expected app is reported present because this suite
+// is about the prepared screen, not about app installation.
+let identityMarker: string | null = null;
+const fakeIdentityTransport: AndroidIdentityTransport = {
+  async readMarker() { return identityMarker; },
+  async writeMarker(_serial: string, marker: string) { identityMarker = marker; },
+  async appInstalled() { return true; },
+};
+androidIdentity.setTransport(fakeIdentityTransport);
 
 // ── mocked ADB runtime: `running` maps avdName -> serial, which is the whole "is the AVD up" state ──
 const running = new Map<string, string>();

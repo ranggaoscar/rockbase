@@ -2,6 +2,7 @@ import { execFile, spawn, ChildProcess } from 'child_process';
 import { existsSync } from 'fs';
 import * as path from 'path';
 import { promisify } from 'util';
+import { resolveAvdIdentity } from './AndroidIdentityService';
 
 const runFile = promisify(execFile);
 const executable = (name: string) => process.platform === 'win32' ? `${name}.exe` : name;
@@ -69,7 +70,13 @@ export class AndroidRuntimeService {
   async start(avdName: string, ramMb: number, cpuCores: number): Promise<string> {
     if (!(await this.listAvds()).includes(avdName)) throw new Error(`AVD ${avdName} not found in Android SDK`);
     if (await this.resolveSerial(avdName)) throw new Error(`AVD ${avdName} is already running`);
-    const args = ['-avd', avdName, '-memory', String(ramMb), '-cores', String(cpuCores)];
+    // Identity containers boot from writable userdata, never a Quick Boot rollback.
+    // Resolve and validate the registered directory without changing emulator overlay semantics.
+    // Explicit -data/-datadir changed the visible disk state in the live persistence experiment.
+    resolveAvdIdentity(avdName);
+    const args = ['-avd', avdName,
+      '-memory', String(ramMb), '-cores', String(cpuCores),
+      '-no-snapshot-load', '-no-snapshot-save'];
     const gpu = process.env.ANDROID_EMULATOR_GPU;
     if (gpu) {
       if (!['auto', 'auto-no-window', 'host', 'swiftshader_indirect', 'angle_indirect'].includes(gpu)) throw new Error('Unsupported ANDROID_EMULATOR_GPU renderer');
@@ -97,6 +104,8 @@ export class AndroidRuntimeService {
 
   async stop(serial: string): Promise<void> {
     if (!/^emulator-\d+$/.test(serial)) throw new Error('Only local emulator serials can be stopped');
+    // Quick Boot can preserve RAM-only filesystem writes. Commit guest disk writes before exit.
+    await this.run('adb', ['-s', serial, 'shell', 'sync'], 30000);
     await this.run('adb', ['-s', serial, 'emu', 'kill']);
     for (let i = 0; i < 30; i++) {
       if (!(await this.connected()).includes(serial)) return;

@@ -104,6 +104,17 @@ model AndroidDevice {
   lastBootDurationMs Int?
   lastError         String?
   lastShutdownReason String?
+  // RockDroid device identity (Phase 3E). Nullable and additive: pre-existing rows stay unenrolled
+  // until their first authorized boot pins the host identity (AVD ini/dir/userdata/system image) and
+  // a persistent marker UUID; afterwards a missing or different marker is ATTENTION, never a re-pin.
+  avdIniPath         String?
+  avdAbsolutePath    String?
+  userdataPath       String?
+  systemImage        String?
+  persistentMarker   String?   @unique
+  identityEnrolledAt DateTime?
+  identityVerifiedAt DateTime?
+  identityError      String?
 
   @@index([status, idleSince])
   @@index([leaseExpiresAt])

@@ -49,6 +49,7 @@ export class AndroidScheduler {
     if (account.executionEngine !== 'android' || !account.homeDeviceId || !account.homeDevice) throw new Error('Android account needs a valid home device');
     if (account.platform !== 'Instagram') throw new Error('Only Instagram Android accounts are supported');
     if (!account.homeDevice.enabled) throw new Error('Home device disabled');
+    // submit() creates a social smoke row. Infrastructure proof must not flip account health to pass this gate.
     if (account.androidHealth !== 'HEALTHY') throw new Error(`Account ${account.androidHealth}: ${account.androidHealthReason || 'operator review required'}`);
     const job = await this.prisma.androidJob.create({ data: { accountId, deviceId: account.homeDeviceId } });
     await this.prisma.androidDevice.update({ where: { id: account.homeDeviceId }, data: { idleSince: null } });
@@ -77,8 +78,9 @@ export class AndroidScheduler {
       }
     }
     const account = job.account;
-    if (account.executionEngine !== 'android' || !account.homeDeviceId || account.homeDeviceId !== job.deviceId || account.androidHealth !== 'HEALTHY') {
-      const reason = account.androidHealth !== 'HEALTHY' ? `Account ${account.androidHealth}: ${account.androidHealthReason || 'operator review required'}` : 'Android account requires its original valid home device';
+    const social = job.type === 'ANDROID_IMAGE_POST';
+    if (account.executionEngine !== 'android' || !account.homeDeviceId || account.homeDeviceId !== job.deviceId || (social && account.androidHealth !== 'HEALTHY')) {
+      const reason = social && account.androidHealth !== 'HEALTHY' ? `Account ${account.androidHealth}: ${account.androidHealthReason || 'operator review required'}` : 'Android account requires its original valid home device';
       await this.prisma.androidJob.update({ where: { id: jobId }, data: { status: 'SKIPPED', reason, finishedAt: new Date() } });
       return { status: 'SKIPPED', reason };
     }
@@ -123,6 +125,19 @@ export class AndroidScheduler {
         await this.devices.refresh(job.deviceId);
       }
       if (!serial || !await this.runtime.health(serial)) throw new Error('ADB unavailable or Android boot not complete');
+      // Refresh rechecks enrolled host/guest identity. A missing app is recorded, but it is not a
+      // device defect: Instagram work is refused by account health, not by blocking the device.
+      const executionDevice = await this.devices.refresh(job.deviceId);
+      if (executionDevice.status !== 'READY') {
+        const reason = executionDevice.lastError || 'DEVICE_IDENTITY_NOT_READY';
+        await this.prisma.androidJob.update({ where: { id: jobId }, data: { status: 'NEEDS_ATTENTION', reason } });
+        return { status: 'NEEDS_ATTENTION', reason };
+      }
+      if (job.type === 'ANDROID_IMAGE_POST' && executionDevice.lastError && /missing/i.test(executionDevice.lastError)) {
+        const reason = executionDevice.lastError;
+        await this.prisma.androidJob.update({ where: { id: jobId }, data: { status: 'NEEDS_ATTENTION', reason } });
+        return { status: 'NEEDS_ATTENTION', reason };
+      }
       await lease.assertOwner();
       const claimed = await this.prisma.androidDevice.updateMany({ where: { id: job.deviceId, leaseOwner: lease.ownerId, status: 'READY' },
         data: { status: 'BUSY', idleSince: null } });

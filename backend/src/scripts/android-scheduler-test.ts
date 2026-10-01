@@ -4,6 +4,16 @@ import { androidRuntime } from '../services/AndroidRuntimeService';
 import { androidDevices } from '../services/AndroidDeviceService';
 import { AndroidDeviceLeaseService } from '../services/AndroidDeviceLeaseService';
 import { AndroidScheduler } from '../services/AndroidScheduler';
+import { androidIdentity, type AndroidIdentityTransport } from '../services/AndroidIdentityService';
+
+// The runtime is mocked, so the device identity transport must be faked as well. Each AVD keeps its
+// own marker slot (its userdata), and the expected app is reported present.
+const identityMarkers = new Map<string, string>();
+androidIdentity.setTransport({
+  async readMarker(serial: string) { return identityMarkers.get(serial) ?? null; },
+  async writeMarker(serial: string, marker: string) { identityMarkers.set(serial, marker); },
+  async appInstalled() { return true; },
+} satisfies AndroidIdentityTransport);
 
 async function main() {
   assert.ok(process.env.DATABASE_URL?.includes('scratch'), 'Refuse real database');
@@ -15,11 +25,17 @@ async function main() {
     screenshot: androidRuntime.screenshot, listAvds: androidRuntime.listAvds };
   const running = new Map<string, string>();
   let boots = 0, stops = 0, bootFail = false, adbFail = false;
+  // A real emulator keeps one serial per AVD (its userdata/port); the identity marker is keyed by it.
+  const serials = new Map<string, string>();
+  const stableSerial = (avd: string) => {
+    if (!serials.has(avd)) serials.set(avd, `emulator-${5554 + serials.size * 2}`);
+    return serials.get(avd)!;
+  };
   androidRuntime.connected = async () => [...running.values()];
   androidRuntime.resolveSerial = async (avd: string) => running.get(avd) || null;
   androidRuntime.health = async (_serial: string) => !adbFail;
   androidRuntime.listAvds = async () => ['avd-one', 'avd-two', 'avd-three', 'avd-four'];
-  androidRuntime.start = async (avd: string) => { if (bootFail) throw new Error('simulated boot failure'); boots++; const serial = `emulator-${5554 + boots * 2}`; running.set(avd, serial); return serial; };
+  androidRuntime.start = async (avd: string) => { if (bootFail) throw new Error('simulated boot failure'); boots++; const serial = stableSerial(avd); running.set(avd, serial); return serial; };
   androidRuntime.stop = async (serial: string) => { for (const [avd, value] of running) if (value === serial) running.delete(avd); stops++; };
   androidRuntime.screenshot = async () => Buffer.from('fake-png-data');
   let workspaceId: string | null = null;
