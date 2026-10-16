@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { noStore, requireSecretAdmin, requireAccountWorkspace, ownsAccountWorkspace, requireLocalSecretOrigin } from '../middleware/secretAccess';
 import { automationGuard } from '../middleware/automation';
 import { encrypt, decrypt } from '../utils/encryption';
 import multer from 'multer';
@@ -34,6 +35,11 @@ async function validateEngine(engine: unknown, deviceId: unknown, platform: stri
 const MAX_BULK_SESSION_CHECK = Math.max(1, Number(process.env.MAX_BULK_SESSION_CHECK || 3));
 
 // All account routes require authentication
+router.use((req, res, next) => {
+  if (/\/(credentials|cookies)$/.test(req.path) || req.path === '/import-cookies-bulk') {
+    noStore(req, res, () => requireLocalSecretOrigin(req, res, next));
+  } else next();
+});
 router.use(authenticateToken);
 
 // GET /api/accounts — list all accounts
@@ -162,7 +168,7 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
 });
 
 // GET /api/accounts/:id/credentials
-router.get('/:id/credentials', async (req: AuthRequest, res: Response) => {
+router.get('/:id/credentials', noStore, requireSecretAdmin, requireAccountWorkspace(prisma), async (req: AuthRequest, res: Response) => {
   const id = String(req.params.id);
   try {
     const account = await prisma.socialAccount.findUnique({ where: { id } });
@@ -251,7 +257,11 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 });
 
 // PATCH /api/accounts/:id — update account
-router.patch('/:id', async (req: AuthRequest, res: Response) => {
+router.patch('/:id', (req: AuthRequest, res: Response, next) => {
+  if (req.body?.password) {
+    noStore(req, res, () => requireSecretAdmin(req, res, () => requireAccountWorkspace(prisma)(req, res, next)));
+  } else next();
+}, async (req: AuthRequest, res: Response) => {
   const id = String(req.params.id);
   try {
     const { password } = req.body;
@@ -509,7 +519,7 @@ router.post('/:id/stop-session', async (req: AuthRequest, res: Response) => {
 
 // ── Cookie Paste ─────────────────────────────────────────────────────────────
 // POST /api/accounts/:id/cookies — import cookies for an account (no Playwright needed)
-router.post('/:id/cookies', async (req: AuthRequest, res: Response) => {
+router.post('/:id/cookies', noStore, requireSecretAdmin, requireAccountWorkspace(prisma), async (req: AuthRequest, res: Response) => {
   const id = String(req.params.id);
   const { cookies } = req.body;
 
@@ -549,7 +559,7 @@ router.post('/:id/cookies', async (req: AuthRequest, res: Response) => {
 });
 
 // POST /api/accounts/import-cookies-bulk — bulk import cookies via JSON
-router.post('/import-cookies-bulk', async (req: AuthRequest, res: Response) => {
+router.post('/import-cookies-bulk', noStore, requireSecretAdmin, async (req: AuthRequest, res: Response) => {
   const { accounts } = req.body;
 
   if (!Array.isArray(accounts) || accounts.length === 0) {
@@ -571,8 +581,8 @@ router.post('/import-cookies-bulk', async (req: AuthRequest, res: Response) => {
         },
       });
 
-      if (!account) {
-        errors.push({ username: entry.username || entry.id, error: 'Account not found' });
+      if (!account || !await ownsAccountWorkspace(req, prisma, account.id)) {
+        errors.push({ username: entry.username || entry.id, error: 'Account not found in authorized workspace' });
         continue;
       }
 
@@ -611,7 +621,7 @@ router.post('/import-cookies-bulk', async (req: AuthRequest, res: Response) => {
 });
 
 // GET /api/accounts/:id/cookies — export cookies (for backup / export)
-router.get('/:id/cookies', async (req: AuthRequest, res: Response) => {
+router.get('/:id/cookies', noStore, requireSecretAdmin, requireAccountWorkspace(prisma), async (req: AuthRequest, res: Response) => {
   const id = String(req.params.id);
   try {
     const account = await prisma.socialAccount.findUnique({ where: { id } });

@@ -19,5 +19,5 @@ start "ROCK BASE Frontend" cmd /k "pushd ""%PROJECT_DIR%\frontend"" && npm.cmd r
 
 echo Done! Both servers are launching.
 echo Dashboard will be available at: http://localhost:5173
-echo Login: admin@rockbase.com / Admin@123
+echo Login: use your installation-specific credential. No shared default password.
 pause

@@ -64,12 +64,10 @@ START_ROCK_BASE.bat
 http://localhost:5173
 ```
 
-Default login:
-
-```text
-Email: admin@rockbase.com
-Password: Admin@123
-```
+There is no shared default login. Windows Local Mode is loopback-only and has no dashboard login.
+For Server Mode, use the unique administrator credential created during installation.
+Manual seeding requires explicit `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` (16+ characters);
+the seed never overwrites an existing user's password or prints the supplied password.
 
 ## Preflight Check
 

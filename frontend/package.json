@@ -45,6 +45,10 @@
     "tailwindcss": "^3.4.17",
     "tailwindcss-animate": "^1.0.7",
     "typescript": "^5.8.3",
-    "vite": "^6.3.5"
+    "vite": "^6.4.3"
+  },
+  "overrides": {
+    "socket.io-parser": "4.2.7",
+    "ws": "^8.21.0"
   }
 }

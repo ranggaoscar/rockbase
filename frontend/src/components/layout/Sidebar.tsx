@@ -27,6 +27,7 @@ type NavItem = { label: string; path: string; icon: LucideIcon }
 
 const primaryNavItems: NavItem[] = [
   { label: 'Overview', path: '/', icon: LayoutDashboard },
+  { label: 'SEO Intelligence', path: '/seo', icon: Globe },
   { label: 'Accounts', path: '/accounts', icon: Users },
   { label: 'Farm View / Sessions', path: '/farm', icon: Tv2 },
   { label: 'Campaigns', path: '/campaigns', icon: Target },
@@ -111,7 +112,7 @@ export default function Sidebar() {
           {!sidebarCollapsed && (
             <div className="min-w-0">
               <p className="text-sm font-bold leading-tight text-foreground">ROCK BASE</p>
-              <p className="text-[10px] leading-tight text-muted-foreground">Campaign Operations</p>
+              <p className="text-[10px] leading-tight text-muted-foreground">Digital Growth OS</p>
             </div>
           )}
         </div>

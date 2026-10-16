@@ -8,6 +8,7 @@ import ExperimentalUnavailable from '@/components/common/ExperimentalUnavailable
 // Pages
 import Login from '@/pages/Login'
 import Dashboard from '@/pages/Dashboard'
+import SeoIntelligence from '@/pages/SeoIntelligence'
 import FarmView from '@/pages/FarmView'
 import AndroidFarm from '@/pages/AndroidFarm'
 import Accounts from '@/pages/Accounts'
@@ -65,6 +66,7 @@ export default function App() {
               </ErrorBoundary>
             } />
             <Route path="android-farm" element={<ErrorBoundary><AndroidFarm /></ErrorBoundary>} />
+            <Route path="seo" element={<ErrorBoundary><SeoIntelligence /></ErrorBoundary>} />
             <Route path="accounts" element={
               <ErrorBoundary>
                 <Accounts />

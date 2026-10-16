@@ -15,7 +15,9 @@ function getBootstrapConfig() {
   const email = process.env.BOOTSTRAP_ADMIN_EMAIL?.trim();
   const password = process.env.BOOTSTRAP_ADMIN_PASSWORD;
   const token = process.env.BOOTSTRAP_ADMIN_TOKEN;
-  if (!email || !password || password.length < 12 || !token || token.length < 24) {
+  // Keep the first-run Server Mode credential standard aligned with the
+  // fail-closed seed: unique, memorable, at least 16 characters.
+  if (!email || !password || password.length < 16 || !token || token.length < 24) {
     return null;
   }
   return { email, password, token };

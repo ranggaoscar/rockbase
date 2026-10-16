@@ -1,3 +1,5 @@
+import { installConsoleRedaction } from './utils/sensitiveData';
+installConsoleRedaction();
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -10,9 +12,13 @@ import * as path from 'path';
 import { AUTOMATION_DISABLED_MESSAGE, isAutomationEnabled } from './middleware/automation';
 import { getWorkerMode, getWorkerStartupPlan } from './utils/workerMode';
 import { authenticateToken } from './middleware/auth';
+import { noStore } from './middleware/secretAccess';
+import { assertServerModeDefaultCredentialGuard } from './utils/serverDefaultCredentialGuard';
 import { assertJwtConfiguration, verifyAccessToken } from './middleware/security';
 import { assertEncryptionConfiguration } from './utils/encryption';
 import { getRockBaseMode, isLoopbackAddress, localOperator, requireLocalLoopback } from './middleware/runtimeMode';
+import seoRoutes from './routes/seoRoutes';
+import { stopSeoWorker } from './services/SeoWorkerService';
 
 dotenv.config();
 assertJwtConfiguration();
@@ -134,7 +140,8 @@ import systemRoutes from './routes/systemRoutes';
 app.use('/api/auth', authRoutes);
 app.use('/uploads', authenticateToken, express.static(path.join(process.cwd(), 'uploads')));
 app.use('/internal/hermes', hermesShadowCampaignRoutes);
-app.use('/api', authenticateToken);
+app.use('/api', noStore, authenticateToken);
+app.use('/api/seo', seoRoutes);
 app.use('/api/accounts', accountRoutes);
 app.use('/api/proxies', proxyRoutes);
 app.use('/api/warming', warmingRoutes);
@@ -378,8 +385,22 @@ const onListening = async () => {
     console.warn('[Server] Queue startup summary unavailable:', error instanceof Error ? error.message : error);
   }
 };
-server.listen({ port: Number(port), host: listenHost }, onListening);
-server.timeout = 300000; // 5 minutes
+const startHttpServer = (): void => {
+  server.listen({ port: Number(port), host: listenHost }, onListening);
+  server.timeout = 300000; // 5 minutes
+};
+if (runtimeMode === 'server') {
+  // Fail-closed preflight: Server Mode must not start while any dashboard
+  // account still accepts a previously shipped default password.
+  assertServerModeDefaultCredentialGuard()
+    .then(() => startHttpServer())
+    .catch((error) => {
+      console.error('[ServerModeGuard] Preflight crashed:', error instanceof Error ? error.message : error);
+      process.exit(1);
+    });
+} else {
+  startHttpServer();
+}
 
 // Initialize Browser Manager
 import { browserManager } from './services/BrowserManager';
@@ -403,6 +424,7 @@ function gracefulShutdown(signal: string) {
   campaignSchedulerService.stop();
   scheduledPostConsumerService.stop();
   sessionHealthScheduler.stop();
+  stopSeoWorker();
   if (runtimeMode === 'local' && workerMode === 'internal') {
     void require('./queue/androidDeviceWorker').closeAndroidQueueWorker().catch((error: unknown) =>
       logger.error('Android worker shutdown failed', { error: String(error) }));
