@@ -7,16 +7,13 @@ import path from 'node:path';
 import { findDefaultCredentialUserIds, SHIPPED_DEFAULT_PASSWORDS } from '../utils/serverDefaultCredentialGuard';
 
 const BACKEND_DIR = path.resolve(__dirname, '../..');
-// Relative from BACKEND_DIR: the absolute project path contains spaces that
-// break through `shell: true` child spawning on Windows.
 const RUNNER = 'src/scripts/server-mode-default-guard-runner.ts';
 
 function runGuard(env: Record<string, string>): Promise<{ code: number; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn('npx', ['ts-node', '--files', RUNNER], {
+    const child = spawn(process.execPath, [require.resolve('ts-node/dist/bin.js'), '--files', RUNNER], {
       env: { ...process.env, ...env },
       cwd: BACKEND_DIR,
-      shell: process.platform === 'win32',
     });
     let stderr = '';
     let stdout = '';
@@ -43,28 +40,32 @@ async function main() {
   ]);
   assert.deepEqual(clean, [], 'unique/local accounts must never be flagged');
 
-  // Server Mode against the operator's real database: the legacy default is
-  // still valid there, so the preflight must fail closed (read-only check).
-  const legacyRun = await runGuard({ ROCKBASE_MODE: 'server', DATABASE_URL: 'file:./dev.db' });
-  assert.equal(legacyRun.code, 1, `Server Mode must not start while a shipped default credential remains valid; output: ${legacyRun.stderr}`);
-  assert.match(legacyRun.stderr, /Server Mode cannot start while dashboard accounts still accept/, `expected refusal message; output: ${legacyRun.stderr}`);
-  const guardLines = legacyRun.stderr.split(/\r?\n/).filter((line) => line.includes('[ServerModeGuard]'));
-  assert.ok(guardLines.length >= 1, 'guard banner expected in refusal output');
-  assert.doesNotMatch(guardLines.join('\n'), /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/, 'refusal output must not leak account identifiers');
-
-  // Local Mode is the primary passwordless experience: the guard is a no-op.
-  const localRun = await runGuard({ ROCKBASE_MODE: 'local', DATABASE_URL: 'file:./dev.db' });
-  assert.equal(localRun.code, 0, `Local Mode must not run the account preflight; output: ${localRun.stderr}`);
-
-  // A database with only unique credentials passes the Server Mode preflight.
+  // Portable, isolated fixtures: never require or open the operator's database.
   const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'rockbase-server-guard-'));
   try {
     const file = path.join(dir, 'guard-fixture.db');
     const Database = require('better-sqlite3');
     const db = new Database(file);
     db.exec('CREATE TABLE User(id TEXT PRIMARY KEY, role TEXT, password TEXT)');
-    db.prepare('INSERT INTO User VALUES(?,?,?)').run('safe-admin', 'Admin', uniqueHash);
+    db.prepare('INSERT INTO User VALUES(?,?,?)').run('legacy-admin', 'Admin', defaultHash);
     db.close();
+
+    const legacyRun = await runGuard({ ROCKBASE_MODE: 'server', DATABASE_URL: `file:${file}` });
+    assert.equal(legacyRun.code, 1, `Server Mode must refuse shipped defaults; output: ${legacyRun.stderr}`);
+    assert.match(legacyRun.stderr, /Server Mode cannot start while dashboard accounts still accept/);
+    assert(!legacyRun.stderr.includes('legacy-admin'), 'refusal output must not leak account identifiers');
+
+    // Local Mode must not even need an accessible database.
+    const unavailable = `file:${path.join(dir, 'absent-directory', 'unavailable.db')}`;
+    const localRun = await runGuard({ ROCKBASE_MODE: 'local', DATABASE_URL: unavailable });
+    assert.equal(localRun.code, 0, `Local Mode must skip the preflight; output: ${localRun.stderr}`);
+    const unavailableRun = await runGuard({ ROCKBASE_MODE: 'server', DATABASE_URL: unavailable });
+    assert.equal(unavailableRun.code, 1, 'An unavailable database must fail closed in Server Mode');
+    assert.match(unavailableRun.stderr, /Database credential verification unavailable/);
+
+    const cleanDb = new Database(file);
+    cleanDb.prepare('UPDATE User SET password = ?').run(uniqueHash);
+    cleanDb.close();
     const cleanRun = await runGuard({ ROCKBASE_MODE: 'server', DATABASE_URL: `file:${file}` });
     assert.equal(cleanRun.code, 0, `preflight should pass with unique credentials; stderr: ${cleanRun.stderr}`);
     assert.match(cleanRun.stderr, /preflight passed/, 'expected preflight success message');
