@@ -76,3 +76,15 @@ backend/backups/
 backend/uploads/
 .claude/
 node_modules/
+
+# Local-only audit/runtime secrets and SQLite journals (never publish)
+*.sqlite-wal
+*.sqlite-shm
+*.db-wal
+*.db-shm
+*.pem
+*.key
+*.p12
+*.pfx
+oauth-tokens*.json
+service-account*.json

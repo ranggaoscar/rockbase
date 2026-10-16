@@ -11,6 +11,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { scrubSensitiveData } from '../utils/sensitiveData';
 
 const LOG_DIR = process.env.LOG_DIR || path.join(process.cwd(), '..', 'logs');
 const MAX_LOG_AGE_DAYS = 30;
@@ -40,7 +41,7 @@ function getLogFilePath(): string {
 
 function writeToFile(entry: LogEntry): void {
   try {
-    const line = JSON.stringify(entry) + '\n';
+    const line = JSON.stringify(scrubSensitiveData(entry)) + '\n';
     fs.appendFileSync(getLogFilePath(), line, 'utf-8');
   } catch (err) {
     console.error('[Logger] Failed to write to log file:', err);
@@ -57,13 +58,14 @@ function log(level: LogLevel, message: string, data?: Record<string, any>): void
 
   // Console output
   const prefix = `[${entry.timestamp}] [${level.toUpperCase()}]`;
-  const dataStr = data ? ` ${JSON.stringify(data)}` : '';
+  const safeEntry = scrubSensitiveData(entry);
+  const dataStr = safeEntry.data ? ` ${JSON.stringify(safeEntry.data)}` : '';
 
   switch (level) {
-    case 'info':  console.log(`${prefix} ${message}${dataStr}`); break;
-    case 'warn':  console.warn(`${prefix} ${message}${dataStr}`); break;
-    case 'error': console.error(`${prefix} ${message}${dataStr}`); break;
-    case 'debug': console.debug(`${prefix} ${message}${dataStr}`); break;
+    case 'info':  console.log(`${prefix} ${safeEntry.message}${dataStr}`); break;
+    case 'warn':  console.warn(`${prefix} ${safeEntry.message}${dataStr}`); break;
+    case 'error': console.error(`${prefix} ${safeEntry.message}${dataStr}`); break;
+    case 'debug': console.debug(`${prefix} ${safeEntry.message}${dataStr}`); break;
   }
 
   // File output
@@ -112,7 +114,10 @@ export function readRecentLogs(lines: number = 200): string[] {
 
     const content = fs.readFileSync(logFile, 'utf-8');
     const allLines = content.trim().split('\n');
-    return allLines.slice(-lines);
+    return allLines.slice(-lines).map((line) => {
+      try { return JSON.stringify(scrubSensitiveData(JSON.parse(line))); }
+      catch { return scrubSensitiveData(line); }
+    });
   } catch (err) {
     return ['Failed to read log file.'];
   }

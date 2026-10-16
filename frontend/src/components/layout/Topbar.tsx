@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils'
 
 const routeLabels: Record<string, string> = {
   '/':          'Dashboard',
+  '/seo':       'SEO Intelligence',
   '/farm':      'Farm View',
   '/accounts':  'Accounts',
   '/engagement': 'Engagement',

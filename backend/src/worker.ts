@@ -1,9 +1,13 @@
+import { installConsoleRedaction } from './utils/sensitiveData';
+installConsoleRedaction();
 import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
 import { Queue } from 'bullmq';
 import { AUTOMATION_DISABLED_MESSAGE, isAutomationEnabled } from './middleware/automation';
 import { assertSeparateWorkerMode } from './utils/workerMode';
+import { getRockBaseMode } from './middleware/runtimeMode';
 import { assertEncryptionConfiguration } from './utils/encryption';
+import { assertServerModeDefaultCredentialGuard } from './utils/serverDefaultCredentialGuard';
 import { executionReliabilityReconciler } from './services/ExecutionReliabilityReconciler';
 import { reconcileQueueReadOnly } from './services/QueueReconciliationService';
 dotenv.config();
@@ -16,10 +20,11 @@ if (!isAutomationEnabled()) {
   process.exit(1);
 }
 
-console.log('================================================');
-console.log('         ROCK BASE QUEUE WORKER SYSTEM          ');
-console.log('================================================');
-console.log(`[Worker Process] Starting at: ${new Date().toISOString()}`);
+const startWorkerSystem = (): void => {
+  console.log('================================================');
+  console.log('         ROCK BASE QUEUE WORKER SYSTEM          ');
+  console.log('================================================');
+  console.log(`[Worker Process] Starting at: ${new Date().toISOString()}`);
 
 // Load workers
 require('./queue/postingWorker');
@@ -126,3 +131,19 @@ setInterval(async () => {
     recoveryRunning = false;
   }
 }, RECOVERY_INTERVAL_MS);
+};
+
+// Server Mode must refuse to start while any dashboard account still
+// accepts a previously shipped default password (fail-closed preflight).
+if (getRockBaseMode() === 'server') {
+  assertServerModeDefaultCredentialGuard()
+    .then(() => {
+      if (process.exitCode === undefined || process.exitCode === 0) startWorkerSystem();
+    })
+    .catch((error) => {
+      console.error('[Worker Process] Default-credential preflight crashed:', error instanceof Error ? error.message : error);
+      process.exit(1);
+    });
+} else {
+  startWorkerSystem();
+}
