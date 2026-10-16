@@ -2,7 +2,7 @@
 
 ## Current status
 
-Implemented on local branch `feat/gsc-intelligence-phase2`, based on merged main `46776f7da2a0c99c5bbb653c7989cbe19a8b7bf5`. No push or deployment. Main is synchronized in `RockBase-main`; the original RockDroid branches/worktree and untracked `working/android-phase3e/` are preserved.
+Implemented on branch `feat/gsc-intelligence-phase2`, based on merged main `46776f7da2a0c99c5bbb653c7989cbe19a8b7bf5`. Owner Local Mode acceptance passed before PR publication. No merge or deployment. RockDroid branches/worktree and untracked `working/android-phase3e/` are preserved.
 
 Google connection and report states in the product are real, not seeded. **Live Local Mode pilot is complete for Magrade via the existing Hermes service account.** OAuth Desktop remains available and is not required for this pilot. No new Google Cloud project or OAuth client was created. Other installations still supply their own credentials; the owner's key is not an open-source default.
 
@@ -27,17 +27,13 @@ Do not create a new Google project or OAuth client before checking an existing a
 4. Disconnect requires no current provider. Switching back to OAuth Desktop is possible only after that local disconnect.
 5. Open-source copies do not receive this key. A new path/install hash does not inherit another install's vault entry.
 
-Verified live on 2026-10-16, Local Mode preview only:
+Live verification covers the existing service account, OS-vault reuse, source preservation and local-only disconnect. Detailed property inventory, metrics, query rows, database identifiers and screenshots stay in private local evidence, not the repository or PR.
 
-- Provider `service_account`, storage Windows Credential Manager. Source JSON hash unchanged before import, after disconnect, and after reconnect.
-- Authorized properties returned by Google: 9, including `sc-domain:magrade.co.id` and Brescia properties. Permission filter remains `siteOwner | siteFullUser | siteRestrictedUser`.
-- Mapped property `sc-domain:magrade.co.id` → workspace `workspace-default` → website `https://magrade.co.id/` (id 1). Brand key is the existing campaign role `Magrade`, linked to that same website row. No second Magrade website was created.
-- 28-day finalized window `2026-09-16`–`2026-10-13` (America/Los_Angeles): **26 clicks, 1,185 impressions, CTR 2.19%, average position 5.60**. Previous equal window: 22 clicks, 1,382 impressions, CTR 1.59%, position 9.13.
-- Returned rows: 32 pages, 106 queries. Established keyword rule (>=50 impressions, position 4–20) can be empty. Low-volume niche candidates are separate: 8–49 impressions and the same position band, labeled `low_volume`, not scored by AI.
-- Brescia Stone live property used for acceptance is `sc-domain:bresciastone.co.id`, mapped to website id 3 and existing brand key `Brescia Stone`. Same 28-day window: **11 clicks, 1,246 impressions, CTR 0.88%, average position 7.06**. Previous: 16 clicks, 1,327 impressions, position 12.93. Rows: 25 pages, 134 queries, 3 established candidates (`marble`, `quartz`, `quartz stone`) and 9 low-volume candidates. The authorized `https://www.bresciastone.com/` prefix was also synced and kept separate: 0 clicks, 3 impressions. It was not replaced by the domain property.
-- 7-day and 28-day reports are stored separately. Reading one period does not return the other. Current and previous windows have equal inclusive length and do not overlap.
-- Restart read the vault without re-import. Disconnect reported `revoked: false`, `sourcePreserved: true`; the same source file reconnected and Google still listed Magrade.
-- Browser read-back on `/seo` matched the persisted report, including provider label, query filter, pagination, and reload. No page errors. No request interception.
+Owner acceptance uses the real owner social/workspace database and persistent SEO website registry, not the earlier scratch social fixture. Confirmed brand identities are registered idempotently in `website_brands`, scoped by workspace and case-insensitive key/name. No social account is inserted or modified to make a brand appear. Existing social brand tags remain available and are deduplicated against website brands.
+
+The two Brescia domains remain separate website/property mappings under one brand. Reports, totals and previous periods are not merged. Browser acceptance reads all three owner-backed reports and verifies brand labels, established/low-volume candidates, and reload persistence with no interception.
+
+Current and previous windows have equal inclusive length and do not overlap. The 7-day and 28-day reports are separate; reading one does not return the other. Source preservation and unchanged social/crawl/Android records are verified independently.
 
 Google External/Testing refresh grants for this non-profile scope can expire after seven days. Production distribution can require Google's verification/consent requirements. Every installation must configure/authorize its own account. Never publish an owner's OAuth tokens as an open-source default.
 
@@ -77,15 +73,17 @@ Executed focused tests, not a repeat of Phase 1's complete audit:
 - Real disconnected browser state: no login needed, secure setup visible, Connect disabled until configured, no fabricated metrics. Synthetic UI-only interception separately verifies report tabs/filters and late-old-website response discard; it is **not live GSC acceptance**. Zero browser page errors.
 - Scoped Gitleaks 8.30.1 scan of all 14 new/modified Phase 2 source/document files: **0 findings**. Source scanner evidence stays in Hermes scratch, not Git. No new npm/Python dependency or lockfile changes were needed.
 - Final GSC setup screenshot inspected: controls and security explanations readable/reachable, no blocking GSC clipping. Report tables use 100-row UI pages rather than rendering up to 50,000 rows at once.
+- Owner finalization: `tests/test_brand_registry.py` PASS (persistent registry, duplicate prevention, workspace isolation, existing website linkage). Backend typecheck PASS. Earlier OAuth/security/regressions were not repeated.
+- Owner API/browser acceptance PASS, including read-back after backend restart. All original social table contents, crawl history and protected Android work compare unchanged. The shared Hermes credential file compares unchanged. Exact key-material comparison and redacted secret scans found no credential disclosure in the publication files or inspected logs.
 
 ## Live acceptance
 
-Magrade service-account pilot above is the live acceptance for this phase. OAuth Desktop consent was not exercised against a real Google account and is not required while the service account remains authorized. Brescia properties were listed but not synced. Magrade crawler `robots.txt` HTTP 403 remains independent: GSC search performance does not complete the crawl audit and was not bypassed.
+Owner Local Mode acceptance passed for the three separate website/property mappings. Both brands persist independently of social accounts; all three 28-day reports can be read. Keyword confidence labels are checked against actual returned metrics. OAuth Desktop live consent was not required and is not claimed. Magrade crawler `robots.txt` HTTP 403 remains independent: GSC performance does not complete the crawl audit and was not bypassed.
 
 ## Run / scope
 
-Standard installation: existing RockBase Local Mode launcher after `modules/seo/SETUP_SEO.bat`; GSC introduces no package dependencies or migrations. Use only one listener on 3010/5173/8765. Do not point separate checkouts at the same social DB/queue or copy an old `.env` just to run this worktree.
+Standard installation: existing RockBase Local Mode launcher after `modules/seo/SETUP_SEO.bat`. No package dependencies or social database migrations. The SEO database gains the additive `website_brands` table. Use only one listener on 3010/5173/8765. `ROCKBASE_SEO_DB` optionally points the feature checkout at the owner's existing SEO database; back up first and do not run competing workers against it. Never copy secrets or a scratch social database over the owner database.
 
-The task preview uses an explicitly empty scratch social database and the existing disposable QA Redis on 16379, not owner social sessions/queue. Stop or restart only this task-owned preview. Configure OAuth directly in the local UI only when ready for pilot consent.
+Owner acceptance mounted the existing production route handlers in passwordless loopback Local Mode against the real owner databases, with social automation/schedulers not started. No accounts, sessions or queues were changed. The Windows vault remains installation-path scoped to this feature checkout; another checkout needs its own explicit local connection. `POST /api/seo/brands?workspace_id=<existing-workspace>` registers confirmed website brand key/name in Local Mode, with existing-name/key deduplication. `PATCH /api/seo/websites/<id>/brand` accepts only a registered workspace brand.
 
 Official contracts verified: [Desktop OAuth](https://developers.google.com/identity/protocols/oauth2/native-app), [Search Analytics query](https://developers.google.com/webmaster-tools/v1/searchanalytics/query), [limits](https://developers.google.com/webmaster-tools/limits), [row completeness](https://developers.google.com/webmaster-tools/v1/how-tos/all-your-data), [sites list](https://developers.google.com/webmaster-tools/v1/sites/list).
