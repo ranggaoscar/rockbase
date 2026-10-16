@@ -125,7 +125,7 @@ function run(name, cwd, command, args, color) {
 
   console.log(`${prefix('info', colors.blue)} Backend  → http://localhost:3010`);
   console.log(`${prefix('info', colors.blue)} Frontend → http://localhost:5173`);
-  console.log(`${prefix('info', colors.blue)} Login    → admin@rockbase.com / Admin@123`);
+  console.log(`${prefix('info', colors.blue)} Login    → use your installation-specific administrator credential (no shared default).`);
   console.log(
     `${prefix('info', colors.dim)} Press Ctrl+C to stop all processes${colors.reset}`
   );

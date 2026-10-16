@@ -3,7 +3,9 @@
 # Stop with:   docker compose down
 # Logs:       docker compose logs -f
 #
-# Default login: admin@rockbase.com / Admin@123
+# Auth: Local Mode is passwordless (Windows operator). Server Mode requires
+#       first-run bootstrap credentials (see scripts/setup-rockbase.ps1); it
+#       refuses to start while shipped default credentials remain valid.
 # Dashboard:     http://localhost:5173
 
 version: "3.9"

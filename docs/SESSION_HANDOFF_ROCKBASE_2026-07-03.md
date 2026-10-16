@@ -54,7 +54,9 @@
 
 ## Login Credentials
 
-- RockBase API: `admin@socialcommand.com` / `Admin@123`
+- RockBase API login: the historical default credentials were valid on this date
+  (since removed from all shipped setup paths; Server Mode now refuses them.
+  See `docs/SECURITY_REMEDIATION.md`.)
 - Frontend: `http://localhost:5173`
 - ComfyUI: `http://localhost:8188`
 

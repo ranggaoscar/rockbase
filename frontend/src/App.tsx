@@ -8,6 +8,7 @@ import ExperimentalUnavailable from '@/components/common/ExperimentalUnavailable
 // Pages
 import Login from '@/pages/Login'
 import Dashboard from '@/pages/Dashboard'
+import SeoIntelligence from '@/pages/SeoIntelligence'
 import FarmView from '@/pages/FarmView'
 import Accounts from '@/pages/Accounts'
 import Compose from '@/pages/Compose'
@@ -63,6 +64,7 @@ export default function App() {
                 <FarmView />
               </ErrorBoundary>
             } />
+            <Route path="seo" element={<ErrorBoundary><SeoIntelligence /></ErrorBoundary>} />
             <Route path="accounts" element={
               <ErrorBoundary>
                 <Accounts />
