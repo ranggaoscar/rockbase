@@ -21,6 +21,10 @@ class Repository:
                     id INTEGER PRIMARY KEY, workspace_id TEXT NOT NULL,
                     brand_key TEXT NOT NULL DEFAULT '', name TEXT NOT NULL, base_url TEXT NOT NULL,
                     UNIQUE(workspace_id, base_url));
+                CREATE TABLE IF NOT EXISTS website_brands (
+                    workspace_id TEXT NOT NULL, key TEXT NOT NULL COLLATE NOCASE,
+                    name TEXT NOT NULL COLLATE NOCASE,
+                    PRIMARY KEY(workspace_id, key), UNIQUE(workspace_id, name));
                 CREATE TABLE IF NOT EXISTS scans (
                     id INTEGER PRIMARY KEY, website_id INTEGER NOT NULL REFERENCES websites(id),
                     status TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT,
@@ -56,6 +60,18 @@ class Repository:
         with self.connect() as db:
             return [dict(x) for x in db.execute("SELECT * FROM websites WHERE workspace_id=? ORDER BY id", (workspace,))]
 
+    def brands(self, workspace):
+        with self.connect() as db:
+            return [dict(row) for row in db.execute("SELECT key,name,workspace_id FROM website_brands WHERE workspace_id=? ORDER BY name", (workspace,))]
+
+    def register_brand(self, workspace, key, name):
+        with self.connect() as db:
+            existing = db.execute("SELECT key,name,workspace_id FROM website_brands WHERE workspace_id=? AND (key=? OR name=?)", (workspace, key, name)).fetchone()
+            if existing:
+                return dict(existing)
+            db.execute("INSERT INTO website_brands(workspace_id,key,name) VALUES(?,?,?)", (workspace, key, name))
+        return next(row for row in self.brands(workspace) if row["key"] == key)
+
     def website(self, website_id, workspace):
         with self.connect() as db:
             row = db.execute("SELECT * FROM websites WHERE id=? AND workspace_id=?", (website_id, workspace)).fetchone()
@@ -65,6 +81,13 @@ class Repository:
         with self.connect() as db:
             db.execute("INSERT INTO websites(workspace_id,name,base_url,brand_key) VALUES(?,?,?,?) ON CONFLICT(workspace_id,base_url) DO NOTHING", (workspace, name, base_url, brand_key))
             return dict(db.execute("SELECT * FROM websites WHERE workspace_id=? AND base_url=?", (workspace, base_url)).fetchone())
+
+    def set_brand(self, website_id, workspace, brand_key):
+        with self.connect() as db:
+            changed = db.execute("UPDATE websites SET brand_key=? WHERE id=? AND workspace_id=?", (brand_key, website_id, workspace)).rowcount
+        if not changed:
+            return None
+        return self.website(website_id, workspace)
 
     def scan(self, scan_id, workspace=None):
         with self.connect() as db:

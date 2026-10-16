@@ -4,7 +4,9 @@ import fs from 'fs';
 import path from 'path';
 
 const moduleRoot = path.resolve(__dirname, '../../../modules/seo');
-const databasePath = path.resolve(__dirname, '../../../rockbase-data/seo/seo.sqlite');
+const databasePath = process.env.ROCKBASE_SEO_DB
+  ? path.resolve(process.env.ROCKBASE_SEO_DB)
+  : path.resolve(__dirname, '../../../rockbase-data/seo/seo.sqlite');
 const serviceUrl = 'http://127.0.0.1:8765';
 // Ephemeral IPC authentication, not a social/auth credential; never persisted or logged.
 const token = randomBytes(32).toString('hex');

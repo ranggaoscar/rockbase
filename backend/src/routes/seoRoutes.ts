@@ -25,11 +25,18 @@ async function identities(req: AuthRequest) {
     select: { id: true, name: true, accounts: { select: { brandTag: true }, distinct: ['brandTag'] } },
     orderBy: { createdAt: 'asc' },
   });
-  return workspaces.map((workspace) => ({
-    id: workspace.id, name: workspace.name,
-    brands: workspace.accounts.filter((account) => account.brandTag?.trim()).map((account) => ({
-      key: account.brandTag!, name: account.brandTag!, workspace_id: workspace.id, source: 'SocialAccount.brandTag',
-    })),
+  return Promise.all(workspaces.map(async (workspace) => {
+    const response = await seoRequest('/brands', workspace.id);
+    if (!response.ok) throw new Error('Persistent website brand registry unavailable.');
+    const stored = await response.json() as Array<{ key: string; name: string; workspace_id: string }>;
+    const brands = stored.map((brand) => ({ ...brand, source: 'WebsiteBrand' }));
+    for (const account of workspace.accounts) {
+      const key = account.brandTag?.trim();
+      if (key && !brands.some((brand) => brand.key.toLowerCase() === key.toLowerCase() || brand.name.toLowerCase() === key.toLowerCase())) {
+        brands.push({ key, name: key, workspace_id: workspace.id, source: 'SocialAccount.brandTag' });
+      }
+    }
+    return { id: workspace.id, name: workspace.name, brands };
   }));
 }
 
@@ -50,14 +57,31 @@ router.use(async (req: AuthRequest, res: Response) => {
     const path = req.path;
     const allowed = req.method === 'GET'
       ? /^\/(health|websites|websites\/\d+\/scans|scans\/\d+(\/(pages|issues|compare|export))?)$/.test(path)
-      : req.method === 'POST' && /^\/(websites|websites\/\d+\/scans)$/.test(path);
+      : (req.method === 'POST' && /^\/(brands|websites|websites\/\d+\/scans)$/.test(path))
+        || (req.method === 'PATCH' && /^\/websites\/\d+\/brand$/.test(path));
     if (!allowed) { res.status(404).json({ error: 'Unknown SEO operation' }); return; }
     if (req.method === 'POST' && !['Admin', 'Operator'].includes(req.user?.role || '')) {
       res.status(403).json({ error: 'Insufficient permissions' }); return;
     }
 
+    if (path === '/brands' && req.method === 'POST') {
+      // Owner-confirmed website brands are independent of social accounts.
+      if (getRockBaseMode() !== 'local') { res.status(409).json({ error: 'LOCAL_BRAND_REGISTRATION_ONLY' }); return; }
+      const { key, name } = req.body || {};
+      if (typeof key !== 'string' || typeof name !== 'string' || !key.trim() || !name.trim() || key.length > 160 || name.length > 160) {
+        res.status(422).json({ error: 'Brand key and name are required (max 160 characters).' }); return;
+      }
+      const existing = workspace.brands.find((b) => [b.key.toLowerCase(), b.name.toLowerCase()].some((value) => value === key.trim().toLowerCase() || value === name.trim().toLowerCase()));
+      if (existing) { res.json(existing); return; }
+    }
     if (path === '/websites' && req.method === 'POST' && req.body.brand_key && !workspace.brands.some((b) => b.key === req.body.brand_key)) {
       res.status(422).json({ error: 'Select a brand from the existing workspace registry.' }); return;
+    }
+    if (/^\/websites\/\d+\/brand$/.test(path) && req.method === 'PATCH') {
+      if (!['Admin', 'Operator'].includes(req.user?.role || '')) { res.status(403).json({ error: 'Insufficient permissions' }); return; }
+      if (typeof req.body?.brand_key !== 'string' || !workspace.brands.some((b) => b.key === req.body.brand_key)) {
+        res.status(422).json({ error: 'Select a brand that already exists in this workspace.' }); return;
+      }
     }
     const params = new URLSearchParams();
     for (const key of ['q', 'priority', 'status', 'kind', 'format']) {

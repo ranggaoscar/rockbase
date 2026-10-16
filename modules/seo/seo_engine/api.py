@@ -73,6 +73,21 @@ def create_app(repo=None, *, token=None, validate=validate_public):
     def websites(x_workspace_id: str = Header()):
         return repo.websites(x_workspace_id)
 
+    class WorkspaceBrandInput(BaseModel):
+        key: str = Field(min_length=1, max_length=160)
+        name: str = Field(min_length=1, max_length=160)
+
+    @app.get("/api/brands")
+    def brands(x_workspace_id: str = Header()):
+        return repo.brands(x_workspace_id)
+
+    @app.post("/api/brands")
+    def register_brand(body: WorkspaceBrandInput, x_workspace_id: str = Header()):
+        key, name = body.key.strip(), body.name.strip()
+        if not key or not name:
+            raise HTTPException(422, "Brand key and name are required")
+        return repo.register_brand(x_workspace_id, key, name)
+
     @app.post("/api/websites", status_code=201)
     async def add_website(body: WebsiteInput, x_workspace_id: str = Header()):
         try:
@@ -81,6 +96,15 @@ def create_app(repo=None, *, token=None, validate=validate_public):
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         return repo.add_website(x_workspace_id, body.name.strip(), url, body.brand_key)
+
+    class BrandInput(BaseModel):
+        brand_key: str = Field(min_length=1, max_length=160)
+
+    @app.patch("/api/websites/{website_id}/brand")
+    def set_brand(website_id: int, body: BrandInput, x_workspace_id: str = Header()):
+        if not (updated := repo.set_brand(website_id, x_workspace_id, body.brand_key.strip())):
+            raise HTTPException(404, "Website not found")
+        return updated
 
     @app.get("/api/websites/{website_id}/scans")
     def scans(website_id: int, x_workspace_id: str = Header()):

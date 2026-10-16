@@ -18,6 +18,7 @@ import { assertJwtConfiguration, verifyAccessToken } from './middleware/security
 import { assertEncryptionConfiguration } from './utils/encryption';
 import { getRockBaseMode, isLoopbackAddress, localOperator, requireLocalLoopback } from './middleware/runtimeMode';
 import seoRoutes from './routes/seoRoutes';
+import gscRoutes from './routes/gscRoutes';
 import { stopSeoWorker } from './services/SeoWorkerService';
 
 dotenv.config();
@@ -138,6 +139,7 @@ app.use('/api/auth', authRoutes);
 app.use('/uploads', authenticateToken, express.static(path.join(process.cwd(), 'uploads')));
 app.use('/internal/hermes', hermesShadowCampaignRoutes);
 app.use('/api', noStore, authenticateToken);
+app.use('/api/gsc', gscRoutes);
 app.use('/api/seo', seoRoutes);
 app.use('/api/accounts', accountRoutes);
 app.use('/api/proxies', proxyRoutes);
