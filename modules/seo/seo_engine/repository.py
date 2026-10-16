@@ -66,6 +66,13 @@ class Repository:
             db.execute("INSERT INTO websites(workspace_id,name,base_url,brand_key) VALUES(?,?,?,?) ON CONFLICT(workspace_id,base_url) DO NOTHING", (workspace, name, base_url, brand_key))
             return dict(db.execute("SELECT * FROM websites WHERE workspace_id=? AND base_url=?", (workspace, base_url)).fetchone())
 
+    def set_brand(self, website_id, workspace, brand_key):
+        with self.connect() as db:
+            changed = db.execute("UPDATE websites SET brand_key=? WHERE id=? AND workspace_id=?", (brand_key, website_id, workspace)).rowcount
+        if not changed:
+            return None
+        return self.website(website_id, workspace)
+
     def scan(self, scan_id, workspace=None):
         with self.connect() as db:
             sql = """SELECT s.*, (SELECT COUNT(*) FROM pages p WHERE p.scan_id=s.id) pages_count,

@@ -82,6 +82,15 @@ def create_app(repo=None, *, token=None, validate=validate_public):
             raise HTTPException(422, str(exc)) from exc
         return repo.add_website(x_workspace_id, body.name.strip(), url, body.brand_key)
 
+    class BrandInput(BaseModel):
+        brand_key: str = Field(min_length=1, max_length=160)
+
+    @app.patch("/api/websites/{website_id}/brand")
+    def set_brand(website_id: int, body: BrandInput, x_workspace_id: str = Header()):
+        if not (updated := repo.set_brand(website_id, x_workspace_id, body.brand_key.strip())):
+            raise HTTPException(404, "Website not found")
+        return updated
+
     @app.get("/api/websites/{website_id}/scans")
     def scans(website_id: int, x_workspace_id: str = Header()):
         if not repo.website(website_id, x_workspace_id):

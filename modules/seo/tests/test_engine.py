@@ -142,6 +142,16 @@ def test_api_scope_exports_and_compare(tmp_path):
         assert len(compare["resolved_issues"]) == 1
 
 
+def test_existing_website_brand_can_be_linked(tmp_path):
+    repo = Repository(tmp_path / "seo.sqlite")
+    site = repo.add_website("workspace", "Magrade", "https://magrade.co.id/", "")
+    assert site["brand_key"] == ""
+    linked = repo.set_brand(site["id"], "workspace", "Magrade")
+    assert linked["id"] == site["id"] and linked["brand_key"] == "Magrade"
+    assert repo.websites("workspace").__len__() == 1
+    assert repo.set_brand(site["id"], "other", "Magrade") is None
+
+
 def test_single_active_and_restart_recovery(tmp_path):
     repo = Repository(tmp_path / "seo.sqlite")
     website = repo.add_website("w", "Site", "https://example.com/")

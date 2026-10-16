@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { seoApi, setSeoWorkspace, type Brand, type Comparison, type Issue, type PageRecord, type Scan, type Website } from '@/components/seo/api'
+import GscIntelligence from '@/components/seo/GscIntelligence'
 
 const active = (status?: string) => status === 'queued' || status === 'running'
 const dateLabel = (date?: string | null, compact = false) => date ? compact ? new Date(date).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : new Date(date).toLocaleString() : '—'
@@ -149,6 +150,8 @@ export default function SeoIntelligence() {
       <div className="space-y-2"><Label htmlFor="seo-history">Scan history</Label><Select value={scanId} onValueChange={setScanId}><SelectTrigger id="seo-history" title={dateLabel(scan?.started_at)}><SelectValue placeholder="No scans"/></SelectTrigger><SelectContent>{scans.map((item) => <SelectItem key={item.id} value={item.id}>{dateLabel(item.started_at, true)} · {item.status}</SelectItem>)}</SelectContent></Select></div>
       <Button aria-label="Refresh SEO data" variant="outline" disabled={loading} onClick={() => { loadWebsites(websiteId).then(() => loadScans(websiteId, scanId)).catch(() => toast.error('Refresh failed')) }}><RefreshCw className="h-4 w-4"/>Refresh</Button>
     </CardContent></Card>
+
+    <GscIntelligence website={selectedWebsite} workspaceId={workspaceId || selectedWebsite?.workspace_id || brands.find((b) => b.source === 'Workspace')?.workspace_id || ''} />
 
     {!loading && websites.length === 0 ? <Card><CardContent className="py-14 text-center"><Globe2 className="mx-auto h-9 w-9 text-muted-foreground"/><h2 className="mt-4 font-semibold">No websites connected</h2><p className="mt-1 text-sm text-muted-foreground">Add a website to begin a real technical SEO scan. No sample audit data is shown.</p><Button className="mt-4" variant="purple" onClick={() => setShowAdd(true)}><Plus className="h-4 w-4"/>Add website</Button></CardContent></Card> : <>
       {selectedWebsite && <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-card/50 px-4 py-3"><div className="flex min-w-0 items-center gap-3"><Globe2 className="h-4 w-4 shrink-0 text-purple-400"/><div className="min-w-0"><p className="truncate text-sm font-medium">{selectedWebsite.name} <span className="font-normal text-muted-foreground">· {selectedWebsite.base_url}</span></p><p className="text-xs text-muted-foreground">Brand: {brands.find((b) => b.key && b.key === selectedWebsite.brand_key)?.name || selectedWebsite.brand_key || 'Unassigned'} <span className="px-1">·</span> Workspace: {selectedWebsite.workspace_id || 'Resolved by backend'}</p></div></div>{selectedWebsite.base_url && <a href={selectedWebsite.base_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">Visit site <ExternalLink className="h-3 w-3"/></a>}</div>}

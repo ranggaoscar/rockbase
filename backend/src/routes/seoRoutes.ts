@@ -50,7 +50,8 @@ router.use(async (req: AuthRequest, res: Response) => {
     const path = req.path;
     const allowed = req.method === 'GET'
       ? /^\/(health|websites|websites\/\d+\/scans|scans\/\d+(\/(pages|issues|compare|export))?)$/.test(path)
-      : req.method === 'POST' && /^\/(websites|websites\/\d+\/scans)$/.test(path);
+      : (req.method === 'POST' && /^\/(websites|websites\/\d+\/scans)$/.test(path))
+        || (req.method === 'PATCH' && /^\/websites\/\d+\/brand$/.test(path));
     if (!allowed) { res.status(404).json({ error: 'Unknown SEO operation' }); return; }
     if (req.method === 'POST' && !['Admin', 'Operator'].includes(req.user?.role || '')) {
       res.status(403).json({ error: 'Insufficient permissions' }); return;
@@ -58,6 +59,12 @@ router.use(async (req: AuthRequest, res: Response) => {
 
     if (path === '/websites' && req.method === 'POST' && req.body.brand_key && !workspace.brands.some((b) => b.key === req.body.brand_key)) {
       res.status(422).json({ error: 'Select a brand from the existing workspace registry.' }); return;
+    }
+    if (/^\/websites\/\d+\/brand$/.test(path) && req.method === 'PATCH') {
+      if (!['Admin', 'Operator'].includes(req.user?.role || '')) { res.status(403).json({ error: 'Insufficient permissions' }); return; }
+      if (typeof req.body?.brand_key !== 'string' || !workspace.brands.some((b) => b.key === req.body.brand_key)) {
+        res.status(422).json({ error: 'Select a brand that already exists in this workspace.' }); return;
+      }
     }
     const params = new URLSearchParams();
     for (const key of ['q', 'priority', 'status', 'kind', 'format']) {
