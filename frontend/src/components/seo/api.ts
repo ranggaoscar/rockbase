@@ -14,6 +14,9 @@ export interface Scan {
 }
 export interface PageRecord {
   id: string; scan_id: string; url: string; final_url?: string | null; status_code?: number | null; title?: string | null
+  first_status_code?: number | null; final_status_code?: number | null; depth?: number | null
+  inlinks?: number; unique_inlinks?: number; followed_inlinks?: number; unique_followed_inlinks?: number
+  outlinks?: number; unique_outlinks?: number; path?: string[]; discovery_sources?: string[]
   description?: string | null; h1?: string[]; canonical?: string | null; meta_robots?: string | null; x_robots_tag?: string | null
   indexable: boolean; content_type?: string | null; redirect_chain?: Array<{ url: string; status: number; location?: string | null }>
   internal_links?: string[]; render_mode?: string | null; error?: string | null; elapsed_ms?: number | null
@@ -22,6 +25,30 @@ export interface Issue {
   id: string; scan_id: string; code: string; priority: 'high' | 'medium' | 'low'; title: string
   recommendation: string; url: string; details?: Record<string, unknown>
 }
+export interface LinkEdge {
+  source_url: string; target_url: string; kind: 'hyperlink' | 'canonical' | 'redirect' | 'sitemap' | string
+  anchor?: string | null; rel?: string[]; follow?: boolean; occurrence?: number
+  source_status_code?: number | null; target_status_code?: number | null; target_final_status_code?: number | null; status_code?: number | null
+  first_status_code?: number | null; final_status_code?: number | null; rule_reason?: string | null
+}
+export interface GraphNode {
+  url: string; observed: boolean; status_code?: number | null; indexable?: boolean | null; depth: number | null
+  redirect_hops: number | null; path: string[]; inlinks: number; unique_inlinks: number
+  followed_inlinks: number; unique_followed_inlinks: number; outlinks: number; unique_outlinks: number
+  discovery_sources: string[]
+}
+export interface LinkGraph {
+  available: boolean; version: number; start_url?: string | null; nodes: GraphNode[]; edges: LinkEdge[]
+  histogram: Array<{ depth: number; count: number }>; coverage: Record<string, unknown>; warnings: string[]
+}
+export interface IssueGroup {
+  code: string; category: 'links' | 'metadata' | 'indexability' | 'redirects' | 'access' | string
+  issue_type: 'issue' | 'warning' | 'opportunity' | 'insight' | string; priority: 'high' | 'medium' | 'low'
+  confidence: 'observed' | 'review' | 'unknown' | string; title: string; recommendation: string; fix_steps: string[]
+  priority_reason: string; affected_count: number; eligible_count: number | null; coverage_pct: number | null
+  affected_urls: string[]; occurrences: number; issues: Issue[]
+}
+export interface IssueGroups { groups: IssueGroup[]; coverage: Record<string, unknown>; note?: string | null }
 export interface Comparison {
   previous_scan_id: number | null; added_urls: string[]; removed_urls: string[]; changed_urls: Array<{ url: string; fields: Record<string, { before: unknown; after: unknown }> }>
   new_issues: Issue[]; resolved_issues: Issue[]; note?: string | null
@@ -56,6 +83,8 @@ export const seoApi = {
   pages: (scanId: string, params: { q?: string; status?: string }) => normalized(api.get<PageRecord[]>(`${root}/scans/${encodeURIComponent(scanId)}/pages`, { params: { ...scope(), ...params } })),
   issues: (scanId: string, params: { q?: string; priority?: string }) => normalized(api.get<Issue[]>(`${root}/scans/${encodeURIComponent(scanId)}/issues`, { params: { ...scope(), ...params } })),
   compare: (scanId: string) => api.get<Comparison>(`${root}/scans/${encodeURIComponent(scanId)}/compare`, { params: scope() }),
-  export: (scanId: string, params: { kind: 'issues' | 'pages'; format: 'csv' | 'json'; q?: string; priority?: string; status?: string }) =>
+  graph: (scanId: string) => normalized(api.get<LinkGraph>(`${root}/scans/${encodeURIComponent(scanId)}/graph`, { params: scope() })),
+  issueGroups: (scanId: string, params: { q?: string; priority?: string }) => normalized(api.get<IssueGroups>(`${root}/scans/${encodeURIComponent(scanId)}/issue-groups`, { params: { ...scope(), ...params } })),
+  export: (scanId: string, params: { kind: 'issues' | 'pages' | 'links' | 'issue-groups' | 'actions'; format: 'csv' | 'json'; q?: string; priority?: string; status?: string; category?: string; confidence?: string; issue_type?: string }) =>
     api.get<Blob>(`${root}/scans/${encodeURIComponent(scanId)}/export`, { params: { ...scope(), ...params }, responseType: 'blob' }),
 }

@@ -97,9 +97,28 @@ class PoliteClient:
             self.next_request = time.monotonic() + self.delay
 
     async def fetch(self, url: str, *, robots: bool = True) -> tuple[httpx.Response, list[dict]]:
-        chain = []
+        history = {"chain": [], "response": None}
+        try:
+            return await self._fetch(url, robots=robots, history=history)
+        except Exception as exc:
+            if history["chain"]:
+                exc.redirect_chain = history["chain"]
+                if getattr(exc, "response", None) is None:
+                    exc.response = history["response"]
+            raise
+
+    async def _fetch(self, url: str, *, robots: bool, history) -> tuple[httpx.Response, list[dict]]:
+        chain = history["chain"]
+        visited = set()
+        last_response = None
         for _ in range(9):
             url = normalize_url(url)
+            if url in visited:
+                error = PolicyError("Redirect loop detected")
+                error.response = last_response
+                error.redirect_chain = chain
+                raise error
+            visited.add(url)
             if self.halted:
                 raise PolicyError("Scan stopped after HTTP 429; retry later")
             if origin(url) != origin(self.site):
@@ -118,18 +137,35 @@ class PoliteClient:
                 # aiter_bytes already decompresses: do not decode Content-Encoding a second time.
                 headers = {k: v for k, v in stream.headers.items() if k.lower() not in {"content-encoding", "content-length", "transfer-encoding"}}
                 response = httpx.Response(stream.status_code, headers=headers, content=b"".join(chunks), request=stream.request)
+            last_response = response
+            history["response"] = response
             if response.status_code == 429:
                 self.halted = True
             if response.status_code in {301, 302, 303, 307, 308} and response.headers.get("location"):
-                next_url = normalize_url(response.headers["location"], url)
+                try:
+                    next_url = normalize_url(response.headers["location"], url)
+                except PolicyError as exc:
+                    chain.append({"url": url, "status": response.status_code, "location": ""})
+                    exc.response = response
+                    exc.redirect_chain = chain
+                    raise
                 chain.append({"url": url, "status": response.status_code, "location": next_url})
+                if next_url in visited:
+                    error = PolicyError("Redirect loop detected")
+                    error.response = response
+                    error.redirect_chain = chain
+                    raise error
+
                 # Preserve observed redirect even when the destination is out-of-scope or forbidden.
                 if origin(next_url) != origin(self.site) or (robots and self.robots_ready and not self.allowed(next_url)):
                     return response, chain
                 url = next_url
             else:
                 return response, chain
-        raise PolicyError("Redirect limit exceeded (8 hops)")
+        error = PolicyError("Redirect limit exceeded (8 hops)")
+        error.response = last_response
+        error.redirect_chain = chain
+        raise error
 
     async def load_robots(self) -> tuple[str, int]:
         url = origin(self.site) + "/robots.txt"

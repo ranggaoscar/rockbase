@@ -15,6 +15,8 @@ from defusedxml import ElementTree
 
 from .policy import PoliteClient, internal_url, normalize_url, origin
 from .rules import audit_pages, extract_page, failed_page
+from .graph import build_graph
+from .triage import enrich_issue
 
 
 class SeoCrawler:
@@ -24,7 +26,7 @@ class SeoCrawler:
         self.admitted, self.discovered, self.pages = set(), set(), []
         self.summary = {"status_counts": {}, "priority_counts": {}, "indexable_count": 0,
                         "robots_url": origin(website["base_url"]) + "/robots.txt", "robots_status": None,
-                        "sitemap_urls": [], "sitemap_discovered": 0, "discovered_count": 0,
+                        "sitemap_urls": [], "sitemap_edges": [], "sitemap_discovered": 0, "discovered_count": 0,
                         "skipped_robots": 0, "warnings": [], "limit_reached": False}
         self.pw = self.browser = None
         self.browser_lock = asyncio.Lock()
@@ -84,6 +86,10 @@ class SeoCrawler:
                     for location in locations:
                         if u := internal_url(location, url, self.website["base_url"]):
                             pages.add(u)
+                            if len(self.summary["sitemap_edges"]) < 5000:
+                                self.summary["sitemap_edges"].append({"source_url": url, "target_url": u})
+                            elif "Sitemap relation budget reached; discovery provenance is partial." not in self.summary["warnings"]:
+                                self.summary["warnings"].append("Sitemap relation budget reached; discovery provenance is partial.")
                 else:
                     self.summary["warnings"].append(f"Unrecognized sitemap document: {url}")
             except Exception as exc:
@@ -165,7 +171,10 @@ class SeoCrawler:
                     if self.client.halted:
                         crawler.stop("HTTP 429; no bypass or retries")
                     else:
-                        more = await self.admit(p["internal_links"])
+                        # Canonical targets share the existing origin/robots/URL admission budget;
+                        # discovering them never bypasses safety or invents target status.
+                        candidates = [*p["internal_links"], *[e["target_url"] for e in p.get("link_edges", []) if e["kind"] == "canonical"]]
+                        more = await self.admit(candidates)
                         if more:
                             await context.add_requests(more)
                 except Exception as exc:
@@ -173,7 +182,13 @@ class SeoCrawler:
             initial = await self.admit(seeds)
             if initial:
                 await crawler.run(initial)
-            issues = audit_pages(self.pages)
+            graph = build_graph(self.pages, self.website["base_url"], sitemap_edges=self.summary["sitemap_edges"],
+                                limited=self.summary["limit_reached"] or self.summary["skipped_robots"] or self.client.halted)
+            self.repo.save_graph(self.scan["id"], graph)
+            self.summary["graph_version"] = graph["version"]
+            self.summary["graph_coverage"] = graph["coverage"]
+            self.summary["depth_histogram"] = graph["histogram"]
+            issues = [enrich_issue(issue) for issue in audit_pages(self.pages)]
             self.repo.save_issues(self.scan["id"], issues)
             self.summary["priority_counts"] = dict(Counter(i["priority"] for i in issues))
             self.summary["discovered_count"] = len(self.discovered)
