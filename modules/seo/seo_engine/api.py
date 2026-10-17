@@ -16,6 +16,7 @@ from typing import Literal
 
 from .policy import normalize_url, validate_public
 from .repository import Repository, now
+from .triage import action_rows
 
 
 def create_app(repo=None, *, token=None, validate=validate_public):
@@ -152,16 +153,45 @@ def create_app(repo=None, *, token=None, validate=validate_public):
         require_scan(scan_id, x_workspace_id)
         return repo.compare(scan_id)
 
+    @app.get("/api/scans/{scan_id}/graph")
+    def graph(scan_id: int, x_workspace_id: str = Header()):
+        require_scan(scan_id, x_workspace_id)
+        return repo.graph(scan_id)
+
+    @app.get("/api/scans/{scan_id}/issue-groups")
+    def issue_groups(scan_id: int, x_workspace_id: str = Header(), q: str = "", priority: str = "", category: str = "", confidence: str = "", issue_type: str = ""):
+        require_scan(scan_id, x_workspace_id)
+        return repo.issue_groups(scan_id, q=q, priority=priority, category=category, confidence=confidence, issue_type=issue_type)
+
     @app.get("/api/scans/{scan_id}/export")
-    def export(scan_id: int, x_workspace_id: str = Header(), kind: Literal["issues", "pages"] = "issues", format: Literal["csv", "json"] = "csv", q: str = "", priority: str = "", status: str = ""):
+    def export(scan_id: int, x_workspace_id: str = Header(), kind: Literal["issues", "pages", "links", "issue-groups", "actions"] = "issues", format: Literal["csv", "json"] = "csv", q: str = "", priority: str = "", status: str = "", category: str = "", confidence: str = "", issue_type: str = ""):
         scan = require_scan(scan_id, x_workspace_id)
-        rows = repo.rows(kind, scan_id, q=q, priority=priority, status=status)
+        coverage = {"scope": "observed_scan", "complete": False}
+        if kind in {"pages", "issues"}:
+            rows = repo.rows(kind, scan_id, q=q, priority=priority, status=status)
+        elif kind == "links":
+            captured = repo.graph(scan_id)
+            coverage = captured["coverage"]
+            rows = [edge for edge in captured["edges"] if not q or q.casefold() in json.dumps(edge, ensure_ascii=False).casefold()]
+        else:
+            groups = repo.issue_groups(scan_id, q=q, priority=priority, category=category, confidence=confidence, issue_type=issue_type)
+            coverage = groups["coverage"]
+            rows = action_rows(groups, repo.rows("pages", scan_id, analysis=False)) if kind == "actions" else [
+                {key: value for key, value in group.items() if key != "issues"} for group in groups["groups"]]
         if format == "json":
-            content = json.dumps({"scan": scan, "kind": kind, "filters": {"q": q, "priority": priority, "status": status}, "results": rows}, ensure_ascii=False, indent=2)
+            content = json.dumps({"scan": scan, "kind": kind, "coverage": coverage, "filters": {"q": q, "priority": priority, "status": status, "category": category, "confidence": confidence, "issue_type": issue_type}, "results": rows}, ensure_ascii=False, indent=2)
             media_type = "application/json"
         else:
             output = io.StringIO(newline="")
-            fields = list(rows[0]) if rows else (["id", "scan_id", "url", "code", "priority", "title", "recommendation", "details"] if kind == "issues" else ["id", "scan_id", "url", "status_code", "title"])
+            empty_fields = {
+                "issues": ["id", "scan_id", "url", "code", "priority", "title", "recommendation", "details"],
+                "pages": ["id", "scan_id", "url", "first_status_code", "final_status_code", "title", "depth"],
+                "links": ["source_url", "target_url", "kind", "anchor", "rel", "follow", "occurrence"],
+                "issue-groups": ["code", "category", "priority", "issue_type", "confidence", "affected_count", "eligible_count", "priority_reason", "fix_steps"],
+                "actions": ["source_url", "target_url", "first_status_code", "final_status_code", "target_status_code", "code", "priority", "confidence", "priority_reason", "fix_steps"],
+            }
+            # Additive snapshots may have different keys, including historical rows in one scan.
+            fields = list(dict.fromkeys(key for row in rows for key in row)) if rows else empty_fields[kind]
             writer = csv.DictWriter(output, fieldnames=fields)
             writer.writeheader()
             def safe(value):

@@ -56,7 +56,7 @@ router.use(async (req: AuthRequest, res: Response) => {
     if (!workspace) { res.status(404).json({ error: 'No authorized workspace found.' }); return; }
     const path = req.path;
     const allowed = req.method === 'GET'
-      ? /^\/(health|websites|websites\/\d+\/scans|scans\/\d+(\/(pages|issues|compare|export))?)$/.test(path)
+      ? /^\/(health|websites|websites\/\d+\/scans|scans\/\d+(\/(pages|issues|compare|graph|issue-groups|export))?)$/.test(path)
       : (req.method === 'POST' && /^\/(brands|websites|websites\/\d+\/scans)$/.test(path))
         || (req.method === 'PATCH' && /^\/websites\/\d+\/brand$/.test(path));
     if (!allowed) { res.status(404).json({ error: 'Unknown SEO operation' }); return; }
@@ -84,7 +84,7 @@ router.use(async (req: AuthRequest, res: Response) => {
       }
     }
     const params = new URLSearchParams();
-    for (const key of ['q', 'priority', 'status', 'kind', 'format']) {
+    for (const key of ['q', 'priority', 'status', 'kind', 'format', 'category', 'confidence', 'issue_type']) {
       if (typeof req.query[key] === 'string') params.set(key, req.query[key] as string);
     }
     const upstream = await seoRequest(path + (params.size ? `?${params}` : ''), workspace.id, req.method, req.body);

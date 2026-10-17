@@ -1,0 +1,278 @@
+{
+  "provenance": "Owned static fixture used in the Screaming Frog / REA R&D; replayed through MockTransport only, never a production crawl.",
+  "pages": {
+    "/": {
+      "title": "Controlled SEO laboratory home",
+      "description": "Controlled local SEO experiment with known links, statuses and metadata.",
+      "links": [
+        [
+          "/catalog/",
+          "Material catalogue"
+        ],
+        [
+          "/guide/",
+          "Material guide"
+        ],
+        [
+          "/duplicate-a/",
+          "Duplicate A"
+        ],
+        [
+          "/duplicate-b/",
+          "Duplicate B"
+        ],
+        [
+          "/canonical-alias/",
+          "Canonical alias"
+        ],
+        [
+          "/canonical-target/",
+          "Canonical destination"
+        ],
+        [
+          "/canonical-broken/",
+          "Broken canonical"
+        ],
+        [
+          "/canonical-missing/",
+          "No canonical"
+        ],
+        [
+          "/old-url/",
+          "Old destination"
+        ],
+        [
+          "/redirect-target/",
+          "Current destination"
+        ],
+        [
+          "/missing/",
+          "Broken destination"
+        ],
+        [
+          "/metadata-missing/",
+          "Metadata missing"
+        ],
+        [
+          "/noindex/",
+          "Intentionally noindex"
+        ],
+        [
+          "/blocked/",
+          "Robots blocked"
+        ]
+      ]
+    },
+    "/catalog/": {
+      "title": "Controlled catalogue of stone",
+      "description": "Browse the catalogue hierarchy in this controlled local experiment.",
+      "links": [
+        [
+          "/catalog/collection/",
+          "Collection"
+        ],
+        [
+          "/",
+          "Home"
+        ]
+      ]
+    },
+    "/catalog/collection/": {
+      "title": "Controlled stone collection",
+      "description": "Collection node at depth two in the experiment.",
+      "links": [
+        [
+          "/catalog/collection/slab/",
+          "Slab detail"
+        ],
+        [
+          "/catalog/",
+          "Catalogue"
+        ]
+      ]
+    },
+    "/catalog/collection/slab/": {
+      "title": "Controlled slab material detail",
+      "description": "Specific slab detail at depth three in the experiment.",
+      "links": [
+        [
+          "/catalog/collection/slab/specification/",
+          "Specification"
+        ],
+        [
+          "/catalog/",
+          "Catalogue"
+        ]
+      ]
+    },
+    "/catalog/collection/slab/specification/": {
+      "title": "Controlled slab specification",
+      "description": "Specification page four followed HTML links from the root.",
+      "links": [
+        [
+          "/catalog/",
+          "Catalogue"
+        ],
+        [
+          "/missing/",
+          "Broken technical attachment"
+        ]
+      ]
+    },
+    "/guide/": {
+      "title": "Controlled material buying guide",
+      "description": "A guide to choosing materials in the local experiment.",
+      "links": [
+        [
+          "/catalog/",
+          "Read the catalogue"
+        ],
+        [
+          "/redirect-target/",
+          "Updated guide destination"
+        ],
+        [
+          "/missing/",
+          "Missing guide attachment"
+        ]
+      ]
+    },
+    "/duplicate-a/": {
+      "title": "Duplicate metadata pair",
+      "description": "This exact description is deliberately duplicated on two pages.",
+      "links": [
+        [
+          "/catalog/",
+          "Catalogue"
+        ]
+      ],
+      "body": "First article has distinct text and its own self canonical."
+    },
+    "/duplicate-b/": {
+      "title": "Duplicate metadata pair",
+      "description": "This exact description is deliberately duplicated on two pages.",
+      "links": [
+        [
+          "/guide/",
+          "Guide"
+        ]
+      ],
+      "body": "Second article has different body copy; only title and meta description duplicate."
+    },
+    "/canonical-alias/": {
+      "title": "Controlled alternate stone page",
+      "description": "An alternate URL declares a canonical to a valid target.",
+      "canonical": "/canonical-target/",
+      "links": [
+        [
+          "/catalog/",
+          "Catalogue"
+        ]
+      ]
+    },
+    "/canonical-target/": {
+      "title": "Controlled canonical target page",
+      "description": "Preferred canonical target with self-referencing canonical.",
+      "links": [
+        [
+          "/catalog/",
+          "Catalogue"
+        ]
+      ]
+    },
+    "/canonical-broken/": {
+      "title": "Controlled broken canonical target",
+      "description": "Canonical destination deliberately returns HTTP 404.",
+      "canonical": "/missing/",
+      "links": [
+        [
+          "/catalog/",
+          "Catalogue"
+        ]
+      ]
+    },
+    "/canonical-missing/": {
+      "title": "Controlled missing canonical page",
+      "description": "This page deliberately omits the canonical element.",
+      "canonical": null,
+      "links": [
+        [
+          "/catalog/",
+          "Catalogue"
+        ]
+      ]
+    },
+    "/redirect-target/": {
+      "title": "Controlled current destination",
+      "description": "Final destination for the two-hop redirect chain.",
+      "links": [
+        [
+          "/catalog/",
+          "Catalogue"
+        ]
+      ]
+    },
+    "/metadata-missing/": {
+      "title": "",
+      "description": null,
+      "h1": false,
+      "links": [
+        [
+          "/catalog/",
+          "Catalogue"
+        ]
+      ]
+    },
+    "/noindex/": {
+      "title": "Controlled non-indexable page",
+      "description": "Intentionally excluded page used to test indexability reporting.",
+      "robots": "noindex,follow",
+      "links": [
+        [
+          "/catalog/",
+          "Catalogue"
+        ]
+      ]
+    },
+    "/blocked/": {
+      "title": "Controlled robots blocked page",
+      "description": "The crawler should not fetch this body if robots are respected.",
+      "links": []
+    },
+    "/sitemap-only/": {
+      "title": "Controlled sitemap-only URL",
+      "description": "No HTML inlinks; sitemap-only discovery should not be called a confirmed global orphan.",
+      "links": []
+    }
+  },
+  "redirects": {
+    "/old-url/": [
+      301,
+      "/middle-url/"
+    ],
+    "/middle-url/": [
+      302,
+      "/redirect-target/"
+    ]
+  },
+  "expected": {
+    "duplicate_title_paths": [
+      "/duplicate-a/",
+      "/duplicate-b/"
+    ],
+    "duplicate_description_paths": [
+      "/duplicate-a/",
+      "/duplicate-b/"
+    ],
+    "deepest_path": "/catalog/collection/slab/specification/",
+    "deepest_followed_depth": 4,
+    "redirect_chain": [
+      "/old-url/",
+      "/middle-url/",
+      "/redirect-target/"
+    ],
+    "broken_target": "/missing/",
+    "canonical_broken": "/canonical-broken/",
+    "sitemap_only": "/sitemap-only/"
+  }
+}
