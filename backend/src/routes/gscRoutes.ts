@@ -11,6 +11,7 @@ import { GoogleDesktopOAuth, GscError } from '../services/gsc/GoogleDesktopOAuth
 import { GscAnalytics } from '../services/gsc/GscAnalytics';
 import { GscConnection } from '../services/gsc/GscConnection';
 import type { GscInput } from '../services/trends/types';
+import { invalidateGscHistory, gscHistoryRevision } from '../services/trends/GscHistoryPrivacy';
 
 interface Website { id: string | number; workspace_id: string; brand_key?: string | null; base_url: string; name: string }
 interface RouteDependencies {
@@ -79,16 +80,19 @@ export function createGscRouter(deps: RouteDependencies): Router {
   router.post('/config', handle(async (req) => { await deps.oauth.configure(req.body); return { configured: true }; }));
   router.post('/service-account', handle(async (req) => {
     if (!deps.oauth.importServiceAccount) throw new GscError('GSC_PROVIDER_UNAVAILABLE', 'Service-account provider is not available.', 409);
+    invalidateGscHistory();
     const result = await deps.oauth.importServiceAccount(req.body?.credential_path);
     deps.clearData();
     return result;
   }));
   router.post('/connect', handle(async () => {
+    invalidateGscHistory();
     const pending = await deps.oauth.connect();
     deps.clearData(); // a newly consented account must never inherit an old account's cache
     return pending;
   }));
   router.post('/disconnect', handle(async () => {
+    invalidateGscHistory();
     // Delete Google-derived cache/mappings as part of an explicit disconnect; never crawler data.
     deps.clearData(); // invalidate in-flight cache writes before waiting for remote revocation
     return deps.oauth.disconnect();
@@ -108,6 +112,7 @@ export function createGscRouter(deps: RouteDependencies): Router {
     if (typeof property !== 'string' || property.length > 2048 || !propertyCoversWebsite(property, s.website.base_url)) throw new GscError('GSC_PROPERTY_MISMATCH', 'Choose a permitted GSC property that covers the selected website.', 422);
     const properties = await deps.analytics().listProperties();
     if (!properties.some((p) => p.siteUrl === property && p.permissionLevel !== 'siteUnverifiedUser')) throw new GscError('GSC_PROPERTY_FORBIDDEN', 'Property is not available to the connected Google account.', 409);
+    invalidateGscHistory();
     return deps.analytics().saveMapping(s.workspace, String(s.website.id), property, s.website.brand_key || null);
   }));
   const enrich = async (report: any, workspace: string, websiteId: string) => {
@@ -164,6 +169,7 @@ const getAnalytics = () => {
 export async function readTrendGscReports(workspace: string, brandKey: string): Promise<{ inputs: GscInput[]; status: string }> {
   if (getRockBaseMode() !== 'local') return { inputs: [], status: 'GSC is unavailable outside Local Mode.' };
   try {
+    const revision = gscHistoryRevision();
     if (!(await oauth.status()).connected) return { inputs: [], status: 'GSC disconnected. No private report consumed.' };
     const response = await seoRequest('/websites', workspace);
     if (!response.ok) return { inputs: [], status: 'SEO website registry unavailable; GSC could not be matched.' };
@@ -174,7 +180,7 @@ export async function readTrendGscReports(workspace: string, brandKey: string): 
       if (report && propertyCoversWebsite(report.mapping?.property || '', website.base_url) && report.mapping?.workspaceId === workspace && report.mapping?.websiteId === String(website.id)
         && report.mapping?.brandKey === brandKey) inputs.push({ websiteId: String(website.id), websiteName: website.name, brandKey, report });
     }
-    if (!(await oauth.status()).connected) return { inputs: [], status: 'GSC disconnected while reading; cached report projection discarded.' };
+    if (!(await oauth.status()).connected || revision !== gscHistoryRevision()) return { inputs: [], status: 'GSC disconnected or remapped while reading; cached report projection discarded.' };
     return { inputs, status: inputs.length ? `${inputs.length} cached GSC report(s); no new Google request. Check each report period and syncedAt.` : 'No matching cached GSC report for this brand. Sync its property from SEO Intelligence first.' };
   } catch { return { inputs: [], status: 'GSC secure storage or cached reports unavailable; no Google request was made.' }; }
 }
