@@ -7,10 +7,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { trendsApi, type BrandWatch, type TrendBrand, type TrendCandidate, type TrendRadar as TrendRadarData, type TrendRecommendation, type TrendWorkspace } from '@/components/trends/api'
+import { defaultDiscoveryConfig, trendsApi, type BrandWatch, type DiscoveryConfig, type TrendBrand, type TrendCandidate, type TrendRadar as TrendRadarData, type TrendRecommendation, type TrendWorkspace } from '@/components/trends/api'
 
 const classificationLabels: Record<TrendCandidate['classification'], string> = {
-  rising_trend: 'Measured rising trend', trend_observation: 'Trending Now observation', gsc_opportunity: 'GSC opportunity', content_idea: 'Editorial idea · no trend evidence',
+  rising_trend: 'Observed source increase', trend_observation: 'Trending Now observation', gsc_opportunity: 'GSC opportunity', content_idea: 'Editorial idea · no trend evidence',
 }
 const classificationStyles: Record<TrendCandidate['classification'], string> = {
   rising_trend: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300', trend_observation: 'border-blue-500/30 bg-blue-500/10 text-blue-300', gsc_opportunity: 'border-amber-500/30 bg-amber-500/10 text-amber-300', content_idea: 'border-border bg-secondary text-muted-foreground',
@@ -37,22 +37,30 @@ export default function TrendRadar() {
   const [radar, setRadar] = useState<TrendRadarData | null>(null)
   const [topicsText, setTopicsText] = useState('')
   const [excludeText, setExcludeText] = useState('')
+  const [discovery, setDiscovery] = useState<DiscoveryConfig>(defaultDiscoveryConfig)
   const [format, setFormat] = useState<'all' | 'article' | 'reel' | 'social_post'>('all')
   const [classification, setClassification] = useState<'all' | TrendCandidate['classification']>('all')
   const [clock, setClock] = useState(() => Date.now())
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [capturing, setCapturing] = useState(false)
   const [draftingId, setDraftingId] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const activeScope = useRef('')
+  const saveController = useRef<AbortController | null>(null)
+  const captureController = useRef<AbortController | null>(null)
   const scope = `${workspaceId}\\u0000${brandKey}`
   activeScope.current = scope
 
   useEffect(() => {
     const timer = window.setInterval(() => setClock(Date.now()), 1000)
-    return () => window.clearInterval(timer)
+    return () => {
+      window.clearInterval(timer)
+      saveController.current?.abort()
+      captureController.current?.abort()
+    }
   }, [])
 
   const loadBrands = useCallback(async (signal?: AbortSignal) => {
@@ -75,7 +83,10 @@ export default function TrendRadar() {
   }, [loadBrands])
 
   function resetScopedActions() {
+    saveController.current?.abort(); saveController.current = null
+    captureController.current?.abort(); captureController.current = null
     setSaving(false)
+    setCapturing(false)
     setRefreshing(false)
     setDraftingId('')
     setError('')
@@ -99,6 +110,7 @@ export default function TrendRadar() {
   useEffect(() => {
     setTopicsText((selectedWatch?.topics || []).join('\n'))
     setExcludeText((selectedWatch?.exclude || []).join('\n'))
+    setDiscovery({ ...defaultDiscoveryConfig, ...(selectedWatch?.discovery || {}) })
   }, [selectedWatch])
 
   useEffect(() => {
@@ -141,18 +153,39 @@ export default function TrendRadar() {
     if (topics.length > 30 || exclude.length > 30 || [...topics, ...exclude].some(term => term.length > 100)) {
       setError('Each list supports up to 30 non-empty lines; each phrase must be 100 characters or fewer.'); return
     }
+    if (![discovery.minImpressions, discovery.minIncrease, discovery.minGrowthPct].every(value => Number.isFinite(value) && value >= 1 && value <= 1000)) {
+      setError('Discovery thresholds must be between 1 and 1,000.'); return
+    }
+    saveController.current?.abort()
+    const controller = new AbortController(); saveController.current = controller
     setSaving(true); setError(''); setNotice('')
     const requestScope = scope
     try {
-      const { data } = await trendsApi.saveWatchlist(workspaceId, brandKey, topics, exclude)
-      if (activeScope.current !== requestScope) return
+      const { data } = await trendsApi.saveWatchlist(workspaceId, brandKey, topics, exclude, discovery, controller.signal)
+      if (controller.signal.aborted || activeScope.current !== requestScope) return
       setWatchlists(current => [...current.filter(w => w.brandKey !== data.brandKey), data])
       setNotice('Watchlist saved.')
-      const { data: next } = await trendsApi.radar(workspaceId, brandKey)
-      if (activeScope.current !== requestScope) return
+      const { data: next } = await trendsApi.radar(workspaceId, brandKey, controller.signal)
+      if (controller.signal.aborted || activeScope.current !== requestScope) return
       setRadar(next)
-    } catch (e) { if (activeScope.current === requestScope) setError(errorText(e)) }
-    finally { if (activeScope.current === requestScope) setSaving(false) }
+    } catch (e) { if (!controller.signal.aborted && activeScope.current === requestScope) setError(errorText(e)) }
+    finally { if (saveController.current === controller) saveController.current = null; if (activeScope.current === requestScope && !controller.signal.aborted) setSaving(false) }
+  }
+
+  async function captureHistory() {
+    if (!workspaceId || !brandKey || capturing) return
+    captureController.current?.abort()
+    const controller = new AbortController(); captureController.current = controller
+    const requestScope = scope
+    setCapturing(true); setError(''); setNotice('')
+    try {
+      const { data } = await trendsApi.captureHistory(workspaceId, brandKey, controller.signal)
+      if (controller.signal.aborted || activeScope.current !== requestScope) return
+      setNotice(`${data.status} · ${data.captured} snapshot(s) captured; ${data.historyCount} in history. No Google sync was started.`)
+      const { data: next } = await trendsApi.radar(workspaceId, brandKey, controller.signal)
+      if (!controller.signal.aborted && activeScope.current === requestScope) setRadar(next)
+    } catch (e) { if (!controller.signal.aborted && activeScope.current === requestScope) setError(errorText(e)) }
+    finally { if (captureController.current === controller) captureController.current = null; if (activeScope.current === requestScope && !controller.signal.aborted) setCapturing(false) }
   }
 
   async function createDraft(recommendation: TrendRecommendation) {
@@ -173,7 +206,7 @@ export default function TrendRadar() {
     const url = safeSourceUrl(item.url ?? item.sourceUrl ?? item.source_url)
     const title = typeof item.title === 'string' ? item.title : typeof item.source === 'string' ? item.source : `Evidence ${index + 1}`
     const news = Array.isArray(item.news) ? item.news : []
-    const gscFields = ['query', 'property', 'websiteName', 'periods', 'clicks', 'impressions', 'ctr', 'position', 'confidence', 'syncedAt', 'reason']
+    const gscFields = ['query', 'property', 'websiteName', 'periods', 'clicks', 'impressions', 'ctr', 'position', 'confidence', 'syncedAt', 'freshness', 'coverage', 'reason']
     const evidenceValue = (key: string) => {
       const value = item[key]
       if (key === 'position' && typeof value === 'number') return value.toFixed(2)
@@ -181,7 +214,7 @@ export default function TrendRadar() {
       if (key === 'syncedAt' && typeof value === 'string') return dateLabel(value)
       if (key === 'periods' && value && typeof value === 'object') {
         const periods = value as { current?: { startDate?: string; endDate?: string }; previous?: { startDate?: string; endDate?: string } }
-        return `Current: ${periods.current?.startDate ?? 'Unknown'} – ${periods.current?.endDate ?? 'Unknown'}; previous: ${periods.previous?.startDate ?? 'Unknown'} – ${periods.previous?.endDate ?? 'Unknown'}`
+        return `Current: ${periods.current?.startDate ?? 'Unknown'} – ${periods.current?.endDate ?? 'Unknown'}; previous: ${periods.previous ? `${periods.previous.startDate ?? 'Unknown'} – ${periods.previous.endDate ?? 'Unknown'}` : 'Unavailable'}`
       }
       return typeof value === 'object' ? JSON.stringify(value) : String(value ?? 'Not available')
     }
@@ -213,10 +246,12 @@ export default function TrendRadar() {
     {brandKey && <Card><CardHeader className="pb-3"><CardTitle className="text-base">Brand watchlist</CardTitle><p className="text-sm text-muted-foreground">Topics and excluded phrases are workspace-scoped. One phrase per line, maximum 30 in each list.</p></CardHeader><CardContent className="grid min-w-0 gap-4 lg:grid-cols-2">
       <div className="min-w-0 space-y-2"><Label htmlFor="watch-topics">Topics to watch</Label><Textarea id="watch-topics" aria-label="Topics to watch" rows={6} maxLength={3100} value={topicsText} onChange={e => setTopicsText(e.target.value)} placeholder={'marmer\narsitektur'} /></div>
       <div className="min-w-0 space-y-2"><Label htmlFor="watch-excludes">Exclude phrases</Label><Textarea id="watch-excludes" aria-label="Exclude phrases" rows={6} maxLength={3100} value={excludeText} onChange={e => setExcludeText(e.target.value)} placeholder={'jobs\nlowongan'} /></div>
-      <div className="flex flex-wrap items-center gap-3 lg:col-span-2"><Button variant="outline" onClick={saveWatchlist} disabled={saving || !brandKey} aria-label="Save watchlist"><Save className="mr-2 h-4 w-4" />{saving ? 'Saving…' : 'Save watchlist'}</Button><span className="text-xs text-muted-foreground">Last saved: {dateLabel(selectedWatch?.updatedAt)}</span></div>
+      <fieldset className="grid min-w-0 gap-3 rounded-md border border-border p-3 sm:grid-cols-3 lg:col-span-2"><legend className="px-1 text-sm font-medium">GSC discovery thresholds</legend>{([['minImpressions', 'Minimum current impressions'], ['minIncrease', 'Minimum impression increase'], ['minGrowthPct', 'Minimum growth percent']] as const).map(([key, label]) => <div key={key} className="min-w-0 space-y-1"><Label htmlFor={`discovery-${key}`}>{label}</Label><input id={`discovery-${key}`} aria-label={label} type="number" min="1" max="1000" step="1" value={discovery[key]} onChange={e => setDiscovery(current => ({ ...current, [key]: e.target.value === '' ? 0 : Number(e.target.value) }))} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" /></div>)}<p className="text-xs text-muted-foreground sm:col-span-3">Transparent operator filters, not statistical significance or a trend score. Legacy watchlists use defaults: 3 impressions, 3 increase, 25% growth.</p></fieldset>
+      <div className="flex flex-wrap items-center gap-3 lg:col-span-2"><Button variant="outline" onClick={saveWatchlist} disabled={saving || !brandKey} aria-label="Save watchlist and discovery thresholds"><Save className="mr-2 h-4 w-4" />{saving ? 'Saving…' : 'Save watchlist'}</Button><span className="text-xs text-muted-foreground">Last saved: {dateLabel(selectedWatch?.updatedAt)}</span></div>
     </CardContent></Card>}
 
     {brandKey && <Card><CardHeader className="pb-3"><CardTitle className="text-base">Feed status & evidence</CardTitle></CardHeader><CardContent className="grid min-w-0 gap-4 text-sm md:grid-cols-2">
+      <div className="flex flex-wrap items-center gap-3 md:col-span-2"><Button variant="outline" onClick={captureHistory} disabled={capturing || loading || !workspaceId || !brandKey} aria-label="Capture cached GSC history without syncing Google">{capturing ? 'Capturing…' : 'Capture cached GSC history'}</Button><span className="text-xs text-muted-foreground">History: {radar?.historyStatus ? `${radar.historyStatus.count} snapshot(s) · last captured ${dateLabel(radar.historyStatus.lastCapturedAt)} · ${radar.historyStatus.note}` : loading ? 'Loading…' : 'No history status available'}</span></div>
       <div className="min-w-0 space-y-2"><p><span className="text-muted-foreground">Latest snapshot:</span> {radar?.source.latest ? `${dateLabel(radar.source.latest.fetchedAt)} · ${radar.source.latest.status}` : loading ? 'Loading…' : 'No saved snapshot'}</p>{radar?.source.latest?.httpStatus !== null && radar?.source.latest?.httpStatus !== undefined && <p><span className="text-muted-foreground">HTTP:</span> {radar.source.latest.httpStatus}</p>}{radar?.source.latest?.error && <p className="break-words text-red-300">Latest refresh unavailable: {radar.source.latest.error}</p>}<p><span className="text-muted-foreground">Last good:</span> {radar?.source.lastGood ? dateLabel(radar.source.lastGood.fetchedAt) : 'No successful snapshot yet'}</p><p><span className="text-muted-foreground">Refresh cooldown:</span> {radar?.source.cooldownUntil ? `${dateLabel(radar.source.cooldownUntil)}${cooldownActive ? ' · active' : ''}` : 'None'}</p><p><span className="text-muted-foreground">GSC:</span> {radar?.gscStatus || (loading ? 'Loading…' : 'Status unavailable')}</p></div>
       <div className="min-w-0"><p className="mb-1 text-muted-foreground">Source</p>{radar?.source.latest?.sourceUrl && safeSourceUrl(radar.source.latest.sourceUrl) ? <a className="inline-flex max-w-full items-center gap-1 break-all text-purple-300 underline" target="_blank" rel="noreferrer" href={safeSourceUrl(radar.source.latest.sourceUrl)!}>{radar.source.latest.sourceUrl}<ExternalLink className="h-3 w-3 shrink-0" /></a> : <p className="text-muted-foreground">No source URL available.</p>}<ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-muted-foreground">{(radar?.limitations || []).map((limitation, i) => <li className="break-words" key={i}>{limitation}</li>)}</ul></div>
     </CardContent></Card>}
@@ -225,7 +260,7 @@ export default function TrendRadar() {
       {!hasRssEvidence && radar && <Card><CardContent className="p-4 text-sm text-muted-foreground">No relevant RSS trend items for this watchlist in the saved feed. GSC opportunities and editorial ideas below are separate classifications, not RSS trends.</CardContent></Card>}
       {loading && <Card><CardContent className="p-5 text-sm text-muted-foreground">Loading current evidence…</CardContent></Card>}
       {!loading && radar && visibleCandidates.length === 0 && <Card><CardContent className="p-5 text-sm text-muted-foreground">{radar.candidates.length ? 'No candidates match this classification filter.' : 'No candidates for this watchlist and saved evidence. This is not presented as evidence of a rising niche.'}</CardContent></Card>}
-      {!loading && radar?.candidates.filter(candidate => classification === 'all' || candidate.classification === classification).map(candidate => <Card key={candidate.id} className="min-w-0"><CardContent className="grid min-w-0 gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"><div className="min-w-0 space-y-3"><div className="flex min-w-0 flex-wrap items-center gap-2"><h3 className="break-words text-base font-semibold">{candidate.topic}</h3><Badge variant="outline" className={classificationStyles[candidate.classification]}>{classificationLabels[candidate.classification]}</Badge></div><p className="break-words text-sm text-muted-foreground">{candidate.reason}</p><p className="text-xs text-muted-foreground">Matched: {candidate.relevance.matchedTerms.join(', ') || 'none'} · Field: {candidate.relevance.field}</p>{candidate.momentum.measured ? <div className="rounded-md border border-emerald-500/20 bg-emerald-500/5 p-3 text-sm"><div className="flex items-center gap-2 font-medium text-emerald-300"><TrendingUp className="h-4 w-4" />Measured bucket movement</div><p className="mt-1">{candidate.momentum.previous ?? '—'} → {candidate.momentum.current ?? '—'} (delta {candidate.momentum.delta ?? '—'})</p><p className="text-xs text-muted-foreground">{dateLabel(candidate.momentum.previousAt)} → {dateLabel(candidate.momentum.currentAt)}</p><p className="mt-1 text-xs text-muted-foreground">{candidate.momentum.caveat || 'Approximate bucket movement, not exact search growth.'}</p></div> : <p className="text-xs text-muted-foreground">No measured momentum. First seen or editorial relevance alone is not growth evidence.</p>}</div><div className="min-w-0"><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Candidate evidence</p><ul className="space-y-1">{evidenceLinks(candidate.evidence)}</ul></div></CardContent></Card>)}
+      {!loading && radar?.candidates.filter(candidate => classification === 'all' || candidate.classification === classification).map(candidate => <Card key={candidate.id} className="min-w-0"><CardContent className="grid min-w-0 gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"><div className="min-w-0 space-y-3"><div className="flex min-w-0 flex-wrap items-center gap-2"><h3 className="break-words text-base font-semibold">{candidate.topic}</h3><Badge variant="outline" className={classificationStyles[candidate.classification]}>{classificationLabels[candidate.classification]}</Badge></div><p className="break-words text-sm text-muted-foreground">{candidate.reason}</p>{candidate.signal && <div className="rounded-md border border-border bg-background/50 p-3 text-sm"><p className="font-medium">Observed source: {candidate.signal.source.toUpperCase()} · {candidate.signal.status.replace(/_/g, ' ')} · {candidate.signal.confidence.replace(/_/g, ' ')}</p><p className="mt-1 text-xs text-muted-foreground">{candidate.signal.basis}{!candidate.signal.comparisonValid && candidate.signal.invalidReason ? ` · Comparison unavailable: ${candidate.signal.invalidReason}` : ''}</p>{candidate.signal.source === 'gsc' && <><p className="mt-2 text-xs">{candidate.signal.periods ? `Current period ${candidate.signal.periods.current.startDate}–${candidate.signal.periods.current.endDate}${candidate.signal.periods.previous ? ` vs ${candidate.signal.periods.previous.startDate}–${candidate.signal.periods.previous.endDate}` : ' · no previous period'}` : 'GSC reporting periods unavailable'}</p><div className="mt-2 grid grid-cols-2 gap-2 text-xs"><p>Impressions: {candidate.signal.current?.impressions ?? '—'} {candidate.signal.previous ? `← ${candidate.signal.previous.impressions}` : ''} (Δ {candidate.signal.deltas.impressions ?? '—'})</p><p>Clicks: {candidate.signal.current?.clicks ?? '—'} {candidate.signal.previous ? `← ${candidate.signal.previous.clicks}` : ''} (Δ {candidate.signal.deltas.clicks ?? '—'})</p><p>CTR: {candidate.signal.current?.ctr == null ? 'Unavailable' : `${(candidate.signal.current.ctr * 100).toFixed(2)}%`} {candidate.signal.previous ? `← ${candidate.signal.previous.ctr == null ? 'Unavailable' : `${(candidate.signal.previous.ctr * 100).toFixed(2)}%`}` : ''} (Δ {candidate.signal.deltas.ctrPp === null ? 'Unavailable' : `${candidate.signal.deltas.ctrPp.toFixed(2)} pp`})</p><p>Position: {candidate.signal.current?.position.toFixed(2) ?? '—'} {candidate.signal.previous ? `← ${candidate.signal.previous.position.toFixed(2)}` : ''} (improvement {candidate.signal.deltas.positionImprovement?.toFixed(2) ?? '—'})</p><p>Impression growth: {candidate.signal.growthPct === null ? '— (baseline zero or unavailable)' : `${candidate.signal.growthPct.toFixed(1)}%`}</p><p>History comparisons: {candidate.signal.historyComparisons}</p></div></>}{candidate.signal.history.length > 0 && <details className="mt-2"><summary aria-label={`Show GSC history timeline for ${candidate.topic}`} className="cursor-pointer text-xs text-purple-300">History timeline ({candidate.signal.history.length} observations)</summary><ol className="mt-2 space-y-2">{candidate.signal.history.map(point => <li key={`${point.snapshotId}-${point.startDate}`} className="break-words border-l border-border pl-2 text-xs"><p>{point.startDate}–{point.endDate} · {dateLabel(point.capturedAt)} · synced {dateLabel(point.syncedAt)}</p><p>{point.impressions} impressions · {point.clicks} clicks · CTR {point.ctr == null ? 'Unavailable' : `${(point.ctr * 100).toFixed(2)}%`} · position {point.position.toFixed(2)}</p></li>)}</ol></details>}</div>}<p className="text-xs text-muted-foreground">Matched: {candidate.relevance.matchedTerms.join(', ') || 'none'} · Field: {candidate.relevance.field}</p>{candidate.momentum.measured ? <div className="rounded-md border border-emerald-500/20 bg-emerald-500/5 p-3 text-sm"><div className="flex items-center gap-2 font-medium text-emerald-300"><TrendingUp className="h-4 w-4" />{candidate.signal?.source === 'gsc' ? 'Measured GSC impression change' : 'Measured bucket movement' }</div><p className="mt-1">{candidate.momentum.previous ?? '—'} → {candidate.momentum.current ?? '—'} (delta {candidate.momentum.delta ?? '—'})</p><p className="text-xs text-muted-foreground">{dateLabel(candidate.momentum.previousAt)} → {dateLabel(candidate.momentum.currentAt)}</p><p className="mt-1 text-xs text-muted-foreground">{candidate.momentum.caveat || 'Approximate bucket movement, not exact search growth.'}</p></div> : <p className="text-xs text-muted-foreground">No measured momentum. First seen or editorial relevance alone is not growth evidence.</p>}</div><div className="min-w-0"><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Candidate evidence</p><ul className="space-y-1">{evidenceLinks(candidate.evidence)}</ul></div></CardContent></Card>)}
       {!loading && radar && visibleRecommendations.length === 0 && <Card><CardContent className="p-5 text-sm text-muted-foreground">{radar.recommendations.length ? 'No recommendations match the selected format/classification filters.' : 'No briefs are available yet. An editorial idea is not an external trend signal.'}</CardContent></Card>}
       {!loading && visibleRecommendations.map(recommendation => <Card key={recommendation.id} className="min-w-0"><CardContent className="space-y-3 p-4"><div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><div className="mb-2 flex flex-wrap gap-2"><Badge variant="outline" className={classificationStyles[recommendation.classification]}>{classificationLabels[recommendation.classification]}</Badge><Badge variant="secondary">{recommendation.format === 'social_post' ? 'Social post' : recommendation.format}</Badge></div><h3 className="break-words font-semibold">{recommendation.title}</h3><p className="mt-1 break-words text-sm text-muted-foreground">{recommendation.topic} · {recommendation.reason}</p></div><Button className="shrink-0" onClick={() => createDraft(recommendation)} disabled={Boolean(draftingId)} aria-label={`Create draft: ${recommendation.title}`}><Sparkles className="mr-2 h-4 w-4" />{draftingId === recommendation.id ? 'Creating…' : 'Create draft'}</Button></div><details className="min-w-0"><summary className="cursor-pointer text-sm text-purple-300">Preview brief</summary><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-background p-3 font-sans text-sm">{recommendation.content}</pre><p className="mt-2 text-xs text-muted-foreground">Brief preview only; this does not create or publish an article.</p></details><ul className="space-y-1">{evidenceLinks(recommendation.evidence)}</ul></CardContent></Card>)}
     </section>}

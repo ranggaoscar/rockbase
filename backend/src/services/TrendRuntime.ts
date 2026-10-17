@@ -2,13 +2,14 @@ import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
-import { createTrendRouter } from '../routes/trendRoutes';
+import { createTrendRouter, type TrendDependencies } from '../routes/trendRoutes';
 import { TrendStore } from './trends/TrendStore';
 import { buildRadar } from './trends/TrendEngine';
 import { fetchIndonesiaFeed } from './trends/TrendsRss';
 import { readTrendGscReports } from '../routes/gscRoutes';
 import { seoRequest } from './SeoWorkerService';
 import { getRockBaseMode } from '../middleware/runtimeMode';
+import { onGscHistoryInvalidation } from './trends/GscHistoryPrivacy';
 
 const prisma = new PrismaClient();
 const root = path.resolve(__dirname, '../../..');
@@ -19,7 +20,7 @@ function getStore(): TrendStore {
   if (getRockBaseMode() !== 'local') throw new Error('Trend private storage disabled outside Local Mode');
   return store ??= new TrendStore(path.join(privateRoot, 'RockBase/installations', scope, 'trends.sqlite'));
 }
-export const trendRouter = createTrendRouter({
+export function trendDependencies(): TrendDependencies { return {
   store: getStore,
   workspaces: () => prisma.workspace.findMany({ select: { id: true, name: true }, orderBy: { createdAt: 'asc' } }),
   brands: async workspace => {
@@ -36,6 +37,10 @@ export const trendRouter = createTrendRouter({
   fetchFeed: () => fetchIndonesiaFeed(),
   buildRadar,
   drafts: prisma.draft,
-});
-export function closeTrendRuntime() { store?.close(); }
+}; }
+export const trendRouter = createTrendRouter(trendDependencies());
+// A disconnect may happen before /trends opens after a process restart.
+// Open and purge persisted history in that case; live stores subscribe themselves.
+const unsubscribeHistory = onGscHistoryInvalidation(() => { if (!store) getStore().clearGscHistory(); });
+export function closeTrendRuntime() { unsubscribeHistory(); store?.close(); store = undefined; }
 process.once('exit', closeTrendRuntime);

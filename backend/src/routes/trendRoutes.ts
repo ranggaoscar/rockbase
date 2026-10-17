@@ -3,11 +3,13 @@ import { createHash } from 'node:crypto';
 import { AuthRequest } from '../middleware/auth';
 import { isLocalOwner, noStore, requireLocalSecretOrigin } from '../middleware/secretAccess';
 import { getRockBaseMode } from '../middleware/runtimeMode';
-import type { BrandWatch, FeedSnapshot, GscInput, Radar } from '../services/trends/types';
+import type { BrandWatch, FeedSnapshot, GscInput, GscHistoryPoint, Radar } from '../services/trends/types';
+import { buildGscHistoryPoint } from '../services/trends/GscNicheSignals';
+import { gscHistoryRevision } from '../services/trends/GscHistoryPrivacy';
 
 export const TREND_COOLDOWN_MS = 15 * 60 * 1000;
 interface Brand { key: string; name: string; workspace_id: string }
-interface TrendDependencies {
+export interface TrendDependencies {
   store: () => {
     watchlists(workspace: string): BrandWatch[];
     saveWatchlist(workspace: string, watch: BrandWatch): BrandWatch;
@@ -15,6 +17,8 @@ interface TrendDependencies {
     latestSnapshot(): FeedSnapshot | null;
     lastGoodSnapshot(): FeedSnapshot | null;
     saveSnapshot(snapshot: FeedSnapshot): FeedSnapshot;
+    saveGscHistory?(point: GscHistoryPoint): GscHistoryPoint;
+    gscHistory?(workspace: string, brand: string, websiteId?: string, property?: string): GscHistoryPoint[];
   };
   workspaces(): Promise<Array<{ id: string; name: string }>>;
   brands(workspace: string): Promise<Brand[]>;
@@ -33,6 +37,14 @@ const defaults = (brand: Brand): BrandWatch => ({
 function phrases(value: unknown): string[] {
   if (!Array.isArray(value) || value.length > 30 || value.some(v => typeof v !== 'string' || !v.trim() || v.length > 100 || /[\u0000-\u001f]/.test(v))) throw new TrendRouteError(422, 'Use up to 30 nonempty phrases of at most 100 characters.');
   return [...new Set(value.map(v => v.trim()))];
+}
+
+function discovery(value: any, fallback?: BrandWatch['discovery']): NonNullable<BrandWatch['discovery']> {
+  const config = value === undefined ? fallback || { minImpressions: 3, minIncrease: 3, minGrowthPct: 25 } : value;
+  if (!config || typeof config !== 'object' || !Number.isInteger(config.minImpressions) || config.minImpressions < 1 || config.minImpressions > 1000
+    || !Number.isInteger(config.minIncrease) || config.minIncrease < 1 || config.minIncrease > 1000
+    || typeof config.minGrowthPct !== 'number' || !Number.isFinite(config.minGrowthPct) || config.minGrowthPct < 1 || config.minGrowthPct > 1000) throw new TrendRouteError(422, 'Invalid niche discovery thresholds.');
+  return { minImpressions: config.minImpressions, minIncrease: config.minIncrease, minGrowthPct: config.minGrowthPct };
 }
 
 /** Local-only owner tool. Never imports or invokes a publishing/queue service. */
@@ -68,8 +80,14 @@ export function createTrendRouter(deps: TrendDependencies): Router {
   };
   const radar = async (req: AuthRequest) => {
     const selected = await selectedBrand(req);
+    const revision = gscHistoryRevision();
     const google = await deps.gsc(selected.workspace, selected.brand.key);
-    return { ...selected, data: deps.buildRadar(selected.watch, selected.store.snapshots(96), google.inputs, google.status) };
+    if (revision !== gscHistoryRevision()) throw new TrendRouteError(409, 'GSC connection changed. Reload current evidence.');
+    const inputs = google.inputs.map(input => ({ ...input, history: selected.store.gscHistory?.(selected.workspace, selected.brand.key, input.websiteId, input.report.mapping?.property) || [] }));
+    const history = inputs.flatMap(input => input.history);
+    return { ...selected, data: { ...deps.buildRadar(selected.watch, selected.store.snapshots(96), inputs, google.status),
+      historyStatus: { count: history.length, lastCapturedAt: history.map(p => p.capturedAt).sort().at(-1) || null,
+        note: 'Private cached GSC history only; same report capture is idempotent, overlapping periods are not independent corroboration. No Google sync.' } } };
   };
   router.get('/brands', handle(async req => {
     const { workspace, rows } = await scope(req); const brands = await deps.brands(workspace);
@@ -77,8 +95,8 @@ export function createTrendRouter(deps: TrendDependencies): Router {
     return { workspaces: rows, brands, watchlists: brands.map(b => stored.find(w => w.brandKey === b.key) || defaults(b)) };
   }));
   router.put('/watchlist', handle(async req => {
-    const { workspace, brand, store } = await selectedBrand(req);
-    const watch = { brandKey: brand.key, brandName: brand.name, topics: phrases(req.body?.topics), exclude: phrases(req.body?.exclude ?? []), updatedAt: new Date().toISOString() };
+    const { workspace, brand, store, watch: previous } = await selectedBrand(req);
+    const watch = { brandKey: brand.key, brandName: brand.name, topics: phrases(req.body?.topics), exclude: phrases(req.body?.exclude ?? []), discovery: discovery(req.body?.discovery, previous.discovery), updatedAt: new Date().toISOString() };
     return store.saveWatchlist(workspace, watch);
   }));
   router.post('/refresh', handle(async req => {
@@ -95,6 +113,22 @@ export function createTrendRouter(deps: TrendDependencies): Router {
     finally { refreshing = false; }
   }));
   router.get('/radar', handle(async req => (await radar(req)).data));
+  router.post('/capture', handle(async req => {
+    const { workspace, brand, store } = await selectedBrand(req);
+    if (!store.saveGscHistory || !store.gscHistory) throw new TrendRouteError(503, 'Private history storage unavailable.');
+    const revision = gscHistoryRevision();
+    const google = await deps.gsc(workspace, brand.key);
+    if (revision !== gscHistoryRevision()) throw new TrendRouteError(409, 'GSC connection changed; capture discarded.');
+    if (!google.inputs.length) throw new TrendRouteError(409, google.status);
+    let captured = 0;
+    for (const input of google.inputs) {
+      const before = store.gscHistory(workspace, brand.key, input.websiteId, input.report.mapping?.property);
+      const point = buildGscHistoryPoint(workspace, input);
+      const retained = store.saveGscHistory(point);
+      if (!before.some(old => old.id === retained.id)) captured++;
+    }
+    return { captured, historyCount: store.gscHistory(workspace, brand.key).length, status: 'Cached GSC evidence captured locally. No Google request; repeated report is not new growth evidence.' };
+  }));
   router.post('/drafts', handle(async req => {
     if (typeof req.body?.recommendation_id !== 'string' || req.body.recommendation_id.length > 200) throw new TrendRouteError(422, 'Choose a saved recommendation.');
     const { workspace, data } = await radar(req);
