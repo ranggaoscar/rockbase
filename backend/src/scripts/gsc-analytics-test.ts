@@ -85,8 +85,8 @@ async function main(): Promise<void> {
     const paginationRequests: Request[] = [];
     const pages = Array.from({ length: 25000 }, (_, i) => metric([`https://example.test/${i}`], i, 100, 1));
     const paged = new GscAnalytics(path.join(root, 'paged.sqlite'), fixtureGoogle(paginationRequests, {
-      '2026-10-07:page:0': pages,
-      '2026-10-07:page:25000': Array.from({ length: 25000 }, (_, i) => metric([`https://example.test/next-${i}`], 1, 1, 1)),
+      [`${report.periods.current.startDate}:page:0`]: pages,
+      [`${report.periods.current.startDate}:page:25000`]: Array.from({ length: 25000 }, (_, i) => metric([`https://example.test/next-${i}`], 1, 1, 1)),
     }));
     try {
       paged.saveMapping('ws', 'site', 'https://example.test/', null);

@@ -8,6 +8,7 @@ import {
   Sparkles,
   Leaf,
   Globe,
+  Radar,
   Settings,
   ChevronLeft,
   ChevronRight,
@@ -27,6 +28,7 @@ type NavItem = { label: string; path: string; icon: LucideIcon }
 const primaryNavItems: NavItem[] = [
   { label: 'Overview', path: '/', icon: LayoutDashboard },
   { label: 'SEO Intelligence', path: '/seo', icon: Globe },
+  { label: 'Trend Radar', path: '/trends', icon: Radar },
   { label: 'Accounts', path: '/accounts', icon: Users },
   { label: 'Farm View / Sessions', path: '/farm', icon: Tv2 },
   { label: 'Campaigns', path: '/campaigns', icon: Target },

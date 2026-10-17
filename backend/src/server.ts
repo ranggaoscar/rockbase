@@ -19,6 +19,7 @@ import { assertEncryptionConfiguration } from './utils/encryption';
 import { getRockBaseMode, isLoopbackAddress, localOperator, requireLocalLoopback } from './middleware/runtimeMode';
 import seoRoutes from './routes/seoRoutes';
 import gscRoutes from './routes/gscRoutes';
+import { trendRouter } from './services/TrendRuntime';
 import { stopSeoWorker } from './services/SeoWorkerService';
 
 dotenv.config();
@@ -141,6 +142,7 @@ app.use('/internal/hermes', hermesShadowCampaignRoutes);
 app.use('/api', noStore, authenticateToken);
 app.use('/api/gsc', gscRoutes);
 app.use('/api/seo', seoRoutes);
+app.use('/api/trends', trendRouter);
 app.use('/api/accounts', accountRoutes);
 app.use('/api/proxies', proxyRoutes);
 app.use('/api/warming', warmingRoutes);

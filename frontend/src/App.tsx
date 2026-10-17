@@ -12,6 +12,7 @@ import SeoIntelligence from '@/pages/SeoIntelligence'
 import FarmView from '@/pages/FarmView'
 import Accounts from '@/pages/Accounts'
 import Compose from '@/pages/Compose'
+import TrendRadar from '@/pages/TrendRadar'
 
 import AIWriter from '@/pages/AIWriter'
 import WarmingManager from '@/pages/WarmingManager'
@@ -65,6 +66,7 @@ export default function App() {
               </ErrorBoundary>
             } />
             <Route path="seo" element={<ErrorBoundary><SeoIntelligence /></ErrorBoundary>} />
+            <Route path="trends" element={<ErrorBoundary><TrendRadar /></ErrorBoundary>} />
             <Route path="accounts" element={
               <ErrorBoundary>
                 <Accounts />

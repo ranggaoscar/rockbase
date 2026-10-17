@@ -10,6 +10,7 @@ import { WindowsCredentialVault } from '../services/gsc/WindowsCredentialVault';
 import { GoogleDesktopOAuth, GscError } from '../services/gsc/GoogleDesktopOAuth';
 import { GscAnalytics } from '../services/gsc/GscAnalytics';
 import { GscConnection } from '../services/gsc/GscConnection';
+import type { GscInput } from '../services/trends/types';
 
 interface Website { id: string | number; workspace_id: string; brand_key?: string | null; base_url: string; name: string }
 interface RouteDependencies {
@@ -159,6 +160,24 @@ const getAnalytics = () => {
   if (getRockBaseMode() !== 'local') throw new GscError('GSC_LOCAL_ONLY', 'Local Google storage is disabled in Server Mode.', 409);
   return analytics ??= new GscAnalytics(database, (resource, body) => oauth.google(resource, body));
 };
+/** Cached report projection only: never syncs Google, remaps properties or exposes credentials. */
+export async function readTrendGscReports(workspace: string, brandKey: string): Promise<{ inputs: GscInput[]; status: string }> {
+  if (getRockBaseMode() !== 'local') return { inputs: [], status: 'GSC is unavailable outside Local Mode.' };
+  try {
+    if (!(await oauth.status()).connected) return { inputs: [], status: 'GSC disconnected. No private report consumed.' };
+    const response = await seoRequest('/websites', workspace);
+    if (!response.ok) return { inputs: [], status: 'SEO website registry unavailable; GSC could not be matched.' };
+    const websites = await response.json() as Website[];
+    const inputs: GscInput[] = [];
+    for (const website of websites.filter(w => w.workspace_id === workspace && w.brand_key === brandKey)) {
+      const report = getAnalytics().report(workspace, String(website.id));
+      if (report && propertyCoversWebsite(report.mapping?.property || '', website.base_url) && report.mapping?.workspaceId === workspace && report.mapping?.websiteId === String(website.id)
+        && report.mapping?.brandKey === brandKey) inputs.push({ websiteId: String(website.id), websiteName: website.name, brandKey, report });
+    }
+    if (!(await oauth.status()).connected) return { inputs: [], status: 'GSC disconnected while reading; cached report projection discarded.' };
+    return { inputs, status: inputs.length ? `${inputs.length} cached GSC report(s); no new Google request. Check each report period and syncedAt.` : 'No matching cached GSC report for this brand. Sync its property from SEO Intelligence first.' };
+  } catch { return { inputs: [], status: 'GSC secure storage or cached reports unavailable; no Google request was made.' }; }
+}
 const router = createGscRouter({ oauth, analytics: getAnalytics, seo: seoRequest, clearData: () => { if (analytics) analytics.disconnect(); else getAnalytics().disconnect(); } });
 process.once('exit', () => { oauth.close(); analytics?.close(); });
 export default router;
