@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/dialog'
 import { cn, statusLabel } from '@/lib/utils'
 import api, { accountGroupsApi, campaignsApi, postsApi } from '@/lib/api'
+import { trendsApi, type TrendDraft } from '@/components/trends/api'
 import { AccountLoadoutPresetManager } from '@/components/common/AccountLoadoutPresetManager'
 import type { AccountLoadoutPreset } from '@/lib/accountLoadoutPresets'
 import { CampaignTemplatePresetManager } from '@/components/common/CampaignTemplatePresetManager'
@@ -251,6 +252,12 @@ export default function Compose() {
   const [searchParams] = useSearchParams()
   const campaignId = searchParams.get('campaignId')
   const shouldLoadVariationAssignments = searchParams.get('variationAssignments') === '1'
+  const trendDraftId = searchParams.get('draftId')
+  const trendWorkspaceId = searchParams.get('workspace_id')
+  const [trendDraft, setTrendDraft] = useState<TrendDraft | null>(null)
+  const [trendDraftLoading, setTrendDraftLoading] = useState(false)
+  const [trendDraftError, setTrendDraftError] = useState('')
+  const [trendDraftApplied, setTrendDraftApplied] = useState(false)
   const [accounts, setAccounts] = useState<Account[]>([])
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [accountGroups, setAccountGroups] = useState<AccountGroupSummary[]>([])
@@ -290,6 +297,41 @@ export default function Compose() {
   const [mode, setMode] = useState<'broadcast' | 'assign'>('broadcast')
   const [assignments, setAssignments] = useState<AssignmentRow[]>([])
   const [rowGenerating, setRowGenerating] = useState<Record<number, boolean>>({})
+
+  useEffect(() => {
+    setTrendDraft(null)
+    setTrendDraftApplied(false)
+    if (!trendDraftId || !trendWorkspaceId) {
+      setTrendDraft(null)
+      setTrendDraftError('')
+      setTrendDraftLoading(false)
+      return
+    }
+    let cancelled = false
+    setTrendDraftLoading(true)
+    setTrendDraftError('')
+    trendsApi.draft(trendDraftId, trendWorkspaceId)
+      .then(({ data }) => { if (!cancelled) setTrendDraft(data.draft) })
+      .catch((error: unknown) => {
+        const value = error as { response?: { data?: { error?: string } }; message?: string }
+        if (!cancelled) setTrendDraftError(value.response?.data?.error || value.message || 'Trend draft could not be loaded.')
+      })
+      .finally(() => { if (!cancelled) setTrendDraftLoading(false) })
+    return () => { cancelled = true }
+  }, [trendDraftId, trendWorkspaceId])
+
+  function applyTrendDraftToCaption() {
+    if (!trendDraft || trendDraftLoading || trendDraft.id !== trendDraftId || trendDraft.workspaceId !== trendWorkspaceId) return
+    // Keep private source evidence in the draft preview, never in a publishable caption.
+    setCaption(trendDraft.content.split('\n\n---\nProvenance (review, not a publication claim):\n')[0])
+    setTrendDraftApplied(true)
+    setVisionPlans([])
+    setMode('broadcast')
+    setSelected(new Set())
+    setSelectedGroupIds(new Set())
+    setMediaFiles([])
+    setMediaPreviews([])
+  }
 
   useEffect(() => {
     try {
@@ -1272,6 +1314,24 @@ export default function Compose() {
                   ))}
                 </div>
               )}
+            </CardContent>
+          </Card>
+        )}
+
+        {(trendDraftLoading || trendDraft || trendDraftError) && (
+          <Card className="border-purple-500/30 bg-purple-500/[0.04]">
+            <CardContent className="space-y-3 p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="outline" className="border-purple-500/40 text-purple-300">Trend Radar draft</Badge>
+                <p className="text-sm font-bold">{trendDraftLoading ? 'Loading saved draft…' : trendDraft?.title || 'Draft unavailable'}</p>
+              </div>
+              {trendDraftError && <p role="alert" className="break-words text-sm text-red-300">{trendDraftError}</p>}
+              {trendDraft && <>
+                <p className="text-xs text-muted-foreground">Saved content includes source classification and evidence provenance. Article-format payloads are editorial briefs, not a CMS article integration. This preview is read-only until explicitly applied.</p>
+                <details className="min-w-0"><summary className="cursor-pointer text-sm text-purple-300">Preview draft & provenance</summary><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-background p-3 font-sans text-xs">{trendDraft.content}</pre></details>
+                {trendDraftApplied && <p role="status" className="text-xs text-emerald-300">Applied to the editor. No accounts, media, schedule, queue or publish action was selected.</p>}
+                <Button type="button" variant="outline" onClick={applyTrendDraftToCaption} aria-label="Apply Trend Radar draft to caption">Apply to caption editor</Button>
+              </>}
             </CardContent>
           </Card>
         )}
