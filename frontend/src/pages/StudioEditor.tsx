@@ -5,12 +5,13 @@ import { Button } from '@/components/ui/button'
 import { EffectTag, GradeTag, Notice, SectionTitle, Void, ago, type Grade } from '@/components/growth/grammar'
 import { EvidenceList } from '@/components/trends/Evidence'
 import { trendsApi } from '@/components/trends/api'
-import { aiWriterDraft, deleteStudioNote, downloadMarkdown, formatLabel, isSocial, newNoteId, saveStudioNote, splitProvenance, studioNotes, type DraftFormat } from '@/lib/drafts'
+import { aiWriterDraft, deleteStudioNote, downloadMarkdown, formatLabel, isSocial, movedNotes, saveStudioNote, splitProvenance, studioApi, studioNotes, type DraftFormat, type MovedMarker, type StudioDraft } from '@/lib/drafts'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/useAppStore'
 
-type Kind = 'radar' | 'note' | 'caption'
-interface Doc { title: string; body: string; format: DraftFormat; updatedAt?: string; brandKey?: string | null; provenance: Record<string, unknown> | null; workspaceId?: string; createdAt?: string }
+/** radar + studio are stored in RockBase; note + caption live in this browser only. */
+type Kind = 'radar' | 'studio' | 'note' | 'caption'
+interface Doc { title: string; body: string; format: DraftFormat; updatedAt?: string; brandKey?: string | null; provenance: Record<string, unknown> | null; workspaceId?: string; createdAt?: string; source?: StudioDraft['source'] }
 
 const classGrade: Record<string, Grade> = { gsc_opportunity: 'measured', rising_trend: 'observed', trend_observation: 'observed', content_idea: 'idea' }
 const classLabel: Record<string, string> = { gsc_opportunity: 'Search Console opportunity', rising_trend: 'Observed source increase', trend_observation: 'Trending Now observation', content_idea: 'Editorial idea · no trend evidence' }
@@ -34,11 +35,17 @@ export default function StudioEditor({ kind }: { kind: Kind }) {
   const [saveError, setSaveError] = useState('')
   const [copied, setCopied] = useState(false)
   const [justCreated] = useState(params.get('new') === '1')
+  const [movedTo, setMovedTo] = useState<MovedMarker | null>(null)
   const area = useRef<HTMLTextAreaElement>(null)
+  const stored = kind === 'radar' || kind === 'studio'
 
   useEffect(() => {
-    setDoc(null); setLoadError('')
-    if (kind === 'radar') {
+    setDoc(null); setLoadError(''); setMovedTo(null)
+    const fromStudio = (d: StudioDraft): Doc => ({ title: d.title, body: d.body, format: d.format, provenance: null, source: d.source, brandKey: d.brandKey, updatedAt: d.updatedAt, createdAt: d.createdAt, workspaceId: d.workspaceId })
+    if (kind === 'studio') {
+      if (!workspaceId) { setLoadError('This link is missing its workspace.'); return }
+      studioApi.get(id, workspaceId).then(({ data }) => setDoc(fromStudio(data.draft))).catch((e) => setLoadError(errorText(e, 'Draft could not be loaded.')))
+    } else if (kind === 'radar') {
       if (!workspaceId) { setLoadError('This link is missing its workspace.'); return }
       trendsApi.draft(id, workspaceId).then(({ data }) => {
         const { body, provenance } = splitProvenance(data.draft.content)
@@ -47,7 +54,9 @@ export default function StudioEditor({ kind }: { kind: Kind }) {
       }).catch((e) => setLoadError(errorText(e, 'Draft could not be loaded.')))
     } else if (kind === 'note') {
       const note = studioNotes().find((n) => n.id === id)
-      if (!note) setLoadError('This draft is not in this browser. Browser drafts do not sync between computers.')
+      const marker = movedNotes()[id] ?? null
+      setMovedTo(marker)
+      if (!note) setLoadError(marker ? 'This browser copy was removed after the draft moved to RockBase. Open the RockBase copy from Studio.' : 'This draft is not in this browser. Browser drafts do not sync between computers.')
       else setDoc({ title: note.title, body: note.body, format: note.format, provenance: null, updatedAt: note.updatedAt, createdAt: note.createdAt, brandKey: note.brandKey ?? null })
     } else {
       const caption = aiWriterDraft(id)
@@ -74,6 +83,9 @@ export default function StudioEditor({ kind }: { kind: Kind }) {
         const { data } = await trendsApi.updateDraft(id, workspaceId, { body, ...(title.trim() ? { title: title.trim() } : {}) })
         const next = splitProvenance(data.draft.content)
         setDoc((d) => d && { ...d, title: data.draft.title || '', body: next.body, updatedAt: data.draft.updatedAt })
+      } else if (kind === 'studio') {
+        const { data } = await studioApi.update(id, workspaceId, { body, title: title.trim() })
+        setDoc((d) => d && { ...d, title: data.draft.title, body: data.draft.body, updatedAt: data.draft.updatedAt })
       } else {
         const at = new Date().toISOString()
         saveStudioNote({ id, title, body, format: doc.format, createdAt: doc.createdAt || at, updatedAt: at, brandKey: doc.brandKey ?? null })
@@ -103,10 +115,14 @@ export default function StudioEditor({ kind }: { kind: Kind }) {
   async function copy() {
     try { await navigator.clipboard.writeText(isSocial(doc!.format) ? body : markdown); setCopied(true); window.setTimeout(() => setCopied(false), 1600) } catch { setSaveError('Clipboard is unavailable in this browser. Select the text and copy it manually.') }
   }
-  function duplicateAsNote() {
-    const nid = newNoteId(); const at = new Date().toISOString()
-    saveStudioNote({ id: nid, title, body, format: 'social_post', createdAt: at, updatedAt: at, brandKey: useAppStore.getState().context.brandKey || null })
-    navigate(`/studio/n/${nid}`)
+  /** Copies a browser-only caption into the RockBase Studio store as an editable social post. */
+  async function duplicateAsDraft() {
+    const { workspaceId: ws, brandKey } = useAppStore.getState().context
+    if (!ws) { setSaveError('No workspace is selected, so RockBase has nowhere to store the copy.'); return }
+    try {
+      const { data } = await studioApi.create({ workspaceId: ws, format: 'social_post', brandKey: brandKey || null, title, body, source: { kind: 'caption_copy' } })
+      navigate(`/studio/s/${encodeURIComponent(data.draft.id)}?workspace_id=${encodeURIComponent(ws)}&new=1`)
+    } catch (e) { setSaveError(errorText(e, 'The copy could not be created. The caption is unchanged.')) }
   }
 
   if (loadError) return <div className="max-w-2xl space-y-4"><BackLink /><Notice tone="error">{loadError}</Notice></div>
@@ -129,11 +145,13 @@ export default function StudioEditor({ kind }: { kind: Kind }) {
       </div>
 
       {justCreated && kind === 'radar' && <Notice tone="ok">Draft created from Radar and saved in RockBase. Its evidence is attached on the right and can't be edited away.</Notice>}
+      {justCreated && kind === 'studio' && <Notice tone="ok">Draft created and saved in RockBase. It opens from any browser that can reach this workspace.</Notice>}
+      {kind === 'note' && movedTo && <Notice action={<Button size="sm" variant="outline" asChild><Link to={`/studio/s/${encodeURIComponent(movedTo.id)}?workspace_id=${encodeURIComponent(movedTo.workspaceId)}`}>Open RockBase copy</Link></Button>}>This browser copy was moved to RockBase {ago(movedTo.movedAt)}. Edits here stay in this browser and are not sent to the RockBase copy.</Notice>}
       {saveError && <Notice tone="error">{saveError}</Notice>}
 
       <div className="grid gap-10 xl:grid-cols-[minmax(0,1fr)_21rem]">
         <article className="min-w-0">
-          <p className="eyebrow">{formatLabel[doc.format]} · {kind === 'radar' ? 'RockBase' : <span className="text-ochre">this browser only</span>}</p>
+          <p className="eyebrow">{formatLabel[doc.format]} · {stored ? 'RockBase' : <span className="text-ochre">this browser only</span>}</p>
           {kind === 'caption' ? <h1 className="font-display mt-3 text-3xl font-semibold">{title}</h1> : (
             <textarea aria-label="Title" rows={1} value={title} onChange={(e) => setTitle(e.target.value.replace(/\n/g, ' '))} placeholder="Untitled"
               style={{ fieldSizing: 'content' } as React.CSSProperties}
@@ -169,7 +187,7 @@ export default function StudioEditor({ kind }: { kind: Kind }) {
                   </div>
                 )}
                 <EffectTag effect="local">Opens Compose · nothing posts until you start a post</EffectTag>
-                {kind === 'caption' && <button onClick={duplicateAsNote} className="block text-xs text-patina underline-offset-2 hover:underline">Duplicate as an editable draft</button>}
+                {kind === 'caption' && <button onClick={duplicateAsDraft} className="block text-xs text-patina underline-offset-2 hover:underline">Copy into RockBase as an editable draft</button>}
               </div>
             )}
           </section>
@@ -199,6 +217,14 @@ export default function StudioEditor({ kind }: { kind: Kind }) {
                 <p className="text-[11px] text-muted-foreground">Provenance is kept by RockBase and is never added to exported or posted text.</p>
               </div>
             ) : kind === 'caption' ? <p className="text-sm text-muted-foreground">Generated with the Caption assistant{p?.platform ? ` for ${String(p.platform)}` : ''}. Stored in this browser.</p>
+              : kind === 'studio' && doc.source && doc.source.kind !== 'blank' ? (
+                <dl className="grid grid-cols-[5.5rem_1fr] gap-x-3 gap-y-1.5 text-[13px]">
+                  <dt className="text-muted-foreground">Source</dt><dd>{doc.source.label ?? doc.source.kind}</dd>
+                  {doc.source.browserCreatedAt && <><dt className="text-muted-foreground">Written</dt><dd>{new Date(doc.source.browserCreatedAt).toLocaleString()} (in a browser)</dd></>}
+                  {doc.source.movedAt && <><dt className="text-muted-foreground">Moved</dt><dd>{new Date(doc.source.movedAt).toLocaleString()}</dd></>}
+                  <dt className="text-muted-foreground">Brand</dt><dd>{doc.brandKey ?? 'No brand'}</dd>
+                </dl>
+              )
               : <Void reason="Written from scratch — no research attached." />}
           </section>
 

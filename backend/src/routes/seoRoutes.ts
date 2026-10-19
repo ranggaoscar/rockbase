@@ -25,19 +25,27 @@ async function identities(req: AuthRequest) {
     select: { id: true, name: true, accounts: { select: { brandTag: true }, distinct: ['brandTag'] } },
     orderBy: { createdAt: 'asc' },
   });
-  return Promise.all(workspaces.map(async (workspace) => {
-    const response = await seoRequest('/brands', workspace.id);
-    if (!response.ok) throw new Error('Persistent website brand registry unavailable.');
-    const stored = await response.json() as Array<{ key: string; name: string; workspace_id: string }>;
-    const brands = stored.map((brand) => ({ ...brand, source: 'WebsiteBrand' }));
-    for (const account of workspace.accounts) {
-      const key = account.brandTag?.trim();
-      if (key && !brands.some((brand) => brand.key.toLowerCase() === key.toLowerCase() || brand.name.toLowerCase() === key.toLowerCase())) {
-        brands.push({ key, name: key, workspace_id: workspace.id, source: 'SocialAccount.brandTag' });
-      }
+  return Promise.all(workspaces.map(async (workspace) => ({ id: workspace.id, name: workspace.name, brands: await registryBrands(workspace) })));
+}
+
+/** The brand registry the UI's brand switcher resolves against: website brands plus social brand tags. */
+async function registryBrands(workspace: { id: string; accounts: Array<{ brandTag: string | null }> }) {
+  const response = await seoRequest('/brands', workspace.id);
+  if (!response.ok) throw new Error('Persistent website brand registry unavailable.');
+  const stored = await response.json() as Array<{ key: string; name: string; workspace_id: string }>;
+  const brands = stored.filter((brand) => brand.workspace_id === workspace.id).map((brand) => ({ ...brand, source: 'WebsiteBrand' }));
+  for (const account of workspace.accounts) {
+    const key = account.brandTag?.trim();
+    if (key && !brands.some((brand) => brand.key.toLowerCase() === key.toLowerCase() || brand.name.toLowerCase() === key.toLowerCase())) {
+      brands.push({ key, name: key, workspace_id: workspace.id, source: 'SocialAccount.brandTag' });
     }
-    return { id: workspace.id, name: workspace.name, brands };
-  }));
+  }
+  return brands;
+}
+
+export async function workspaceBrands(workspaceId: string) {
+  const accounts = await prisma.socialAccount.findMany({ where: { workspaceId }, select: { brandTag: true }, distinct: ['brandTag'] });
+  return registryBrands({ id: workspaceId, accounts });
 }
 
 router.get('/brands', async (req: AuthRequest, res: Response) => {

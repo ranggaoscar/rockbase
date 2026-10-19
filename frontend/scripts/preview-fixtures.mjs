@@ -136,7 +136,19 @@ const seedDraft = (rec, ageMs) => {
   drafts.set(id, { id, workspaceId: 'ws-demo', title: rec.title, content: rec.content + SEP + JSON.stringify(provenance, null, 2), platforms: rec.format === 'article' ? '[]' : '["Instagram"]', createdAt: iso(-ageMs), updatedAt: iso(-ageMs / 2) })
   return id
 }
-const resetDrafts = () => { drafts.clear(); if (scenario !== 'empty') { const r = radar('fieldnote').recommendations; seedDraft(r[0], 2 * D); seedDraft(r[1], 5 * H) } }
+/* ── Studio drafts (Prisma Draft rows, `studio-<32 hex>`) ─────────────────
+ * Held in this process, so they persist across browsers and reloads until the
+ * fixture restarts or the scenario changes — the same contract as the real store. */
+const studioDrafts = new Map()
+const STUDIO_FORMATS = ['article', 'social_post', 'reel']
+const studioId = (seed) => 'studio-' + (seed ? createHash('sha256').update(seed).digest('hex') : createHash('sha256').update(String(Math.random()) + Date.now()).digest('hex')).slice(0, 32)
+const studioView = (d) => ({ id: d.id, workspaceId: d.workspaceId, title: d.title, body: d.body, format: d.format, brandKey: d.brandKey, source: d.source, createdAt: d.createdAt, updatedAt: d.updatedAt })
+const studioSummary = (d) => { const { body, ...rest } = studioView(d); return { ...rest, excerpt: body.replace(/^#+\s*/gm, '').replace(/[*_>`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 180) } }
+const seedStudio = () => {
+  const id = studioId('seed-1')
+  studioDrafts.set(id, { id, workspaceId: 'ws-demo', title: 'Pour-over guide outline', body: '## Angle\nA beginner ratio guide for home brewers.\n\n## Outline\n- Why ratio matters\n- 1:15 vs 1:17\n- Grind and bloom', format: 'article', brandKey: 'fieldnote', source: { kind: 'blank', label: 'Written in RockBase Studio' }, createdAt: iso(-3 * D), updatedAt: iso(-26 * H) })
+}
+const resetDrafts = () => { drafts.clear(); studioDrafts.clear(); if (scenario !== 'empty') { const r = radar('fieldnote').recommendations; seedDraft(r[0], 2 * D); seedDraft(r[1], 5 * H); seedStudio() } }
 
 /* ── Social operations ─────────────────────────────────────────────────── */
 const opsSummary = () => scenario === 'empty'
@@ -205,6 +217,33 @@ const server = http.createServer(async (req, res) => {
   if (p === '/trends/watchlist' && m === 'PUT') { const b = await readBody(req); Object.assign(watch, { topics: b.topics, exclude: b.exclude, discovery: b.discovery, updatedAt: iso() }); return json(res, 200, { ...watch, brandKey: b.brand_key }) }
   if (p === '/trends/refresh') return json(res, 200, { cached: true, snapshot: feed, cooldownUntil: iso(11 * 60_000) })
   if (p === '/trends/capture') return json(res, 200, { captured: 0, historyCount: 1, status: 'Cached GSC evidence captured locally. No Google request; repeated report is not new growth evidence.' })
+  // Studio draft store (works in Local and Server Mode in the real backend)
+  if (p === '/studio/drafts' && m === 'GET') {
+    if (q.workspace_id && q.workspace_id !== 'ws-demo') return json(res, 404, { error: 'Workspace not found.' })
+    return json(res, 200, { drafts: [...studioDrafts.values()].map(studioSummary).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) })
+  }
+  if (p === '/studio/drafts' && m === 'POST') {
+    const b = await readBody(req)
+    if (b.workspace_id !== 'ws-demo') return json(res, 404, { error: 'Workspace not found.' })
+    if (!STUDIO_FORMATS.includes(b.format)) return json(res, 422, { error: 'Format must be article, social_post or reel.' })
+    if (b.brand_key && !brands.some((x) => x.key === b.brand_key)) return json(res, 422, { error: 'Brand not found in this workspace.' })
+    const kind = b.source?.kind
+    if (!['blank', 'caption_copy', 'browser_import'].includes(kind)) return json(res, 422, { error: 'Source must be blank, caption_copy or browser_import.' })
+    const id = kind === 'browser_import' ? studioId(JSON.stringify(['ws-demo', 'browser_import', String(b.source.browser_id)])) : studioId()
+    if (!studioDrafts.has(id)) {
+      const labels = { blank: 'Written in RockBase Studio', caption_copy: 'Copied from a Caption assistant draft kept in a browser', browser_import: 'Moved from this browser’s Studio drafts' }
+      const source = { kind, label: labels[kind], ...(kind === 'browser_import' ? { browserId: b.source.browser_id, browserCreatedAt: b.source.browser_created_at, movedAt: iso(Date.now() - now) } : {}) }
+      studioDrafts.set(id, { id, workspaceId: 'ws-demo', title: String(b.title || '').trim(), body: String(b.body || ''), format: b.format, brandKey: b.brand_key || null, source, createdAt: iso(Date.now() - now), updatedAt: iso(Date.now() - now) })
+    }
+    return json(res, 200, { draft: studioView(studioDrafts.get(id)) })
+  }
+  if ((mm = p.match(/^\/studio\/drafts\/([^/]+)$/))) {
+    const d = studioDrafts.get(mm[1]); const ws = m === 'GET' ? q.workspace_id : (await readBody(req).then((b) => { req.body = b; return b.workspace_id }))
+    if (!d || ws !== d.workspaceId) return json(res, 404, { error: 'Draft not found in this workspace.' })
+    if (m === 'PATCH') { const b = req.body; if (typeof b.body !== 'string') return json(res, 422, { error: 'Draft body is required.' }); d.body = b.body; if (typeof b.title === 'string') d.title = b.title.trim(); d.updatedAt = iso(Date.now() - now) }
+    return json(res, 200, { draft: studioView(d) })
+  }
+
   if (p === '/trends/drafts' && m === 'GET') return json(res, 200, { drafts: [...drafts.values()].filter((d) => d.workspaceId === (q.workspace_id || 'ws-demo')).map(parseDraft).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) })
   if (p === '/trends/drafts' && m === 'POST') { const b = await readBody(req); const rec = radar(b.brand_key).recommendations.find((r) => r.id === b.recommendation_id); if (!rec) return json(res, 409, { error: 'Recommendation changed or expired. Reload the current evidence.' }); const id = [...drafts.keys()].find((k) => k === 'trend-' + createHash('sha256').update(JSON.stringify(['ws-demo', 'fieldnote', rec.id])).digest('hex')) || seedDraft(rec, 0); const d = drafts.get(id); return json(res, 200, { draft: { id, title: d.title, content: d.content, workspaceId: d.workspaceId }, composeUrl: `/compose?draftId=${id}&workspace_id=ws-demo` }) }
   if ((mm = p.match(/^\/trends\/drafts\/(trend-[a-f0-9]{64})$/))) {
