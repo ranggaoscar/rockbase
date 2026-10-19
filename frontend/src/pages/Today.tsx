@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { ArrowRight, ArrowUpRight, Check, FileText, Globe2, KeyRound, Loader2, PenLine, Plus, Radar, RotateCw, SendHorizontal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
-  EffectTag, GradeLegend, GradeTag, Mark, Notice, SectionTitle, SourceDot, SourcePill, Void, ago, ageDays, fmt, type SourceStatus,
+  EffectTag, GradeLegend, GradeTag, Mark, Notice, SectionTitle, SourceDot, SourcePill, Void, ago, ageDays, fmt, sourceLabel, type SourceStatus,
 } from '@/components/growth/grammar'
 import { pickSite, useWorkContext } from '@/lib/brandRegistry'
 import { isLocalMode } from '@/components/layout/nav'
@@ -15,6 +15,10 @@ import { draftHref, formatLabel, loadLibrary, originLabel, scopeDrafts, type Lib
 import { fixItems, radarItems, rankWorkItems, searchItems, type WorkItem } from '@/lib/workQueue'
 import { useAppStore } from '@/store/useAppStore'
 import { cn } from '@/lib/utils'
+import type { StoneLayer } from '@/components/growth/StoneMonolith'
+
+// WebGL lives in its own chunk so the rest of Today paints first.
+const StoneMonolith = lazy(() => import('@/components/growth/StoneMonolith'))
 
 type Load<T> = { status: SourceStatus; data?: T; detail?: string }
 
@@ -140,10 +144,29 @@ export default function Today() {
     } catch (e) { setBriefError(errorText(e, 'Could not create the draft.')); setStartingBrief('') }
   }
 
+  const [activeStage, setActiveStage] = useState<number | null>(null)
   const firstRun = site.status === 'setup' && site.data?.sites.length === 0 && library.data?.drafts.length === 0
   const today = new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })
   const counts = { fix: queue.filter((q) => q.kind === 'fix').length, search: queue.filter((q) => q.kind === 'search').length, radar: queue.filter((q) => q.kind === 'radar').length }
   const anyLoading = [site, gsc, radar, library, ops].some((s) => s.status === 'loading')
+
+  // One slab per stage. Thickness = live volume; null = no source (ghosted, never zero).
+  const unknown = (st: SourceStatus) => ['loading', 'error', 'mode', 'setup', 'disconnected'].includes(st)
+  const pending = ops.data?.summary.publishingQueue
+  const clicks = gsc.data?.report?.totals.current?.clicks
+  const stages: Array<StoneLayer & { to: string }> = [
+    { key: 'discover', label: 'Discover', tone: '--signal', to: '/trends', value: unknown(radar.status) ? null : radar.data?.candidates.length ?? 0,
+      detail: unknown(radar.status) ? radar.detail || sourceLabel(radar.status) : `${radar.data?.candidates.length ?? 0} topics on Radar` },
+    { key: 'analyze', label: 'Analyze', tone: '--patina', to: '/seo', value: unknown(site.status) ? null : counts.fix + counts.search,
+      detail: unknown(site.status) ? site.detail || sourceLabel(site.status) : `${counts.fix} fixes · ${counts.search} search openings` },
+    { key: 'create', label: 'Create', tone: '--chalk', to: '/studio', value: library.status === 'loading' ? null : library.data?.drafts.length ?? 0,
+      detail: library.status === 'loading' ? 'Checking' : `${library.data?.drafts.length ?? 0} drafts in Studio` },
+    { key: 'publish', label: 'Publish', tone: '--ember', to: '/publish', value: unknown(ops.status) || !pending ? null : pending.queued + pending.running + pending.delayed,
+      detail: unknown(ops.status) || !pending ? ops.detail || sourceLabel(ops.status) : `${pending.queued + pending.running + pending.delayed} posts in the queue` },
+    { key: 'measure', label: 'Measure', tone: '--ochre', to: '/results', value: clicks ?? null,
+      detail: clicks != null ? `${fmt.n(clicks)} search clicks, last 28 days` : gsc.detail || 'Not measured yet' },
+  ]
+  const top = queue[0]
 
   const needsYou = (
     <section aria-labelledby="needs-you" className="space-y-3">
@@ -166,11 +189,59 @@ export default function Today() {
 
   return (
     <div className="space-y-10">
-      <Greeting
-        date={today}
-        title={firstRun ? <>Let's get <span className="text-patina">{ctx.label}</span> its first insight.</> : anyLoading ? <>Reading what's known about <span className="text-patina">{ctx.label}</span>…</> : queue.length ? <>{queue.length} thing{queue.length > 1 ? 's' : ''} worth doing for <span className="text-patina">{ctx.label}</span>.</> : <>Nothing urgent for <span className="text-patina">{ctx.label}</span>.</>}
-        summary={!firstRun && !anyLoading && queue.length > 0 ? [counts.fix && `${counts.fix} site fix${counts.fix > 1 ? 'es' : ''}`, counts.search && `${counts.search} search opportunit${counts.search > 1 ? 'ies' : 'y'}`, counts.radar && `${counts.radar} topic${counts.radar > 1 ? 's' : ''} from Radar`, blockers.length && `${blockers.length} need${blockers.length === 1 ? 's' : ''} you`].filter(Boolean).join(' · ') : undefined}
-      />
+      <section aria-labelledby="today-title" className="panel sheen relative overflow-hidden rounded-[28px] px-5 pb-6 pt-7 sm:px-8 lg:grid lg:min-h-[480px] lg:grid-cols-[minmax(0,1fr)_minmax(340px,500px)] lg:items-center lg:gap-6 lg:px-10 lg:py-10">
+        {/* The gallery light falls on the monolith side. */}
+        <div aria-hidden className="pointer-events-none absolute -right-24 -top-40 h-[520px] w-[620px] rounded-full bg-[radial-gradient(closest-side,hsl(var(--signal)/0.12),transparent)]" />
+        <div className="relative min-w-0">
+          <p className="eyebrow animate-rise">{today}</p>
+          <h1 id="today-title" className="font-display mt-3 max-w-[15ch] animate-rise text-[2.4rem] font-semibold leading-[0.98] [animation-delay:60ms] sm:text-[3.25rem] lg:text-[3.6rem]">
+            {firstRun ? <>Give {ctx.label} its first insight</> : anyLoading ? <>Reading {ctx.label}</> : queue.length ? <>{queue.length} move{queue.length > 1 ? 's' : ''} worth making for {ctx.label}</> : <>{ctx.label} is all caught up</>}
+          </h1>
+          {!firstRun && !anyLoading && queue.length > 0 && (
+            <p className="mt-4 max-w-md animate-rise text-[15px] leading-relaxed text-muted-foreground [animation-delay:120ms]">
+              {[counts.fix && `${counts.fix} site fix${counts.fix > 1 ? 'es' : ''}`, counts.search && `${counts.search} search opening${counts.search > 1 ? 's' : ''}`, counts.radar && `${counts.radar} Radar topic${counts.radar > 1 ? 's' : ''}`].filter(Boolean).join(', ')}{blockers.length ? `, and ${blockers.length} thing${blockers.length > 1 ? 's' : ''} waiting on you.` : '.'}
+            </p>
+          )}
+
+          {top ? (
+            <div className="sheen-edge mt-7 max-w-lg animate-rise rounded-2xl border border-border bg-background/45 p-4 [animation-delay:180ms]">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground"><GradeTag grade={top.grade} /><span>Top move · {top.source}</span></div>
+              <p className="mt-2 font-medium leading-snug">{top.title}</p>
+              <div className="mt-3.5 flex flex-wrap items-center gap-3">
+                {top.primary.recommendation ? (
+                  <Button size="sm" disabled={Boolean(startingBrief)} onClick={() => startBrief(top)}>{startingBrief === top.id ? <Loader2 className="animate-spin" /> : <PenLine />}{top.primary.label}</Button>
+                ) : <Button size="sm" asChild><Link to={top.primary.to!}>{top.primary.label}<ArrowRight /></Link></Button>}
+                {top.primary.effect ? <EffectTag effect={top.primary.effect}>Creates a draft, no posting</EffectTag> : <a href="#next-up" className="text-xs text-muted-foreground hover:text-foreground">See all {queue.length}</a>}
+              </div>
+            </div>
+          ) : !anyLoading && (
+            <div className="mt-7 flex animate-rise flex-wrap gap-3 [animation-delay:180ms]">
+              <Button asChild><Link to="/studio?new=1"><Plus />New draft</Link></Button>
+              {isLocalMode && <Button variant="outline" asChild><Link to="/trends"><Radar />Open Radar</Link></Button>}
+            </div>
+          )}
+        </div>
+
+        <div className="relative mt-6 lg:mt-0">
+          <Suspense fallback={<div className="h-[300px] sm:h-[380px] lg:h-[420px]" />}>
+            <StoneMonolith className="h-[300px] sm:h-[380px] lg:h-[420px]" layers={stages} active={activeStage} onActive={setActiveStage} onSelect={(i) => navigate(stages[i].to)} />
+          </Suspense>
+          <ul aria-label="Growth stages" className="relative mt-1 grid grid-cols-5 gap-1 sm:gap-1.5">
+            {stages.map((st, i) => (
+              <li key={st.key}>
+                <Link to={st.to} onMouseEnter={() => setActiveStage(i)} onMouseLeave={() => setActiveStage(null)} onFocus={() => setActiveStage(i)} onBlur={() => setActiveStage(null)}
+                  aria-label={`${st.label}: ${st.detail}`} title={st.detail}
+                  className={cn('block rounded-xl border px-1.5 py-2 text-center transition-[background-color,border-color] duration-200 sm:px-2', activeStage === i ? 'border-[hsl(var(--line-strong))] bg-secondary/70' : 'border-transparent hover:bg-secondary/40')}>
+                  <span className="mx-auto block h-1 w-5 rounded-full" style={{ background: `hsl(var(${st.tone}) / ${st.value == null ? 0.25 : 1})` }} />
+                  <span className="font-data mt-1.5 block text-[15px] font-semibold text-foreground">{st.value == null ? '—' : fmt.n(st.value)}</span>
+                  <span className="block truncate text-[11px] text-muted-foreground">{st.label}</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-center text-[11px] text-muted-foreground/80">Drag to turn. Select a layer to open it. Dimmed layers have no data source yet.</p>
+        </div>
+      </section>
 
       <div className="panel flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
         <span className="eyebrow">Sources</span>
@@ -193,9 +264,9 @@ export default function Today() {
                 <p className="mt-1">That only covers what's listed above as current. {site.status !== 'ok' && 'Run a crawl, '} {isLocalMode && gsc.status !== 'ok' && 'connect Search Console, '}or add Radar topics to widen what RockBase can see.</p>
               </div>
             ) : (
-              <ol className="panel divide-y divide-border overflow-hidden">
+              <ol className="panel divide-y divide-border overflow-hidden rounded-2xl">
                 {queue.map((item, index) => (
-                  <li key={item.id} className="row-hover group grid grid-cols-[1.75rem_minmax(0,1fr)] gap-x-3 px-4 py-4 sm:grid-cols-[2rem_minmax(0,1fr)_auto] sm:px-5">
+                  <li key={item.id} className="row-hover sheen group grid grid-cols-[1.75rem_minmax(0,1fr)] gap-x-3 px-4 py-4 sm:grid-cols-[2rem_minmax(0,1fr)_auto] sm:px-5">
                     <span className="font-data pt-0.5 text-xs text-muted-foreground">{String(index + 1).padStart(2, '0')}</span>
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1"><GradeTag grade={item.grade} /><span className="text-[11px] text-muted-foreground">{item.source}</span>{item.alsoIn && <span className="text-[11px] text-patina/80">{item.alsoIn}</span>}</div>
@@ -286,7 +357,7 @@ function MeasureStrip({ site, gsc, ops }: { site: Load<{ scan?: Scan; comparison
   return (
     <section aria-labelledby="measured" className="space-y-3 pt-6">
       <SectionTitle id="measured" aside={<Link to="/results" className="hover:text-foreground">All results <ArrowUpRight className="inline h-3 w-3" /></Link>}>Measured so far</SectionTitle>
-      <div className="grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-3">
+      <div className="grid gap-px overflow-hidden rounded-2xl border border-border bg-border sm:grid-cols-3">
         <div className="bg-card p-4">
           <div className="flex items-center gap-2"><Mark grade={cur ? 'measured' : 'unavailable'} /><span className="text-xs text-muted-foreground">Search clicks</span></div>
           {cur ? <>
@@ -320,7 +391,7 @@ function FirstRun({ brandName }: { brandName: string }) {
     { icon: Globe2, title: 'Add your website', body: 'RockBase crawls up to 100 pages and turns problems into fix steps. Nothing is changed on your site.', to: '/seo?add=1', cta: 'Add website', effect: 'crawl' as const },
     { icon: KeyRound, title: 'Connect Search Console', body: 'Optional. Read-only Google data shows which queries are close to page one. Stays on this machine.', to: '/setup/google', cta: isLocalMode ? 'Connect' : 'Local Mode only', effect: 'google' as const, disabled: !isLocalMode },
     { icon: Radar, title: 'Tell Radar what you care about', body: 'List a few topics. Radar labels what is measured, merely observed, or just an idea.', to: '/trends', cta: isLocalMode ? 'Set topics' : 'Local Mode only', effect: 'network' as const, disabled: !isLocalMode },
-    { icon: PenLine, title: 'Or just start writing', body: 'No data needed. Draft an article brief or a caption and keep it in Studio.', to: '/studio?new=1', cta: 'New draft', effect: 'browser' as const },
+    { icon: PenLine, title: 'Or just start writing', body: 'No data needed. Draft an article brief or a caption and keep it in Studio.', to: '/studio?new=1', cta: 'New draft', effect: 'local' as const },
   ]
   return (
     <section className="space-y-6">

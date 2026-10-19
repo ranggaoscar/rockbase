@@ -1,73 +1,80 @@
+@import '@fontsource-variable/bricolage-grotesque/standard.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 /*
- * RockBase · "Basalt & Patina"
- * A dark, instrument-like surface for growth work. Colour carries meaning:
- *   patina  → primary action / measured, trustworthy data
- *   signal  → observed external signal (RSS buckets, first-seen topics)
- *   ember   → anything that leaves this machine (Google sync, publishing)
- *   ochre   → stale / needs review
- *   oxide   → error / destructive
- * Fonts are system faces on purpose: the shell makes zero third-party requests.
+ * RockBase · "Stone Atelier"
+ * A gallery for growth work: graphite walls, honed-slate surfaces with a
+ * polished top edge, and one live polished-stone object (the Growth Monolith).
+ * Colour still carries meaning, named after the stones it borrows from:
+ *   jade (patina)      → primary action / measured, trustworthy data
+ *   lapis (signal)     → observed external signal (RSS buckets, first-seen topics)
+ *   carnelian (ember)  → anything that leaves this machine (Google sync, publishing)
+ *   travertine (ochre) → stale / needs review
+ *   rosso (oxide)      → error / destructive
+ * Fonts are bundled (self-hosted) or system faces: the shell makes zero third-party requests.
  */
 @layer base {
   :root {
-    --background: 150 8% 5%;        /* basalt  #0c0e0d */
-    --foreground: 42 22% 89%;       /* chalk   #e9e5db */
+    --background: 224 14% 10%;      /* graphite   #15171c */
+    --foreground: 38 22% 91%;       /* calacatta  #eeeae3 */
 
-    --card: 150 6% 8%;              /* #131614 */
-    --card-foreground: 42 22% 89%;
+    --card: 222 15% 13%;            /* honed slate #1b1e25 */
+    --card-hi: 222 14% 16%;         /* polished top edge */
+    --card-foreground: 38 22% 91%;
 
-    --popover: 150 6% 10%;
-    --popover-foreground: 42 22% 89%;
+    --popover: 223 14% 14%;
+    --popover-foreground: 38 22% 91%;
 
-    --primary: 156 50% 63%;         /* patina  #72d1ab */
-    --primary-foreground: 158 40% 7%;
+    --primary: 156 60% 60%;         /* jade #5ed6a6 */
+    --primary-foreground: 157 69% 8%;
 
-    --secondary: 150 5% 13%;
-    --secondary-foreground: 42 14% 82%;
+    --secondary: 222 13% 18%;
+    --secondary-foreground: 38 14% 84%;
 
-    --muted: 150 5% 12%;
-    --muted-foreground: 140 4% 60%;
+    --muted: 223 13% 16%;
+    --muted-foreground: 222 9% 62%;
 
-    --accent: 156 50% 63%;
-    --accent-foreground: 158 40% 7%;
+    --accent: 156 60% 60%;
+    --accent-foreground: 157 69% 8%;
 
-    --destructive: 4 82% 64%;       /* oxide   #ef6156 */
+    --destructive: 3 85% 66%;       /* rosso #f2665e */
     --destructive-foreground: 0 0% 100%;
 
-    --border: 148 6% 17%;
-    --input: 150 5% 14%;
-    --ring: 156 50% 63%;
+    --border: 223 14% 20%;
+    --input: 223 14% 15%;
+    --ring: 156 60% 60%;
 
-    --radius: 0.5rem;
+    --radius: 0.875rem;
 
-    /* Semantic signal colours */
-    --patina: 156 50% 63%;
-    --signal: 219 92% 76%;          /* #8db1fb */
-    --ember: 22 86% 62%;            /* #f08a4b */
-    --ochre: 41 72% 60%;            /* #e3b452 */
-    --oxide: 4 82% 64%;
-    --chalk: 42 22% 89%;
-    --line-strong: 148 6% 24%;
-    /* Chart marks — validated (dataviz validator, dark band, surface #131614) */
+    /* Semantic stone colours */
+    --patina: 156 60% 60%;
+    --signal: 226 100% 78%;         /* lapis #8fa9ff */
+    --ember: 17 100% 68%;           /* carnelian #ff8b5e */
+    --ochre: 40 64% 67%;            /* travertine #e2be76 */
+    --oxide: 3 85% 66%;
+    --chalk: 38 22% 91%;
+    --line-strong: 223 13% 28%;
+    /* Chart marks — validated (dataviz validator, dark band) */
     --chart-1: #2fa47a;
     --chart-2: #5a86e0;
 
     /* Legacy status colours, remapped */
-    --status-active: 156 50% 63%;
-    --status-idle: 41 72% 60%;
-    --status-error: 4 82% 64%;
-    --status-warming: 219 92% 76%;
-    --status-offline: 140 4% 40%;
+    --status-active: 156 60% 60%;
+    --status-idle: 40 64% 67%;
+    --status-error: 3 85% 66%;
+    --status-warming: 226 100% 78%;
+    --status-offline: 222 8% 42%;
 
-    --font-display: 'Bahnschrift', 'DIN Alternate', 'Barlow', 'Segoe UI Variable Display', 'SF Pro Display', system-ui, sans-serif;
+    --font-display: 'Bricolage Grotesque Variable', 'Segoe UI Variable Display', 'SF Pro Display', system-ui, sans-serif;
     --font-sans: 'Segoe UI Variable Text', 'Segoe UI', 'SF Pro Text', system-ui, -apple-system, sans-serif;
     --font-mono: 'Cascadia Mono', 'SF Mono', 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
 
-    --rail-w: 15.5rem;
+    --rail-w: 17rem;
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
     color-scheme: dark;
   }
 }
@@ -89,10 +96,10 @@
     @apply bg-background text-foreground font-sans;
     min-height: 100vh;
     font-feature-settings: 'ss01', 'cv11';
-    /* Faint geological grain so large empty areas don't read as "broken". */
+    /* One gallery light from above. Nothing else moves or glows in the room. */
     background-image:
-      radial-gradient(1200px 600px at 85% -10%, hsl(var(--patina) / 0.05), transparent 60%),
-      radial-gradient(900px 500px at -10% 110%, hsl(var(--signal) / 0.035), transparent 60%);
+      radial-gradient(1400px 640px at 58% -18%, hsl(var(--signal) / 0.07), transparent 62%),
+      radial-gradient(900px 520px at 100% 0%, hsl(var(--patina) / 0.035), transparent 60%);
     background-attachment: fixed;
   }
 
@@ -106,9 +113,9 @@
 
   ::selection { background: hsl(var(--patina) / 0.3); }
 
-  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 8px; border: 2px solid hsl(var(--background)); }
+  ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 10px; border: 3px solid hsl(var(--background)); }
   ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.6); }
 
   :focus-visible {
@@ -122,25 +129,56 @@
 }
 
 @layer components {
-  /* Display type: engineered, slightly condensed. */
-  .font-display { font-family: var(--font-display); font-stretch: 92%; letter-spacing: -0.01em; }
-  .font-data { font-family: var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+  /* Display type: Bricolage at a slightly narrowed width; optical size follows the size. */
+  .font-display { font-family: var(--font-display); font-optical-sizing: auto; font-stretch: 94%; letter-spacing: -0.022em; }
+  /* Numbers: tabular figures in the text face — no monospace data labels. */
+  .font-data { font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
 
-  .eyebrow {
-    @apply text-[11px] font-semibold uppercase text-muted-foreground;
-    letter-spacing: 0.12em;
+  .eyebrow { @apply text-[12.5px] font-medium text-muted-foreground; }
+
+  /*
+   * A panel is honed slate with a polished top edge. `sheen` adds the light a
+   * polished surface throws back where the pointer is (--mx/--my, set by Layout).
+   * Nothing nests more than one panel deep.
+   */
+  .panel {
+    @apply rounded-lg border border-border;
+    background: linear-gradient(180deg, hsl(var(--card-hi)) 0%, hsl(var(--card)) 38%);
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.045), 0 1px 2px hsl(225 30% 3% / 0.35), 0 18px 40px -24px hsl(225 40% 2% / 0.7);
   }
-
-  /* A panel is the base surface; nothing nests more than one panel deep. */
-  .panel { @apply rounded-lg border border-border bg-card; }
   .panel-quiet { @apply rounded-lg border border-dashed border-border/80; }
 
+  .sheen { position: relative; isolation: isolate; }
+  .sheen::after {
+    content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 1;
+    background: radial-gradient(420px circle at var(--mx, 50%) var(--my, -40%), hsl(var(--chalk) / 0.06), transparent 55%);
+    opacity: 0; transition: opacity 0.4s var(--ease-out);
+  }
+  .sheen:hover::after { opacity: 1; }
+  .sheen-edge { position: relative; }
+  .sheen-edge::before {
+    content: ''; position: absolute; inset: -1px; border-radius: inherit; pointer-events: none; padding: 1px;
+    background: radial-gradient(260px circle at var(--mx, 50%) var(--my, -40%), hsl(var(--patina) / 0.55), transparent 60%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
+    opacity: 0; transition: opacity 0.4s var(--ease-out);
+  }
+  .sheen-edge:hover::before { opacity: 1; }
+
+  /* Chrome (rail, bars, overlays) is frosted glass over the gallery wall; content is not. */
+  .glass {
+    background: hsl(var(--card) / 0.62);
+    -webkit-backdrop-filter: blur(22px) saturate(150%);
+    backdrop-filter: blur(22px) saturate(150%);
+    border: 1px solid hsl(0 0% 100% / 0.07);
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.06), 0 24px 60px -30px hsl(225 40% 2% / 0.8);
+  }
+
   /* Hairline list rows used throughout the work surfaces. */
-  .row-hover { @apply transition-colors hover:bg-secondary/50; }
+  .row-hover { @apply transition-colors duration-200 hover:bg-secondary/45; }
 
   /* Evidence marks ─ the visual grammar for "how do we know this?" */
-  .mark { @apply inline-block h-2.5 w-2.5 shrink-0 rounded-[2px]; }
-  .mark-measured { background: hsl(var(--patina)); }
+  .mark { @apply inline-block h-2.5 w-2.5 shrink-0 rounded-[3px]; }
+  .mark-measured { background: hsl(var(--patina)); box-shadow: 0 0 10px hsl(var(--patina) / 0.45); }
   .mark-observed {
     background: repeating-linear-gradient(135deg, hsl(var(--signal)) 0 1.5px, transparent 1.5px 3.5px);
     box-shadow: inset 0 0 0 1px hsl(var(--signal));
@@ -166,6 +204,9 @@
       hsl(var(--ember) / 0.7) 64% 72%, transparent 72%);
     border-radius: 2px;
   }
+
+  /* Keyboard hint. */
+  .kbd { @apply inline-flex h-5 min-w-5 items-center justify-center gap-0.5 rounded-md border border-border bg-background/60 px-1 text-[10px] font-medium text-muted-foreground; box-shadow: inset 0 -1px 0 hsl(var(--border)); }
 }
 
 @layer utilities {
@@ -189,9 +230,7 @@
   .status-dot-warming  { background: hsl(var(--status-warming)); }
   .status-dot-offline  { background: hsl(var(--status-offline)); }
 
-  .glass-card {
-    @apply rounded-lg border border-border bg-card;
-  }
+  .glass-card { @apply panel; }
 
   .gradient-text {
     background: linear-gradient(120deg, hsl(var(--patina)) 0%, hsl(var(--signal)) 100%);

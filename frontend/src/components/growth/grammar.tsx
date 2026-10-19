@@ -102,7 +102,7 @@ export const sourceLabel = (status: SourceStatus) => sourceCopy[status].label
 /** Missing data. Renders as a hatched void with a reason — never as "0". */
 export function Void({ reason, className, compact }: { reason: string; className?: string; compact?: boolean }) {
   return (
-    <div className={cn('void flex items-center gap-2 rounded-md border border-dashed border-border text-muted-foreground', compact ? 'px-2 py-1 text-[11px]' : 'px-3 py-2.5 text-xs', className)}>
+    <div className={cn('void flex items-center gap-2 rounded-lg border border-dashed border-border text-muted-foreground', compact ? 'px-2 py-1 text-[11px]' : 'px-3 py-2.5 text-xs', className)}>
       <Mark grade="unavailable" />
       <span className="min-w-0">{reason}</span>
     </div>
@@ -115,8 +115,8 @@ export function PageHeader({ eyebrow, title, lede, actions, meta, className }: {
     <header className={cn('flex min-w-0 flex-col gap-4 md:flex-row md:items-end md:justify-between', className)}>
       <div className="min-w-0">
         {eyebrow && <p className="eyebrow">{eyebrow}</p>}
-        <h1 className="font-display mt-1.5 text-[1.75rem] font-semibold leading-[1.1] text-foreground md:text-[2.125rem]">{title}</h1>
-        {lede && <p className="mt-2 max-w-2xl text-sm text-muted-foreground text-pretty">{lede}</p>}
+        <h1 className="font-display mt-1.5 text-[2rem] font-semibold leading-[1.04] text-foreground md:text-[2.75rem]">{title}</h1>
+        {lede && <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-muted-foreground text-pretty">{lede}</p>}
         {meta && <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5">{meta}</div>}
       </div>
       {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
@@ -127,7 +127,7 @@ export function PageHeader({ eyebrow, title, lede, actions, meta, className }: {
 export function SectionTitle({ children, aside, id, className }: { children: ReactNode; aside?: ReactNode; id?: string; className?: string }) {
   return (
     <div className={cn('flex min-w-0 items-baseline justify-between gap-3', className)}>
-      <h2 id={id} className="font-display text-[13px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">{children}</h2>
+      <h2 id={id} className="font-display text-[17px] font-semibold text-foreground">{children}</h2>
       {aside && <div className="shrink-0 text-xs text-muted-foreground">{aside}</div>}
     </div>
   )
@@ -135,13 +135,13 @@ export function SectionTitle({ children, aside, id, className }: { children: Rea
 
 export function Notice({ tone = 'info', children, action, className }: { tone?: 'info' | 'warn' | 'error' | 'ok'; children: ReactNode; action?: ReactNode; className?: string }) {
   const tones = {
-    info: 'border-border bg-secondary/40 text-muted-foreground',
-    warn: 'border-ochre/30 bg-ochre/[0.06] text-ochre',
-    error: 'border-oxide/30 bg-oxide/[0.07] text-oxide',
-    ok: 'border-patina/30 bg-patina/[0.06] text-patina',
+    info: 'border-border bg-secondary/35 text-muted-foreground',
+    warn: 'border-ochre/30 bg-[linear-gradient(90deg,hsl(var(--ochre)/0.09),hsl(var(--ochre)/0.03))] text-ochre',
+    error: 'border-oxide/30 bg-[linear-gradient(90deg,hsl(var(--oxide)/0.1),hsl(var(--oxide)/0.03))] text-oxide',
+    ok: 'border-patina/30 bg-[linear-gradient(90deg,hsl(var(--patina)/0.09),hsl(var(--patina)/0.03))] text-patina',
   }
   return (
-    <div role={tone === 'error' ? 'alert' : 'status'} className={cn('flex min-w-0 flex-wrap items-start gap-x-3 gap-y-2 rounded-md border px-3 py-2.5 text-sm', tones[tone], className)}>
+    <div role={tone === 'error' ? 'alert' : 'status'} className={cn('flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-4 py-3 text-sm shadow-[inset_0_1px_0_hsl(0_0%_100%/0.03)]', tones[tone], className)}>
       <div className="min-w-0 flex-1 break-words">{children}</div>
       {action}
     </div>
