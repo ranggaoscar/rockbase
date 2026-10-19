@@ -25,7 +25,20 @@ export interface TrendDependencies {
   gsc(workspace: string, brandKey: string): Promise<{ inputs: GscInput[]; status: string }>;
   fetchFeed(): Promise<FeedSnapshot>;
   buildRadar(watch: BrandWatch, snapshots: FeedSnapshot[], gsc: GscInput[], status: string): Radar;
-  drafts: { upsert(args: any): Promise<any>; findFirst(args: any): Promise<any> };
+  drafts: { upsert(args: any): Promise<any>; findFirst(args: any): Promise<any>; findMany?(args: any): Promise<any[]>; update?(args: any): Promise<any> };
+}
+const PROVENANCE = '\n\n---\nProvenance (review, not a publication claim):\n';
+const DRAFT_ID = /^trend-[a-f0-9]{64}$/;
+function draftSummary(row: { id: string; title: string | null; content: string; platforms: string; createdAt: Date | string; updatedAt: Date | string }) {
+  const at = row.content.indexOf(PROVENANCE);
+  const body = at >= 0 ? row.content.slice(0, at) : row.content;
+  let provenance: Record<string, unknown> = {};
+  try { provenance = at >= 0 ? JSON.parse(row.content.slice(at + PROVENANCE.length)) : {}; } catch { provenance = {}; }
+  const pick = (key: string) => typeof provenance[key] === 'string' ? provenance[key] as string : null;
+  const format = pick('format') || (row.platforms === '[]' ? 'article' : 'social_post');
+  return { id: row.id, title: row.title, excerpt: body.replace(/[#*_>`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 180), format,
+    topic: pick('topic'), classification: pick('classification'), brandKey: pick('brandKey'),
+    createdAt: new Date(row.createdAt).toISOString(), updatedAt: new Date(row.updatedAt).toISOString() };
 }
 class TrendRouteError extends Error { constructor(public status: number, message: string) { super(message); } }
 const defaults = (brand: Brand): BrandWatch => ({
@@ -138,7 +151,7 @@ export function createTrendRouter(deps: TrendDependencies): Router {
     const provenance = { source: 'RockBase Trend Radar', classification: recommendation.classification,
       brandKey: recommendation.brandKey, topic: recommendation.topic, format: recommendation.format,
       reason: recommendation.reason, evidence: recommendation.evidence };
-    const content = recommendation.content + '\n\n---\nProvenance (review, not a publication claim):\n' + JSON.stringify(provenance, null, 2);
+    const content = recommendation.content + PROVENANCE + JSON.stringify(provenance, null, 2);
     const draft = await deps.drafts.upsert({ where: { id }, update: {}, create: {
       id, workspaceId: workspace, title: recommendation.title, content, mediaUrls: '[]',
       platforms: JSON.stringify(recommendation.format === 'article' ? [] : ['Instagram']), hashtags: '[]',
@@ -146,11 +159,39 @@ export function createTrendRouter(deps: TrendDependencies): Router {
     return { draft: { id: draft.id, title: draft.title, content: draft.content, workspaceId: draft.workspaceId },
       composeUrl: `/compose?draftId=${encodeURIComponent(draft.id)}&workspace_id=${encodeURIComponent(workspace)}` };
   }));
+  /** Studio library: Radar drafts in this workspace, newest first, with parsed provenance (read-only). */
+  router.get('/drafts', handle(async req => {
+    const { workspace } = await scope(req);
+    if (!deps.drafts.findMany) throw new TrendRouteError(503, 'Draft listing unavailable.');
+    const rows = await deps.drafts.findMany({ where: { workspaceId: workspace, id: { startsWith: 'trend-' } }, orderBy: { updatedAt: 'desc' }, take: 200,
+      select: { id: true, title: true, content: true, platforms: true, createdAt: true, updatedAt: true } });
+    return { drafts: rows.map(draftSummary) };
+  }));
   router.get('/drafts/:id', handle(async req => {
     const { workspace } = await scope(req); const id = String(req.params.id);
-    if (!/^trend-[a-f0-9]{64}$/.test(id)) throw new TrendRouteError(404, 'Trend draft not found.');
-    const draft = await deps.drafts.findFirst({ where: { id, workspaceId: workspace }, select: { id: true, title: true, content: true, workspaceId: true } });
+    if (!DRAFT_ID.test(id)) throw new TrendRouteError(404, 'Trend draft not found.');
+    const draft = await deps.drafts.findFirst({ where: { id, workspaceId: workspace }, select: { id: true, title: true, content: true, workspaceId: true, createdAt: true, updatedAt: true } });
     if (!draft) throw new TrendRouteError(404, 'Draft not found in this workspace.');
+    return { draft };
+  }));
+  /**
+   * Save edits to a Radar draft's working copy. Only the body above the
+   * provenance block and the title can change; provenance is re-attached from
+   * the stored row so evidence can never be edited or dropped from the client.
+   */
+  router.patch('/drafts/:id', handle(async req => {
+    const { workspace } = await scope(req); const id = String(req.params.id);
+    if (!DRAFT_ID.test(id)) throw new TrendRouteError(404, 'Trend draft not found.');
+    if (!deps.drafts.update) throw new TrendRouteError(503, 'Draft editing unavailable.');
+    const body = req.body?.body, title = req.body?.title;
+    if (typeof body !== 'string' || body.length > 50_000 || body.includes(PROVENANCE)) throw new TrendRouteError(422, 'Draft body must be text under 50,000 characters without a provenance block.');
+    if (title !== undefined && (typeof title !== 'string' || !title.trim() || title.length > 200)) throw new TrendRouteError(422, 'Title must be 1–200 characters.');
+    const existing = await deps.drafts.findFirst({ where: { id, workspaceId: workspace }, select: { id: true, content: true } });
+    if (!existing) throw new TrendRouteError(404, 'Draft not found in this workspace.');
+    const at = existing.content.indexOf(PROVENANCE);
+    const content = body + (at >= 0 ? existing.content.slice(at) : '');
+    const draft = await deps.drafts.update({ where: { id }, data: { content, ...(title !== undefined ? { title: title.trim() } : {}) },
+      select: { id: true, title: true, content: true, workspaceId: true, createdAt: true, updatedAt: true } });
     return { draft };
   }));
   return router;

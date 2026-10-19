@@ -12,7 +12,8 @@ export default {
     },
     extend: {
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
+        sans: ['var(--font-sans)'],
+        mono: ['var(--font-mono)'],
       },
       colors: {
         border: 'hsl(var(--border))',
@@ -48,13 +49,22 @@ export default {
           DEFAULT: 'hsl(var(--card))',
           foreground: 'hsl(var(--card-foreground))',
         },
-        // Custom app colors
+        // Legacy pages use `purple-*` as "the brand colour". It is remapped to
+        // the patina scale so every older surface adopts the new identity.
         purple: {
-          400: '#a78bfa',
-          500: '#8b5cf6',
-          600: '#7c3aed',
-          700: '#6d28d9',
+          200: '#c9f0de',
+          300: '#a3e3c7',
+          400: '#72d1ab',
+          500: '#45b88b',
+          600: '#1e8560',
+          700: '#176b4d',
         },
+        patina: 'hsl(var(--patina) / <alpha-value>)',
+        signal: 'hsl(var(--signal) / <alpha-value>)',
+        ember: 'hsl(var(--ember) / <alpha-value>)',
+        ochre: 'hsl(var(--ochre) / <alpha-value>)',
+        oxide: 'hsl(var(--oxide) / <alpha-value>)',
+        chalk: 'hsl(var(--chalk) / <alpha-value>)',
       },
       borderRadius: {
         lg: 'var(--radius)',
@@ -74,6 +84,16 @@ export default {
           from: { opacity: '0', transform: 'translateY(4px)' },
           to: { opacity: '1', transform: 'translateY(0)' },
         },
+        // Opacity only: a transform here would trap position:fixed overlays mid-animation.
+        'page-in': { from: { opacity: '0' }, to: { opacity: '1' } },
+        'sheet-up': {
+          from: { transform: 'translateY(16px)', opacity: '0' },
+          to: { transform: 'translateY(0)', opacity: '1' },
+        },
+        'slide-in-right': {
+          from: { transform: 'translateX(24px)', opacity: '0' },
+          to: { transform: 'translateX(0)', opacity: '1' },
+        },
         pulse: {
           '0%, 100%': { opacity: '1' },
           '50%': { opacity: '0.4' },
@@ -82,7 +102,10 @@ export default {
       animation: {
         'accordion-down': 'accordion-down 0.2s ease-out',
         'accordion-up': 'accordion-up 0.2s ease-out',
-        'fade-in': 'fade-in 0.3s ease-out',
+        'fade-in': 'fade-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1)',
+        'page-in': 'page-in 0.2s ease-out',
+        'sheet-up': 'sheet-up 0.24s cubic-bezier(0.2, 0.8, 0.2, 1)',
+        'slide-in-right': 'slide-in-right 0.24s cubic-bezier(0.2, 0.8, 0.2, 1)',
         'pulse-slow': 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
       },
     },

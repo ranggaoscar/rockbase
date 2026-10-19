@@ -2,45 +2,73 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * RockBase · "Basalt & Patina"
+ * A dark, instrument-like surface for growth work. Colour carries meaning:
+ *   patina  → primary action / measured, trustworthy data
+ *   signal  → observed external signal (RSS buckets, first-seen topics)
+ *   ember   → anything that leaves this machine (Google sync, publishing)
+ *   ochre   → stale / needs review
+ *   oxide   → error / destructive
+ * Fonts are system faces on purpose: the shell makes zero third-party requests.
+ */
 @layer base {
   :root {
-    /* Dark-only theme — no light mode */
-    --background: 0 0% 4%;        /* #0a0a0a */
-    --foreground: 0 0% 95%;       /* near white */
+    --background: 150 8% 5%;        /* basalt  #0c0e0d */
+    --foreground: 42 22% 89%;       /* chalk   #e9e5db */
 
-    --card: 0 0% 7%;              /* #111111 */
-    --card-foreground: 0 0% 95%;
+    --card: 150 6% 8%;              /* #131614 */
+    --card-foreground: 42 22% 89%;
 
-    --popover: 0 0% 9%;
-    --popover-foreground: 0 0% 95%;
+    --popover: 150 6% 10%;
+    --popover-foreground: 42 22% 89%;
 
-    --primary: 263 76% 55%;       /* #7c3aed purple */
-    --primary-foreground: 0 0% 100%;
+    --primary: 156 50% 63%;         /* patina  #72d1ab */
+    --primary-foreground: 158 40% 7%;
 
-    --secondary: 0 0% 12%;
-    --secondary-foreground: 0 0% 85%;
+    --secondary: 150 5% 13%;
+    --secondary-foreground: 42 14% 82%;
 
-    --muted: 0 0% 12%;
-    --muted-foreground: 0 0% 55%;
+    --muted: 150 5% 12%;
+    --muted-foreground: 140 4% 60%;
 
-    --accent: 263 76% 55%;
-    --accent-foreground: 0 0% 100%;
+    --accent: 156 50% 63%;
+    --accent-foreground: 158 40% 7%;
 
-    --destructive: 0 72% 51%;
+    --destructive: 4 82% 64%;       /* oxide   #ef6156 */
     --destructive-foreground: 0 0% 100%;
 
-    --border: 0 0% 14%;
-    --input: 0 0% 12%;
-    --ring: 263 76% 55%;
+    --border: 148 6% 17%;
+    --input: 150 5% 14%;
+    --ring: 156 50% 63%;
 
     --radius: 0.5rem;
 
-    /* Status colors */
-    --status-active: 142 71% 45%;
-    --status-idle: 38 92% 50%;
-    --status-error: 0 72% 51%;
-    --status-warming: 263 76% 55%;
-    --status-offline: 0 0% 40%;
+    /* Semantic signal colours */
+    --patina: 156 50% 63%;
+    --signal: 219 92% 76%;          /* #8db1fb */
+    --ember: 22 86% 62%;            /* #f08a4b */
+    --ochre: 41 72% 60%;            /* #e3b452 */
+    --oxide: 4 82% 64%;
+    --chalk: 42 22% 89%;
+    --line-strong: 148 6% 24%;
+    /* Chart marks — validated (dataviz validator, dark band, surface #131614) */
+    --chart-1: #2fa47a;
+    --chart-2: #5a86e0;
+
+    /* Legacy status colours, remapped */
+    --status-active: 156 50% 63%;
+    --status-idle: 41 72% 60%;
+    --status-error: 4 82% 64%;
+    --status-warming: 219 92% 76%;
+    --status-offline: 140 4% 40%;
+
+    --font-display: 'Bahnschrift', 'DIN Alternate', 'Barlow', 'Segoe UI Variable Display', 'SF Pro Display', system-ui, sans-serif;
+    --font-sans: 'Segoe UI Variable Text', 'Segoe UI', 'SF Pro Text', system-ui, -apple-system, sans-serif;
+    --font-mono: 'Cascadia Mono', 'SF Mono', 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+
+    --rail-w: 15.5rem;
+    color-scheme: dark;
   }
 }
 
@@ -54,11 +82,18 @@
     @apply bg-background text-foreground;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
   }
 
   body {
     @apply bg-background text-foreground font-sans;
     min-height: 100vh;
+    font-feature-settings: 'ss01', 'cv11';
+    /* Faint geological grain so large empty areas don't read as "broken". */
+    background-image:
+      radial-gradient(1200px 600px at 85% -10%, hsl(var(--patina) / 0.05), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, hsl(var(--signal) / 0.035), transparent 60%);
+    background-attachment: fixed;
   }
 
   #root {
@@ -67,59 +102,106 @@
     flex-direction: column;
   }
 
-  /* Custom scrollbar */
-  ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-  }
-  ::-webkit-scrollbar-track {
-    background: hsl(var(--background));
-  }
-  ::-webkit-scrollbar-thumb {
-    background: hsl(var(--border));
-    border-radius: 3px;
-  }
-  ::-webkit-scrollbar-thumb:hover {
-    background: hsl(var(--muted-foreground));
-  }
+  h1, h2, h3 { text-wrap: balance; }
 
-  /* Focus ring */
+  ::selection { background: hsl(var(--patina) / 0.3); }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 8px; border: 2px solid hsl(var(--background)); }
+  ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.6); }
+
   :focus-visible {
     outline: 2px solid hsl(var(--ring));
     outline-offset: 2px;
   }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  }
+}
+
+@layer components {
+  /* Display type: engineered, slightly condensed. */
+  .font-display { font-family: var(--font-display); font-stretch: 92%; letter-spacing: -0.01em; }
+  .font-data { font-family: var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+
+  .eyebrow {
+    @apply text-[11px] font-semibold uppercase text-muted-foreground;
+    letter-spacing: 0.12em;
+  }
+
+  /* A panel is the base surface; nothing nests more than one panel deep. */
+  .panel { @apply rounded-lg border border-border bg-card; }
+  .panel-quiet { @apply rounded-lg border border-dashed border-border/80; }
+
+  /* Hairline list rows used throughout the work surfaces. */
+  .row-hover { @apply transition-colors hover:bg-secondary/50; }
+
+  /* Evidence marks ─ the visual grammar for "how do we know this?" */
+  .mark { @apply inline-block h-2.5 w-2.5 shrink-0 rounded-[2px]; }
+  .mark-measured { background: hsl(var(--patina)); }
+  .mark-observed {
+    background: repeating-linear-gradient(135deg, hsl(var(--signal)) 0 1.5px, transparent 1.5px 3.5px);
+    box-shadow: inset 0 0 0 1px hsl(var(--signal));
+  }
+  .mark-idea { box-shadow: inset 0 0 0 1px hsl(var(--chalk) / 0.55); background: transparent; border-radius: 50%; }
+  .mark-unavailable {
+    background: linear-gradient(135deg, transparent 45%, hsl(var(--muted-foreground)) 45% 55%, transparent 55%);
+    box-shadow: inset 0 0 0 1px hsl(var(--muted-foreground) / 0.6);
+  }
+
+  /* "Void" — how missing data looks. Never a zero. */
+  .void {
+    background-image: repeating-linear-gradient(135deg, hsl(var(--border) / 0.6) 0 1px, transparent 1px 7px);
+  }
+
+  /* Strata rule: the brand motif, used sparingly as a divider. */
+  .strata {
+    height: 3px;
+    background: linear-gradient(90deg,
+      hsl(var(--patina)) 0 22%, transparent 22% 23%,
+      hsl(var(--signal) / 0.8) 23% 41%, transparent 41% 42%,
+      hsl(var(--chalk) / 0.35) 42% 63%, transparent 63% 64%,
+      hsl(var(--ember) / 0.7) 64% 72%, transparent 72%);
+    border-radius: 2px;
+  }
 }
 
 @layer utilities {
-  .text-balance {
-    text-wrap: balance;
-  }
+  .text-balance { text-wrap: balance; }
+  .text-pretty { text-wrap: pretty; }
+  .scrollbar-none { scrollbar-width: none; }
+  .scrollbar-none::-webkit-scrollbar { display: none; }
 
-  /* Status indicator dots */
-  .status-dot {
-    @apply inline-block w-2 h-2 rounded-full flex-shrink-0;
-  }
+  .text-patina { color: hsl(var(--patina)); }
+  .text-signal { color: hsl(var(--signal)); }
+  .text-ember { color: hsl(var(--ember)); }
+  .text-ochre { color: hsl(var(--ochre)); }
+  .text-oxide { color: hsl(var(--oxide)); }
+  .bg-patina { background-color: hsl(var(--patina)); }
+  .bg-ember { background-color: hsl(var(--ember)); }
+
+  .status-dot { @apply inline-block h-2 w-2 shrink-0 rounded-full; }
   .status-dot-active   { background: hsl(var(--status-active)); }
   .status-dot-idle     { background: hsl(var(--status-idle)); }
   .status-dot-error    { background: hsl(var(--status-error)); }
   .status-dot-warming  { background: hsl(var(--status-warming)); }
   .status-dot-offline  { background: hsl(var(--status-offline)); }
 
-  /* Glass card effect */
   .glass-card {
-    @apply bg-card border border-border rounded-xl;
-    backdrop-filter: blur(8px);
+    @apply rounded-lg border border-border bg-card;
   }
 
-  /* Gradient text */
   .gradient-text {
-    background: linear-gradient(135deg, #a78bfa 0%, #7c3aed 50%, #6d28d9 100%);
+    background: linear-gradient(120deg, hsl(var(--patina)) 0%, hsl(var(--signal)) 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
   }
 
-  /* Sidebar width constants */
-  .sidebar-w { width: 240px; }
+  .sidebar-w { width: var(--rail-w); }
   .sidebar-w-collapsed { width: 64px; }
+
+  .pb-safe { padding-bottom: env(safe-area-inset-bottom); }
 }
