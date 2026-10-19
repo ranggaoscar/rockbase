@@ -1,45 +1,71 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ExternalLink, RefreshCw, Save, Sparkles, TrendingUp } from 'lucide-react'
-import { Link } from 'react-router-dom'
-import { Badge } from '@/components/ui/badge'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { ArrowLeft, ChevronRight, Database, ExternalLink, Lock, PenLine, RefreshCw, Save, Search, SlidersHorizontal, TrendingUp } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import Sheet from '@/components/growth/Sheet'
+import { EffectTag, GradeTag, Mark, Notice, PageHeader, SectionTitle, Void, ago, type Grade } from '@/components/growth/grammar'
+import { EvidenceList, GscSignal, dateLabel, safeSourceUrl } from '@/components/trends/Evidence'
 import { defaultDiscoveryConfig, trendsApi, type BrandWatch, type DiscoveryConfig, type TrendBrand, type TrendCandidate, type TrendRadar as TrendRadarData, type TrendRecommendation, type TrendWorkspace } from '@/components/trends/api'
+import { isLocalMode } from '@/components/layout/nav'
+import { useAppStore } from '@/store/useAppStore'
+import { cn } from '@/lib/utils'
 
-const classificationLabels: Record<TrendCandidate['classification'], string> = {
-  rising_trend: 'Observed source increase', trend_observation: 'Trending Now observation', gsc_opportunity: 'GSC opportunity', content_idea: 'Editorial idea · no trend evidence',
+type Classification = TrendCandidate['classification']
+const classificationLabels: Record<Classification, string> = {
+  rising_trend: 'Observed source increase', trend_observation: 'Trending Now observation', gsc_opportunity: 'Search Console opportunity', content_idea: 'Editorial idea · no trend evidence',
 }
-const classificationStyles: Record<TrendCandidate['classification'], string> = {
-  rising_trend: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300', trend_observation: 'border-blue-500/30 bg-blue-500/10 text-blue-300', gsc_opportunity: 'border-amber-500/30 bg-amber-500/10 text-amber-300', content_idea: 'border-border bg-secondary text-muted-foreground',
-}
-const classificationKeys: TrendCandidate['classification'][] = ['rising_trend', 'trend_observation', 'gsc_opportunity', 'content_idea']
-const classifications: Array<'all' | TrendCandidate['classification']> = ['all', ...classificationKeys]
-const dateLabel = (value: string | null | undefined) => value ? new Date(value).toLocaleString() : 'Not available'
-const safeSourceUrl = (value: unknown): string | null => {
-  if (typeof value !== 'string') return null
-  try { const url = new URL(value); return (url.protocol === 'https:' || url.protocol === 'http:') && !url.username && !url.password ? url.toString() : null } catch { return null }
-}
-const splitLines = (value: string) => value.split('\n').map(item => item.trim()).filter(Boolean)
+const shortLabels: Record<Classification, string> = { gsc_opportunity: 'Search Console', rising_trend: 'Rising in feed', trend_observation: 'Seen in feed', content_idea: 'Idea' }
+const grades: Record<Classification, Grade> = { gsc_opportunity: 'measured', rising_trend: 'observed', trend_observation: 'observed', content_idea: 'idea' }
+const classificationKeys: Classification[] = ['gsc_opportunity', 'rising_trend', 'trend_observation', 'content_idea']
+const formatLabels: Record<TrendRecommendation['format'], string> = { article: 'Article brief', reel: 'Reel', social_post: 'Social post' }
+const splitLines = (value: string) => value.split('\n').map((item) => item.trim()).filter(Boolean)
 const errorText = (error: unknown) => {
   const e = error as { response?: { data?: { error?: string } }; message?: string }
-  return e.response?.data?.error || e.message || 'Request failed. Try again.'
+  const raw = e.response?.data?.error || e.message || 'Request failed. Try again.'
+  if (raw === 'TREND_LOCAL_ONLY') return 'Radar is available in Local Mode only.'
+  if (raw === 'TREND_LOCAL_OWNER_REQUIRED') return 'Radar requires the local owner session.'
+  return raw
 }
 
 export default function TrendRadar() {
+  if (!isLocalMode) return <ModeUnavailable />
+  return <RadarWorkspace />
+}
+
+function ModeUnavailable() {
+  return (
+    <div className="max-w-2xl space-y-6">
+      <PageHeader eyebrow="Discover" title="Radar runs on your machine" lede="Radar reads your private, cached Search Console history and a public trend feed. To keep that evidence local, it is only available in Local Mode. Nothing is hidden or broken — this server simply doesn't run it." />
+      <div className="panel space-y-3 p-5 text-sm">
+        <p className="flex items-center gap-2 font-medium"><Lock className="h-4 w-4 text-muted-foreground" />Available in Local Mode</p>
+        <p className="text-muted-foreground">Start RockBase with <code className="font-data rounded bg-secondary px-1">ROCKBASE_MODE=local</code> on the computer that owns the data. Site &amp; Search and Studio work here as usual.</p>
+        <div className="flex gap-2 pt-1"><Button variant="outline" size="sm" asChild><Link to="/seo">Open Site &amp; Search</Link></Button><Button variant="outline" size="sm" asChild><Link to="/studio">Open Studio</Link></Button></div>
+      </div>
+    </div>
+  )
+}
+
+function RadarWorkspace() {
+  const navigate = useNavigate()
+  const [params, setParams] = useSearchParams()
+  const context = useAppStore((s) => s.context)
+  const setContext = useAppStore((s) => s.setContext)
   const [workspaces, setWorkspaces] = useState<TrendWorkspace[]>([])
   const [brands, setBrands] = useState<TrendBrand[]>([])
   const [watchlists, setWatchlists] = useState<BrandWatch[]>([])
-  const [workspaceId, setWorkspaceId] = useState('')
-  const [brandKey, setBrandKey] = useState('')
+  const [registryLoaded, setRegistryLoaded] = useState(false)
   const [radar, setRadar] = useState<TrendRadarData | null>(null)
   const [topicsText, setTopicsText] = useState('')
   const [excludeText, setExcludeText] = useState('')
   const [discovery, setDiscovery] = useState<DiscoveryConfig>(defaultDiscoveryConfig)
-  const [format, setFormat] = useState<'all' | 'article' | 'reel' | 'social_post'>('all')
-  const [classification, setClassification] = useState<'all' | TrendCandidate['classification']>('all')
+  const [format, setFormat] = useState<'all' | TrendRecommendation['format']>('all')
+  const [classification, setClassification] = useState<'all' | Classification>('all')
+  const [query, setQuery] = useState(params.get('q') ?? '')
+  const [selectedId, setSelectedId] = useState(params.get('focus') ?? '')
+  const [mobileDetail, setMobileDetail] = useState(Boolean(params.get('focus')))
   const [clock, setClock] = useState(() => Date.now())
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -48,65 +74,46 @@ export default function TrendRadar() {
   const [draftingId, setDraftingId] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [tuneOpen, setTuneOpen] = useState(false)
+  const [sourcesOpen, setSourcesOpen] = useState(false)
   const activeScope = useRef('')
   const saveController = useRef<AbortController | null>(null)
   const captureController = useRef<AbortController | null>(null)
-  const scope = `${workspaceId}\\u0000${brandKey}`
+
+  // Scope comes from the global brand context when it is valid for Radar's registry.
+  const workspaceId = workspaces.some((w) => w.id === context.workspaceId) ? context.workspaceId : workspaces[0]?.id || ''
+  const scopedBrands = brands.filter((b) => b.workspace_id === workspaceId)
+  const brandKey = scopedBrands.some((b) => b.key === context.brandKey) ? context.brandKey : ''
+  const brandName = scopedBrands.find((b) => b.key === brandKey)?.name ?? ''
+  const scope = `${workspaceId}\u0000${brandKey}`
   activeScope.current = scope
 
   useEffect(() => {
     const timer = window.setInterval(() => setClock(Date.now()), 1000)
-    return () => {
-      window.clearInterval(timer)
-      saveController.current?.abort()
-      captureController.current?.abort()
-    }
+    return () => { window.clearInterval(timer); saveController.current?.abort(); captureController.current?.abort() }
   }, [])
 
+  // Reset scoped work whenever the brand context changes.
+  useEffect(() => {
+    saveController.current?.abort(); saveController.current = null
+    captureController.current?.abort(); captureController.current = null
+    setSaving(false); setCapturing(false); setRefreshing(false); setDraftingId(''); setError(''); setNotice('')
+  }, [scope])
+
   const loadBrands = useCallback(async (signal?: AbortSignal) => {
-    const { data } = await trendsApi.brands(workspaceId || undefined, signal)
+    const { data } = await trendsApi.brands(context.workspaceId || undefined, signal)
     if (signal?.aborted) return
-    setWorkspaces(data.workspaces || [])
-    setBrands(data.brands || [])
-    setWatchlists(data.watchlists || [])
-    const actualWorkspace = workspaceId && data.workspaces.some(w => w.id === workspaceId) ? workspaceId : data.workspaces[0]?.id || ''
-    if (actualWorkspace !== workspaceId) setWorkspaceId(actualWorkspace)
-    const scopedBrands = data.brands.filter(b => b.workspace_id === actualWorkspace)
-    setBrandKey(current => scopedBrands.some(b => b.key === current) ? current : scopedBrands[0]?.key || '')
-  }, [workspaceId])
+    setWorkspaces(data.workspaces || []); setBrands(data.brands || []); setWatchlists(data.watchlists || []); setRegistryLoaded(true)
+  }, [context.workspaceId])
 
   useEffect(() => {
     const controller = new AbortController()
     setError('')
-    loadBrands(controller.signal).catch(e => { if (!controller.signal.aborted) setError(errorText(e)) })
+    loadBrands(controller.signal).catch((e) => { if (!controller.signal.aborted) { setError(errorText(e)); setRegistryLoaded(true) } })
     return () => controller.abort()
   }, [loadBrands])
 
-  function resetScopedActions() {
-    saveController.current?.abort(); saveController.current = null
-    captureController.current?.abort(); captureController.current = null
-    setSaving(false)
-    setCapturing(false)
-    setRefreshing(false)
-    setDraftingId('')
-    setError('')
-    setNotice('')
-  }
-
-  function changeWorkspace(id: string) {
-    activeScope.current = `${id}\\u0000`
-    resetScopedActions()
-    setWorkspaceId(id)
-    setBrandKey('')
-  }
-
-  function changeBrand(key: string) {
-    activeScope.current = `${workspaceId}\\u0000${key}`
-    resetScopedActions()
-    setBrandKey(key)
-  }
-
-  const selectedWatch = useMemo(() => watchlists.find(w => w.brandKey === brandKey) || radar?.watchlist, [watchlists, brandKey, radar])
+  const selectedWatch = useMemo(() => watchlists.find((w) => w.brandKey === brandKey) || radar?.watchlist, [watchlists, brandKey, radar])
   useEffect(() => {
     setTopicsText((selectedWatch?.topics || []).join('\n'))
     setExcludeText((selectedWatch?.exclude || []).join('\n'))
@@ -117,20 +124,29 @@ export default function TrendRadar() {
     if (!workspaceId || !brandKey) { setRadar(null); return }
     const controller = new AbortController()
     setLoading(true); setError(''); setRadar(null)
-    trendsApi.radar(workspaceId, brandKey, controller.signal).then(({ data }) => {
-      if (!controller.signal.aborted) setRadar(data)
-    }).catch(e => { if (!controller.signal.aborted) setError(errorText(e)) })
+    trendsApi.radar(workspaceId, brandKey, controller.signal).then(({ data }) => { if (!controller.signal.aborted) setRadar(data) })
+      .catch((e) => { if (!controller.signal.aborted) setError(errorText(e)) })
       .finally(() => { if (!controller.signal.aborted) setLoading(false) })
     return () => controller.abort()
   }, [workspaceId, brandKey])
 
-  const scopedBrands = brands.filter(b => b.workspace_id === workspaceId)
-  const recommendations = useMemo(() => (radar?.recommendations || []).filter(item => format === 'all' || item.format === format), [radar, format])
-  const visibleCandidates = useMemo(() => (radar?.candidates || []).filter(item => classification === 'all' || item.classification === classification), [radar, classification])
-  const visibleRecommendations = useMemo(() => recommendations.filter(item => classification === 'all' || item.classification === classification), [recommendations, classification])
-  const classificationCounts = useMemo(() => Object.fromEntries(classifications.slice(1).map(key => [key, radar?.candidates.filter(item => item.classification === key).length || 0])) as Record<TrendCandidate['classification'], number>, [radar])
-  const hasRssEvidence = Boolean(radar?.candidates.some(candidate => candidate.evidence.some(item => item.type === 'google_trends_rss')))
+  const counts = useMemo(() => Object.fromEntries(classificationKeys.map((key) => [key, radar?.candidates.filter((c) => c.classification === key).length || 0])) as Record<Classification, number>, [radar])
+  const needle = query.trim().toLowerCase()
+  const visible = useMemo(() => (radar?.candidates || []).filter((c) =>
+    (classification === 'all' || c.classification === classification)
+    && (!needle || c.topic.toLowerCase().includes(needle) || c.relevance.matchedTerms.some((t) => t.toLowerCase().includes(needle)))
+    && (format === 'all' || radar!.recommendations.some((r) => r.candidateId === c.id && r.format === format)),
+  ), [radar, classification, needle, format])
+  const selected = visible.find((c) => c.id === selectedId) ?? visible[0]
+  const selectedRecs = (radar?.recommendations || []).filter((r) => r.candidateId === selected?.id && (format === 'all' || r.format === format))
+  const hasRssEvidence = Boolean(radar?.candidates.some((c) => c.evidence.some((item) => item.type === 'google_trends_rss')))
   const cooldownActive = Boolean(radar?.source.cooldownUntil && Date.parse(radar.source.cooldownUntil) > clock)
+  const cooldownLeft = radar?.source.cooldownUntil ? Math.max(0, Math.ceil((Date.parse(radar.source.cooldownUntil) - clock) / 60000)) : 0
+
+  function select(id: string) {
+    setSelectedId(id); setMobileDetail(true)
+    const next = new URLSearchParams(params); next.set('focus', id); setParams(next, { replace: true })
+  }
 
   async function refresh() {
     if (!workspaceId || refreshing) return
@@ -140,9 +156,11 @@ export default function TrendRadar() {
       const { data } = await trendsApi.refresh(workspaceId)
       if (activeScope.current !== requestScope) return
       setNotice(data.cached ? 'Refresh cooldown is active; showing the latest saved snapshot.' : 'Refresh complete. The feed snapshot was saved.')
-      const { data: next } = await trendsApi.radar(workspaceId, brandKey)
-      if (activeScope.current !== requestScope) return
-      setRadar(next)
+      if (brandKey) {
+        const { data: next } = await trendsApi.radar(workspaceId, brandKey)
+        if (activeScope.current !== requestScope) return
+        setRadar(next)
+      }
     } catch (e) { if (activeScope.current === requestScope) setError(errorText(e)) }
     finally { if (activeScope.current === requestScope) setRefreshing(false) }
   }
@@ -150,12 +168,8 @@ export default function TrendRadar() {
   async function saveWatchlist() {
     if (!workspaceId || !brandKey) return
     const topics = splitLines(topicsText), exclude = splitLines(excludeText)
-    if (topics.length > 30 || exclude.length > 30 || [...topics, ...exclude].some(term => term.length > 100)) {
-      setError('Each list supports up to 30 non-empty lines; each phrase must be 100 characters or fewer.'); return
-    }
-    if (![discovery.minImpressions, discovery.minIncrease, discovery.minGrowthPct].every(value => Number.isFinite(value) && value >= 1 && value <= 1000)) {
-      setError('Discovery thresholds must be between 1 and 1,000.'); return
-    }
+    if (topics.length > 30 || exclude.length > 30 || [...topics, ...exclude].some((term) => term.length > 100)) { setError('Each list supports up to 30 non-empty lines; each phrase must be 100 characters or fewer.'); return }
+    if (![discovery.minImpressions, discovery.minIncrease, discovery.minGrowthPct].every((value) => Number.isFinite(value) && value >= 1 && value <= 1000)) { setError('Discovery thresholds must be between 1 and 1,000.'); return }
     saveController.current?.abort()
     const controller = new AbortController(); saveController.current = controller
     setSaving(true); setError(''); setNotice('')
@@ -163,8 +177,8 @@ export default function TrendRadar() {
     try {
       const { data } = await trendsApi.saveWatchlist(workspaceId, brandKey, topics, exclude, discovery, controller.signal)
       if (controller.signal.aborted || activeScope.current !== requestScope) return
-      setWatchlists(current => [...current.filter(w => w.brandKey !== data.brandKey), data])
-      setNotice('Watchlist saved.')
+      setWatchlists((current) => [...current.filter((w) => w.brandKey !== data.brandKey), data])
+      setNotice('Watchlist saved.'); setTuneOpen(false)
       const { data: next } = await trendsApi.radar(workspaceId, brandKey, controller.signal)
       if (controller.signal.aborted || activeScope.current !== requestScope) return
       setRadar(next)
@@ -191,80 +205,220 @@ export default function TrendRadar() {
   async function createDraft(recommendation: TrendRecommendation) {
     if (draftingId) return
     const requestScope = scope
-    const requestWorkspace = workspaceId, requestBrand = brandKey
     setDraftingId(recommendation.id); setError('')
     try {
-      const { data } = await trendsApi.createDraft(requestWorkspace, requestBrand, recommendation.id)
+      const { data } = await trendsApi.createDraft(workspaceId, brandKey, recommendation.id)
       if (activeScope.current !== requestScope) return
-      window.location.assign(data.composeUrl)
+      // Articles open in Studio's brief editor; social formats continue to Compose.
+      navigate(recommendation.format === 'article' ? `/studio/d/${encodeURIComponent(data.draft.id)}?workspace_id=${encodeURIComponent(workspaceId)}&new=1` : data.composeUrl)
     } catch (e) { if (activeScope.current === requestScope) { setError(errorText(e)); setDraftingId('') } }
   }
 
-  const evidenceLinks = (evidence: unknown[]) => evidence.map((entry, index) => {
-    if (!entry || typeof entry !== 'object') return null
-    const item = entry as Record<string, unknown>
-    const url = safeSourceUrl(item.url ?? item.sourceUrl ?? item.source_url)
-    const title = typeof item.title === 'string' ? item.title : typeof item.source === 'string' ? item.source : `Evidence ${index + 1}`
-    const news = Array.isArray(item.news) ? item.news : []
-    const gscFields = ['query', 'property', 'websiteName', 'periods', 'clicks', 'impressions', 'ctr', 'position', 'confidence', 'syncedAt', 'freshness', 'coverage', 'reason']
-    const evidenceValue = (key: string) => {
-      const value = item[key]
-      if (key === 'position' && typeof value === 'number') return value.toFixed(2)
-      if (key === 'ctr' && typeof value === 'number') return `${(value * 100).toFixed(2)}%`
-      if (key === 'syncedAt' && typeof value === 'string') return dateLabel(value)
-      if (key === 'periods' && value && typeof value === 'object') {
-        const periods = value as { current?: { startDate?: string; endDate?: string }; previous?: { startDate?: string; endDate?: string } }
-        return `Current: ${periods.current?.startDate ?? 'Unknown'} – ${periods.current?.endDate ?? 'Unknown'}; previous: ${periods.previous ? `${periods.previous.startDate ?? 'Unknown'} – ${periods.previous.endDate ?? 'Unknown'}` : 'Unavailable'}`
-      }
-      return typeof value === 'object' ? JSON.stringify(value) : String(value ?? 'Not available')
-    }
-    return <li key={`${title}-${index}`} className="min-w-0 break-words text-xs text-muted-foreground"><div>{url ? <a className="inline-flex max-w-full items-center gap-1 break-all text-purple-300 underline" href={url} target="_blank" rel="noreferrer">{title}<ExternalLink className="h-3 w-3 shrink-0" /></a> : <span>{title}</span>}{typeof item.publishedAt === 'string' && ` · ${dateLabel(item.publishedAt)}`}</div>
-      {item.type === 'google_search_console_cached' && <dl className="mt-1 grid grid-cols-1 gap-x-3 gap-y-1 sm:grid-cols-2">{gscFields.filter(key => item[key] !== undefined).map(key => <div key={key} className="min-w-0 break-words"><dt className="inline font-medium text-foreground/80">{key}: </dt><dd className="inline">{evidenceValue(key)}</dd></div>)}</dl>}
-      {(item.type === 'google_trends_rss' || item.type === 'google_trends_rss_comparison') && <p className="mt-1">Traffic: {String(item.trafficText || 'Not reported')} · parsed lower bound: {String(item.trafficLowerBound ?? 'Not available')}{item.fetchedAt ? ` · synced ${dateLabel(String(item.fetchedAt))}` : ''}</p>}
-      {news.length > 0 && <ul className="mt-1 list-disc space-y-0.5 pl-4">{news.map((raw, newsIndex) => { const n = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}; const newsUrl = safeSourceUrl(n.url); return <li key={newsIndex} className="break-words">{newsUrl ? <a className="text-purple-300 underline" target="_blank" rel="noreferrer" href={newsUrl}>{String(n.title || n.source || `News ${newsIndex + 1}`)}<ExternalLink className="ml-1 inline h-3 w-3" /></a> : String(n.title || n.source || `News ${newsIndex + 1}`)}{n.source ? ` · ${String(n.source)}` : null}</li> })}</ul>}
-      <details className="mt-1"><summary className="cursor-pointer text-purple-300">Evidence details</summary><pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-background p-2">{JSON.stringify(item, null, 2)}</pre></details>
-    </li>
-  }).filter(Boolean)
+  const feedAt = radar?.source.lastGood?.fetchedAt
 
-  return <div className="min-w-0 space-y-5 overflow-y-auto p-4 pb-8 md:p-6">
-    <header className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-      <div className="min-w-0"><p className="text-xs font-semibold uppercase tracking-wider text-purple-300">Research · evidence-led</p><h1 className="mt-1 text-2xl font-bold text-foreground">Trend Radar</h1><p className="mt-1 max-w-2xl text-sm text-muted-foreground">Public trend observations and editorial ideas are labeled separately. No automatic refresh or publishing.</p></div>
-      <Button onClick={refresh} disabled={!workspaceId || refreshing || cooldownActive} aria-label="Refresh trend feed" className="shrink-0"><RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />{refreshing ? 'Refreshing…' : cooldownActive ? 'Refresh on cooldown' : 'Refresh feed'}</Button>
-    </header>
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="Discover"
+        title={brandName ? <>Radar <span className="text-muted-foreground">·</span> {brandName}</> : 'Radar'}
+        lede="Topics worth writing about, with the evidence behind each one. Measured, observed and imagined are labelled separately — nothing refreshes or publishes on its own."
+        meta={brandKey ? <>
+          <button onClick={() => setSourcesOpen(true)} className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"><Database className="h-3.5 w-3.5" />Feed {feedAt ? ago(feedAt) : 'never fetched'}{radar?.source.latest?.status === 'unavailable' && <span className="text-oxide">· last refresh failed</span>}</button>
+          <button onClick={() => setTuneOpen(true)} className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"><SlidersHorizontal className="h-3.5 w-3.5" />Watching {selectedWatch?.topics.length ?? 0} topic{selectedWatch?.topics.length === 1 ? '' : 's'}</button>
+        </> : undefined}
+        actions={brandKey ? <div className="flex flex-col items-start gap-1 md:items-end">
+          <Button variant="outline" onClick={refresh} disabled={!workspaceId || refreshing || cooldownActive} aria-label="Refresh trend feed"><RefreshCw className={cn(refreshing && 'animate-spin')} />{refreshing ? 'Refreshing…' : cooldownActive ? `Cooldown · ${cooldownLeft}m` : 'Refresh feed'}</Button>
+          <EffectTag effect="network">Reads the public Trending Now feed</EffectTag>
+        </div> : undefined}
+      />
 
-    {error && <div role="alert" className="break-words rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</div>}
-    {notice && <div role="status" className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">{notice}</div>}
+      {error && <Notice tone="error">{error}</Notice>}
+      {notice && <Notice tone="ok">{notice}</Notice>}
 
-    <Card><CardContent className="grid min-w-0 gap-4 p-4 md:grid-cols-2">
-      <div className="min-w-0 space-y-2"><Label htmlFor="trend-workspace">Workspace</Label><Select value={workspaceId} onValueChange={changeWorkspace}><SelectTrigger id="trend-workspace" aria-label="Select workspace"><SelectValue placeholder="Select workspace" /></SelectTrigger><SelectContent>{workspaces.map(w => <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>)}</SelectContent></Select></div>
-      <div className="min-w-0 space-y-2"><Label htmlFor="trend-brand">Brand</Label><Select value={brandKey} onValueChange={changeBrand} disabled={!scopedBrands.length}><SelectTrigger id="trend-brand" aria-label="Select brand"><SelectValue placeholder="Select brand" /></SelectTrigger><SelectContent>{scopedBrands.map(b => <SelectItem key={b.key} value={b.key}>{b.name}</SelectItem>)}</SelectContent></Select></div>
-    </CardContent></Card>
+      {registryLoaded && !workspaces.length && !error && <Void reason="No workspaces are available in the registry." />}
+      {workspaceId && !brandKey && registryLoaded && (
+        <section className="panel space-y-4 p-5">
+          <div><p className="font-medium">Radar works one brand at a time.</p><p className="mt-1 text-sm text-muted-foreground">Topics, exclusions and evidence are kept per brand so one brand's signals never leak into another's.</p></div>
+          {scopedBrands.length ? <div className="flex flex-wrap gap-2">{scopedBrands.map((b) => <Button key={b.key} variant="outline" size="sm" onClick={() => setContext({ workspaceId, brandKey: b.key })}>{b.name}</Button>)}</div> : <Void reason="No registered brands are available for this workspace. Add a website with a brand in Site & Search." />}
+        </section>
+      )}
 
-    {!workspaces.length && !loading && !error && <Card><CardContent className="p-5 text-sm text-muted-foreground">No workspaces are available in the registry.</CardContent></Card>}
-    {!scopedBrands.length && workspaceId && !error && <Card><CardContent className="p-5 text-sm text-muted-foreground">No registered brands are available for this workspace.</CardContent></Card>}
+      {brandKey && (
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="scrollbar-none -mx-4 flex flex-1 gap-1.5 overflow-x-auto px-4 sm:mx-0 sm:px-0" role="tablist" aria-label="Filter by evidence">
+              {(['all', ...classificationKeys] as const).map((key) => {
+                const on = classification === key
+                const n = key === 'all' ? radar?.candidates.length ?? 0 : counts[key]
+                return (
+                  <button key={key} role="tab" aria-selected={on} onClick={() => setClassification(key)}
+                    className={cn('inline-flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition-colors', on ? 'border-foreground/40 bg-secondary text-foreground' : 'border-border text-muted-foreground hover:text-foreground')}>
+                    {key !== 'all' && <Mark grade={grades[key]} />}{key === 'all' ? 'All' : shortLabels[key]}<span className="font-data text-[11px] opacity-70">{n}</span>
+                  </button>
+                )
+              })}
+            </div>
+            <div className="flex w-full gap-2 sm:w-auto">
+              <div className="min-w-0 flex-1 sm:w-56"><Input aria-label="Search topics" placeholder="Search topics…" value={query} onChange={(e) => setQuery(e.target.value)} leftIcon={<Search />} /></div>
+              <select aria-label="Filter recommendations by format" value={format} onChange={(e) => setFormat(e.target.value as typeof format)} className="h-9 rounded-md border border-border bg-background px-2 text-sm">
+                <option value="all">All formats</option><option value="article">Article</option><option value="reel">Reel</option><option value="social_post">Social post</option>
+              </select>
+            </div>
+          </div>
 
-    {brandKey && <Card><CardHeader className="pb-3"><CardTitle className="text-base">Brand watchlist</CardTitle><p className="text-sm text-muted-foreground">Topics and excluded phrases are workspace-scoped. One phrase per line, maximum 30 in each list.</p></CardHeader><CardContent className="grid min-w-0 gap-4 lg:grid-cols-2">
-      <div className="min-w-0 space-y-2"><Label htmlFor="watch-topics">Topics to watch</Label><Textarea id="watch-topics" aria-label="Topics to watch" rows={6} maxLength={3100} value={topicsText} onChange={e => setTopicsText(e.target.value)} placeholder={'marmer\narsitektur'} /></div>
-      <div className="min-w-0 space-y-2"><Label htmlFor="watch-excludes">Exclude phrases</Label><Textarea id="watch-excludes" aria-label="Exclude phrases" rows={6} maxLength={3100} value={excludeText} onChange={e => setExcludeText(e.target.value)} placeholder={'jobs\nlowongan'} /></div>
-      <fieldset className="grid min-w-0 gap-3 rounded-md border border-border p-3 sm:grid-cols-3 lg:col-span-2"><legend className="px-1 text-sm font-medium">GSC discovery thresholds</legend>{([['minImpressions', 'Minimum current impressions'], ['minIncrease', 'Minimum impression increase'], ['minGrowthPct', 'Minimum growth percent']] as const).map(([key, label]) => <div key={key} className="min-w-0 space-y-1"><Label htmlFor={`discovery-${key}`}>{label}</Label><input id={`discovery-${key}`} aria-label={label} type="number" min="1" max="1000" step="1" value={discovery[key]} onChange={e => setDiscovery(current => ({ ...current, [key]: e.target.value === '' ? 0 : Number(e.target.value) }))} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" /></div>)}<p className="text-xs text-muted-foreground sm:col-span-3">Transparent operator filters, not statistical significance or a trend score. Legacy watchlists use defaults: 3 impressions, 3 increase, 25% growth.</p></fieldset>
-      <div className="flex flex-wrap items-center gap-3 lg:col-span-2"><Button variant="outline" onClick={saveWatchlist} disabled={saving || !brandKey} aria-label="Save watchlist and discovery thresholds"><Save className="mr-2 h-4 w-4" />{saving ? 'Saving…' : 'Save watchlist'}</Button><span className="text-xs text-muted-foreground">Last saved: {dateLabel(selectedWatch?.updatedAt)}</span></div>
-    </CardContent></Card>}
+          {radar && !hasRssEvidence && <p className="text-xs text-muted-foreground">No relevant Trending Now items for this watchlist in the saved feed. Search Console opportunities and ideas below are separate classifications, not trends.</p>}
 
-    {brandKey && <Card><CardHeader className="pb-3"><CardTitle className="text-base">Feed status & evidence</CardTitle></CardHeader><CardContent className="grid min-w-0 gap-4 text-sm md:grid-cols-2">
-      <div className="flex flex-wrap items-center gap-3 md:col-span-2"><Button variant="outline" onClick={captureHistory} disabled={capturing || loading || !workspaceId || !brandKey} aria-label="Capture cached GSC history without syncing Google">{capturing ? 'Capturing…' : 'Capture cached GSC history'}</Button><span className="text-xs text-muted-foreground">History: {radar?.historyStatus ? `${radar.historyStatus.count} snapshot(s) · last captured ${dateLabel(radar.historyStatus.lastCapturedAt)} · ${radar.historyStatus.note}` : loading ? 'Loading…' : 'No history status available'}</span></div>
-      <div className="min-w-0 space-y-2"><p><span className="text-muted-foreground">Latest snapshot:</span> {radar?.source.latest ? `${dateLabel(radar.source.latest.fetchedAt)} · ${radar.source.latest.status}` : loading ? 'Loading…' : 'No saved snapshot'}</p>{radar?.source.latest?.httpStatus !== null && radar?.source.latest?.httpStatus !== undefined && <p><span className="text-muted-foreground">HTTP:</span> {radar.source.latest.httpStatus}</p>}{radar?.source.latest?.error && <p className="break-words text-red-300">Latest refresh unavailable: {radar.source.latest.error}</p>}<p><span className="text-muted-foreground">Last good:</span> {radar?.source.lastGood ? dateLabel(radar.source.lastGood.fetchedAt) : 'No successful snapshot yet'}</p><p><span className="text-muted-foreground">Refresh cooldown:</span> {radar?.source.cooldownUntil ? `${dateLabel(radar.source.cooldownUntil)}${cooldownActive ? ' · active' : ''}` : 'None'}</p><p><span className="text-muted-foreground">GSC:</span> {radar?.gscStatus || (loading ? 'Loading…' : 'Status unavailable')}</p></div>
-      <div className="min-w-0"><p className="mb-1 text-muted-foreground">Source</p>{radar?.source.latest?.sourceUrl && safeSourceUrl(radar.source.latest.sourceUrl) ? <a className="inline-flex max-w-full items-center gap-1 break-all text-purple-300 underline" target="_blank" rel="noreferrer" href={safeSourceUrl(radar.source.latest.sourceUrl)!}>{radar.source.latest.sourceUrl}<ExternalLink className="h-3 w-3 shrink-0" /></a> : <p className="text-muted-foreground">No source URL available.</p>}<ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-muted-foreground">{(radar?.limitations || []).map((limitation, i) => <li className="break-words" key={i}>{limitation}</li>)}</ul></div>
-    </CardContent></Card>}
+          {loading ? <div className="grid gap-3 lg:grid-cols-[22rem_1fr]">{[0, 1].map((i) => <div key={i} className="h-72 animate-pulse rounded-lg bg-secondary/40" />)}</div>
+            : radar && visible.length === 0 ? (
+              <div className="panel-quiet px-5 py-8 text-sm text-muted-foreground">
+                {radar.candidates.length ? 'No topics match these filters.' : <>No candidates for this watchlist and the saved evidence. This is <em>not</em> evidence that the niche is quiet — it only means none of the watched topics appeared in saved sources. <button className="text-foreground underline" onClick={() => setTuneOpen(true)}>Adjust topics</button>.</>}
+              </div>
+            ) : radar && selected && (
+              <div className="grid gap-6 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
+                <ol className="panel h-fit divide-y divide-border overflow-hidden lg:sticky lg:top-6" aria-label="Topics">
+                  {visible.map((c) => {
+                    const on = c.id === selected.id
+                    const recCount = radar.recommendations.filter((r) => r.candidateId === c.id).length
+                    return (
+                      <li key={c.id}>
+                        <button onClick={() => select(c.id)} aria-current={on ? 'true' : undefined}
+                          className={cn('relative flex w-full items-start gap-3 px-4 py-3.5 text-left transition-colors', on ? 'bg-secondary/70' : 'hover:bg-secondary/40')}>
+                          {on && <span className="absolute inset-y-0 left-0 w-[3px] bg-patina" aria-hidden />}
+                          <Mark grade={grades[c.classification]} className="mt-1" />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate font-medium">{c.topic}</span>
+                            <span className="mt-0.5 block text-[11px] text-muted-foreground">{shortLabels[c.classification]}{c.momentum.measured && c.momentum.delta != null ? ` · ${c.momentum.delta >= 0 ? '+' : ''}${c.momentum.delta.toLocaleString()}` : ''}{recCount ? ` · ${recCount} brief${recCount > 1 ? 's' : ''}` : ''}</span>
+                          </span>
+                          <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground lg:hidden" />
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ol>
 
-    {brandKey && <section className="min-w-0 space-y-3"><div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><h2 className="text-lg font-semibold">Evidence & classifications</h2><p className="text-sm text-muted-foreground">Momentum appears only when the source reports comparable measured values.</p><p className="mt-1 text-xs text-muted-foreground">Candidates by classification: {classificationKeys.map(key => `${classificationLabels[key]} ${classificationCounts[key]}`).join(' · ')}</p></div><div className="grid w-full min-w-0 gap-3 sm:w-auto sm:grid-cols-2"><div className="min-w-0"><Label htmlFor="trend-classification" className="mb-1 block">Classification</Label><Select value={classification} onValueChange={v => setClassification(v as typeof classification)}><SelectTrigger id="trend-classification" aria-label="Filter by classification"><SelectValue /></SelectTrigger><SelectContent>{classifications.map(key => <SelectItem key={key} value={key}>{key === 'all' ? 'All classifications' : classificationLabels[key]}</SelectItem>)}</SelectContent></Select></div><div className="w-full min-w-0 sm:w-52"><Label htmlFor="trend-format" className="mb-1 block">Recommendation format</Label><Select value={format} onValueChange={v => setFormat(v as typeof format)}><SelectTrigger id="trend-format" aria-label="Filter recommendations by format"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All formats</SelectItem><SelectItem value="article">Article</SelectItem><SelectItem value="reel">Reel</SelectItem><SelectItem value="social_post">Social post</SelectItem></SelectContent></Select></div></div></div>
-      {!hasRssEvidence && radar && <Card><CardContent className="p-4 text-sm text-muted-foreground">No relevant RSS trend items for this watchlist in the saved feed. GSC opportunities and editorial ideas below are separate classifications, not RSS trends.</CardContent></Card>}
-      {loading && <Card><CardContent className="p-5 text-sm text-muted-foreground">Loading current evidence…</CardContent></Card>}
-      {!loading && radar && visibleCandidates.length === 0 && <Card><CardContent className="p-5 text-sm text-muted-foreground">{radar.candidates.length ? 'No candidates match this classification filter.' : 'No candidates for this watchlist and saved evidence. This is not presented as evidence of a rising niche.'}</CardContent></Card>}
-      {!loading && radar?.candidates.filter(candidate => classification === 'all' || candidate.classification === classification).map(candidate => <Card key={candidate.id} className="min-w-0"><CardContent className="grid min-w-0 gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"><div className="min-w-0 space-y-3"><div className="flex min-w-0 flex-wrap items-center gap-2"><h3 className="break-words text-base font-semibold">{candidate.topic}</h3><Badge variant="outline" className={classificationStyles[candidate.classification]}>{classificationLabels[candidate.classification]}</Badge></div><p className="break-words text-sm text-muted-foreground">{candidate.reason}</p>{candidate.signal && <div className="rounded-md border border-border bg-background/50 p-3 text-sm"><p className="font-medium">Observed source: {candidate.signal.source.toUpperCase()} · {candidate.signal.status.replace(/_/g, ' ')} · {candidate.signal.confidence.replace(/_/g, ' ')}</p><p className="mt-1 text-xs text-muted-foreground">{candidate.signal.basis}{!candidate.signal.comparisonValid && candidate.signal.invalidReason ? ` · Comparison unavailable: ${candidate.signal.invalidReason}` : ''}</p>{candidate.signal.source === 'gsc' && <><p className="mt-2 text-xs">{candidate.signal.periods ? `Current period ${candidate.signal.periods.current.startDate}–${candidate.signal.periods.current.endDate}${candidate.signal.periods.previous ? ` vs ${candidate.signal.periods.previous.startDate}–${candidate.signal.periods.previous.endDate}` : ' · no previous period'}` : 'GSC reporting periods unavailable'}</p><div className="mt-2 grid grid-cols-2 gap-2 text-xs"><p>Impressions: {candidate.signal.current?.impressions ?? '—'} {candidate.signal.previous ? `← ${candidate.signal.previous.impressions}` : ''} (Δ {candidate.signal.deltas.impressions ?? '—'})</p><p>Clicks: {candidate.signal.current?.clicks ?? '—'} {candidate.signal.previous ? `← ${candidate.signal.previous.clicks}` : ''} (Δ {candidate.signal.deltas.clicks ?? '—'})</p><p>CTR: {candidate.signal.current?.ctr == null ? 'Unavailable' : `${(candidate.signal.current.ctr * 100).toFixed(2)}%`} {candidate.signal.previous ? `← ${candidate.signal.previous.ctr == null ? 'Unavailable' : `${(candidate.signal.previous.ctr * 100).toFixed(2)}%`}` : ''} (Δ {candidate.signal.deltas.ctrPp === null ? 'Unavailable' : `${candidate.signal.deltas.ctrPp.toFixed(2)} pp`})</p><p>Position: {candidate.signal.current?.position.toFixed(2) ?? '—'} {candidate.signal.previous ? `← ${candidate.signal.previous.position.toFixed(2)}` : ''} (improvement {candidate.signal.deltas.positionImprovement?.toFixed(2) ?? '—'})</p><p>Impression growth: {candidate.signal.growthPct === null ? '— (baseline zero or unavailable)' : `${candidate.signal.growthPct.toFixed(1)}%`}</p><p>History comparisons: {candidate.signal.historyComparisons}</p></div></>}{candidate.signal.history.length > 0 && <details className="mt-2"><summary aria-label={`Show GSC history timeline for ${candidate.topic}`} className="cursor-pointer text-xs text-purple-300">History timeline ({candidate.signal.history.length} observations)</summary><ol className="mt-2 space-y-2">{candidate.signal.history.map(point => <li key={`${point.snapshotId}-${point.startDate}`} className="break-words border-l border-border pl-2 text-xs"><p>{point.startDate}–{point.endDate} · {dateLabel(point.capturedAt)} · synced {dateLabel(point.syncedAt)}</p><p>{point.impressions} impressions · {point.clicks} clicks · CTR {point.ctr == null ? 'Unavailable' : `${(point.ctr * 100).toFixed(2)}%`} · position {point.position.toFixed(2)}</p></li>)}</ol></details>}</div>}<p className="text-xs text-muted-foreground">Matched: {candidate.relevance.matchedTerms.join(', ') || 'none'} · Field: {candidate.relevance.field}</p>{candidate.momentum.measured ? <div className="rounded-md border border-emerald-500/20 bg-emerald-500/5 p-3 text-sm"><div className="flex items-center gap-2 font-medium text-emerald-300"><TrendingUp className="h-4 w-4" />{candidate.signal?.source === 'gsc' ? 'Measured GSC impression change' : 'Measured bucket movement' }</div><p className="mt-1">{candidate.momentum.previous ?? '—'} → {candidate.momentum.current ?? '—'} (delta {candidate.momentum.delta ?? '—'})</p><p className="text-xs text-muted-foreground">{dateLabel(candidate.momentum.previousAt)} → {dateLabel(candidate.momentum.currentAt)}</p><p className="mt-1 text-xs text-muted-foreground">{candidate.momentum.caveat || 'Approximate bucket movement, not exact search growth.'}</p></div> : <p className="text-xs text-muted-foreground">No measured momentum. First seen or editorial relevance alone is not growth evidence.</p>}</div><div className="min-w-0"><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Candidate evidence</p><ul className="space-y-1">{evidenceLinks(candidate.evidence)}</ul></div></CardContent></Card>)}
-      {!loading && radar && visibleRecommendations.length === 0 && <Card><CardContent className="p-5 text-sm text-muted-foreground">{radar.recommendations.length ? 'No recommendations match the selected format/classification filters.' : 'No briefs are available yet. An editorial idea is not an external trend signal.'}</CardContent></Card>}
-      {!loading && visibleRecommendations.map(recommendation => <Card key={recommendation.id} className="min-w-0"><CardContent className="space-y-3 p-4"><div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><div className="mb-2 flex flex-wrap gap-2"><Badge variant="outline" className={classificationStyles[recommendation.classification]}>{classificationLabels[recommendation.classification]}</Badge><Badge variant="secondary">{recommendation.format === 'social_post' ? 'Social post' : recommendation.format}</Badge></div><h3 className="break-words font-semibold">{recommendation.title}</h3><p className="mt-1 break-words text-sm text-muted-foreground">{recommendation.topic} · {recommendation.reason}</p></div><Button className="shrink-0" onClick={() => createDraft(recommendation)} disabled={Boolean(draftingId)} aria-label={`Create draft: ${recommendation.title}`}><Sparkles className="mr-2 h-4 w-4" />{draftingId === recommendation.id ? 'Creating…' : 'Create draft'}</Button></div><details className="min-w-0"><summary className="cursor-pointer text-sm text-purple-300">Preview brief</summary><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-background p-3 font-sans text-sm">{recommendation.content}</pre><p className="mt-2 text-xs text-muted-foreground">Brief preview only; this does not create or publish an article.</p></details><ul className="space-y-1">{evidenceLinks(recommendation.evidence)}</ul></CardContent></Card>)}
-    </section>}
-    {draftingId && <p className="text-xs text-muted-foreground">Creating the idempotent draft…</p>}
-    <p className="text-xs text-muted-foreground">Drafts remain drafts. Accounts, media, scheduling, queueing and publishing are not selected or triggered. <Link className="text-purple-300 underline" to="/compose">Open Compose</Link></p>
-  </div>
+                <div className={cn('min-w-0', mobileDetail ? 'fixed inset-0 z-[60] overflow-y-auto bg-background px-4 pb-24 pt-4 lg:static lg:z-auto lg:overflow-visible lg:bg-transparent lg:p-0' : 'hidden lg:block')}>
+                  <button onClick={() => setMobileDetail(false)} className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground lg:hidden"><ArrowLeft className="h-4 w-4" />All topics</button>
+                  <TopicDetail candidate={selected} recommendations={selectedRecs} draftingId={draftingId} onCreate={createDraft} />
+                </div>
+              </div>
+            )}
+        </>
+      )}
+
+      <Sheet open={tuneOpen} onClose={() => setTuneOpen(false)} title="Tune Radar" subtitle={`${brandName} · workspace-scoped · one phrase per line, max 30 each`}
+        footer={<div className="flex flex-wrap items-center justify-between gap-3"><span className="text-xs text-muted-foreground">Last saved {dateLabel(selectedWatch?.updatedAt)}</span><div className="flex items-center gap-3"><EffectTag effect="local" /><Button onClick={saveWatchlist} disabled={saving || !brandKey} aria-label="Save watchlist and discovery thresholds"><Save />{saving ? 'Saving…' : 'Save watchlist'}</Button></div></div>}>
+        <div className="space-y-5">
+          <div className="space-y-2"><Label htmlFor="watch-topics">Topics to watch</Label><Textarea id="watch-topics" aria-label="Topics to watch" rows={7} maxLength={3100} value={topicsText} onChange={(e) => setTopicsText(e.target.value)} placeholder={'pour over\ncold brew'} /></div>
+          <div className="space-y-2"><Label htmlFor="watch-excludes">Exclude phrases</Label><Textarea id="watch-excludes" aria-label="Exclude phrases" rows={4} maxLength={3100} value={excludeText} onChange={(e) => setExcludeText(e.target.value)} placeholder={'jobs\nvacancy'} /></div>
+          <fieldset className="space-y-3 rounded-md border border-border p-4">
+            <legend className="px-1 text-sm font-medium">Search Console discovery thresholds</legend>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {([['minImpressions', 'Min. current impressions'], ['minIncrease', 'Min. impression increase'], ['minGrowthPct', 'Min. growth %']] as const).map(([key, label]) => (
+                <div key={key} className="space-y-1"><Label htmlFor={`discovery-${key}`} className="text-xs">{label}</Label><input id={`discovery-${key}`} aria-label={label} type="number" min="1" max="1000" step="1" value={discovery[key]} onChange={(e) => setDiscovery((current) => ({ ...current, [key]: e.target.value === '' ? 0 : Number(e.target.value) }))} className="font-data h-9 w-full rounded-md border border-input bg-background px-3 text-sm" /></div>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">Transparent operator filters — not statistical significance or a trend score. Legacy watchlists use defaults: 3 impressions, 3 increase, 25% growth.</p>
+          </fieldset>
+        </div>
+      </Sheet>
+
+      <Sheet open={sourcesOpen} onClose={() => setSourcesOpen(false)} title="Sources & history" subtitle="What Radar read, when, and its limits">
+        <div className="space-y-6 text-sm">
+          <section className="space-y-2">
+            <SectionTitle>Trending Now feed</SectionTitle>
+            <dl className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1.5 text-[13px]">
+              <dt className="text-muted-foreground">Latest snapshot</dt><dd>{radar?.source.latest ? `${dateLabel(radar.source.latest.fetchedAt)} · ${radar.source.latest.status}` : loading ? 'Loading…' : 'No saved snapshot'}</dd>
+              {radar?.source.latest?.httpStatus != null && <><dt className="text-muted-foreground">HTTP</dt><dd className="font-data">{radar.source.latest.httpStatus}</dd></>}
+              <dt className="text-muted-foreground">Last good</dt><dd>{radar?.source.lastGood ? dateLabel(radar.source.lastGood.fetchedAt) : 'No successful snapshot yet'}</dd>
+              <dt className="text-muted-foreground">Cooldown</dt><dd>{radar?.source.cooldownUntil ? `${dateLabel(radar.source.cooldownUntil)}${cooldownActive ? ' · active' : ''}` : 'None'}</dd>
+              <dt className="text-muted-foreground">Source</dt><dd className="min-w-0">{radar?.source.latest?.sourceUrl && safeSourceUrl(radar.source.latest.sourceUrl) ? <a className="inline-flex max-w-full items-center gap-1 break-all underline" target="_blank" rel="noreferrer" href={safeSourceUrl(radar.source.latest.sourceUrl)!}>{radar.source.latest.sourceUrl}<ExternalLink className="h-3 w-3 shrink-0" /></a> : 'No source URL available.'}</dd>
+            </dl>
+            {radar?.source.latest?.error && <Notice tone="error">Latest refresh unavailable: {radar.source.latest.error}</Notice>}
+          </section>
+          <section className="space-y-2">
+            <SectionTitle>Search Console</SectionTitle>
+            <p className="text-[13px]">{radar?.gscStatus || (loading ? 'Loading…' : 'Status unavailable')}</p>
+            <div className="flex flex-wrap items-center gap-3 pt-1">
+              <Button variant="outline" size="sm" onClick={captureHistory} disabled={capturing || loading || !workspaceId || !brandKey} aria-label="Capture cached GSC history without syncing Google">{capturing ? 'Capturing…' : 'Capture cached history'}</Button>
+              <EffectTag effect="local">Copies cached data · no Google request</EffectTag>
+            </div>
+            <p className="text-xs text-muted-foreground">History: {radar?.historyStatus ? `${radar.historyStatus.count} snapshot(s) · last captured ${dateLabel(radar.historyStatus.lastCapturedAt)} · ${radar.historyStatus.note}` : loading ? 'Loading…' : 'No history status available'}</p>
+          </section>
+          <section className="space-y-2">
+            <SectionTitle>Limitations</SectionTitle>
+            <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">{(radar?.limitations || []).map((l, i) => <li key={i} className="break-words">{l}</li>)}</ul>
+          </section>
+        </div>
+      </Sheet>
+    </div>
+  )
+}
+
+function TopicDetail({ candidate, recommendations, draftingId, onCreate }: { candidate: TrendCandidate; recommendations: TrendRecommendation[]; draftingId: string; onCreate: (r: TrendRecommendation) => void }) {
+  const signal = candidate.signal
+  return (
+    <article className="space-y-8">
+      <header className="space-y-3">
+        <GradeTag grade={grades[candidate.classification]}>{classificationLabels[candidate.classification]}</GradeTag>
+        <h2 className="font-display text-2xl font-semibold leading-tight md:text-3xl">{candidate.topic}</h2>
+        <p className="max-w-2xl text-sm text-muted-foreground">{candidate.reason}</p>
+        <p className="text-[11px] text-muted-foreground">Matched {candidate.relevance.matchedTerms.join(', ') || 'none'} · in {candidate.relevance.field}</p>
+      </header>
+
+      <section className="space-y-3" aria-label="Why this might matter">
+        <SectionTitle>Why it might matter</SectionTitle>
+        {candidate.momentum.measured ? (
+          <div className="rounded-md border border-patina/25 bg-patina/[0.05] px-4 py-3">
+            <p className="flex items-center gap-2 text-sm font-medium text-patina"><TrendingUp className="h-4 w-4" />{signal?.source === 'gsc' ? 'Measured Search Console impression change' : 'Measured bucket movement'}</p>
+            <p className="font-data mt-1.5 text-lg">{candidate.momentum.previous?.toLocaleString() ?? '—'} → {candidate.momentum.current?.toLocaleString() ?? '—'} <span className="text-sm text-muted-foreground">({candidate.momentum.delta != null && candidate.momentum.delta >= 0 ? '+' : ''}{candidate.momentum.delta?.toLocaleString() ?? '—'})</span></p>
+            <p className="mt-1 text-[11px] text-muted-foreground">{dateLabel(candidate.momentum.previousAt)} → {dateLabel(candidate.momentum.currentAt)}</p>
+            <p className="mt-1.5 text-xs text-muted-foreground">{candidate.momentum.caveat || 'Approximate bucket movement, not exact search growth.'}</p>
+          </div>
+        ) : <Void reason="No measured momentum. A first sighting or editorial relevance is not growth evidence." />}
+
+      </section>
+
+      <section className="space-y-3" aria-label="Briefs">
+        <SectionTitle aside={<EffectTag effect="local">Creates a draft · never posts</EffectTag>}>Turn into content</SectionTitle>
+        {recommendations.length === 0 ? <Void reason="No briefs for this topic with the current format filter." /> : (
+          <ul className="space-y-3">
+            {recommendations.map((r) => (
+              <li key={r.id} className="panel overflow-hidden">
+                <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-[11px] uppercase tracking-[0.1em] text-muted-foreground">{formatLabels[r.format]}{r.format === 'article' ? ' · opens in Studio' : ' · opens in Compose'}</p>
+                    <p className="mt-1 font-medium">{r.title}</p>
+                  </div>
+                  <Button className="shrink-0" onClick={() => onCreate(r)} disabled={Boolean(draftingId)} aria-label={`Create draft: ${r.title}`}><PenLine />{draftingId === r.id ? 'Creating…' : 'Create draft'}</Button>
+                </div>
+                <details className="border-t border-border">
+                  <summary className="cursor-pointer px-4 py-2.5 text-xs text-muted-foreground hover:text-foreground">Preview brief</summary>
+                  <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words px-4 pb-4 font-sans text-sm text-foreground/90">{r.content}</pre>
+                  <p className="px-4 pb-3 text-[11px] text-muted-foreground">Preview only. Creating a draft saves it in RockBase with its evidence attached; nothing is published.</p>
+                </details>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="space-y-3" aria-label="Evidence detail">
+        <SectionTitle>Evidence detail</SectionTitle>
+        {signal && (
+          <div className="space-y-3 rounded-md border border-border p-4">
+            <p className="text-xs"><span className="font-medium text-foreground">Observed source: {signal.source.toUpperCase()}</span><span className="text-muted-foreground"> · {signal.status.replace(/_/g, ' ')} · confidence {signal.confidence.replace(/_/g, ' ')}</span></p>
+            <p className="text-xs text-muted-foreground">{signal.basis}{!signal.comparisonValid && signal.invalidReason ? ` · Comparison unavailable: ${signal.invalidReason}` : ''}</p>
+            {signal.source === 'gsc' && <GscSignal signal={signal} />}
+            {signal.history.length > 0 && (
+              <details>
+                <summary aria-label={`Show GSC history timeline for ${candidate.topic}`} className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">History timeline ({signal.history.length} observation{signal.history.length > 1 ? 's' : ''})</summary>
+                <ol className="mt-2 space-y-2">{signal.history.map((point) => <li key={`${point.snapshotId}-${point.startDate}`} className="break-words border-l border-border pl-3 text-xs"><p>{point.startDate} – {point.endDate} · captured {dateLabel(point.capturedAt)} · synced {dateLabel(point.syncedAt)}</p><p className="font-data text-muted-foreground">{point.impressions} impr · {point.clicks} clicks · CTR {point.ctr == null ? 'n/a' : `${(point.ctr * 100).toFixed(2)}%`} · pos {point.position.toFixed(2)}</p></li>)}</ol>
+              </details>
+            )}
+          </div>
+        )}
+        <EvidenceList evidence={candidate.evidence} />
+      </section>
+    </article>
+  )
 }

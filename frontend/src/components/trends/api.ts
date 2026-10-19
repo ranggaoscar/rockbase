@@ -45,7 +45,8 @@ export interface TrendRadar {
   candidates: TrendCandidate[]; recommendations: TrendRecommendation[]; gscStatus: string; limitations: string[]
   historyStatus?: { count: number; lastCapturedAt: string | null; note: string }
 }
-export interface TrendDraft { id: string; title: string; content: string; workspaceId: string }
+export interface TrendDraft { id: string; title: string; content: string; workspaceId: string; createdAt?: string; updatedAt?: string }
+export interface TrendDraftSummary { id: string; title: string | null; excerpt: string; format: TrendRecommendation['format']; topic: string | null; classification: TrendCandidate['classification'] | null; brandKey: string | null; createdAt: string; updatedAt: string }
 export interface TrendBrandsResponse { workspaces: TrendWorkspace[]; brands: TrendBrand[]; watchlists: BrandWatch[] }
 
 export const trendsApi = {
@@ -59,4 +60,8 @@ export const trendsApi = {
   createDraft: (workspaceId: string, brandKey: string, recommendationId: string) =>
     api.post<{ draft: TrendDraft; composeUrl: string }>('/trends/drafts', { workspace_id: workspaceId, brand_key: brandKey, recommendation_id: recommendationId }),
   draft: (id: string, workspaceId: string) => api.get<{ draft: TrendDraft }>(`/trends/drafts/${encodeURIComponent(id)}`, { params: { workspace_id: workspaceId } }),
+  drafts: (workspaceId: string, signal?: AbortSignal) => api.get<{ drafts: TrendDraftSummary[] }>('/trends/drafts', { params: { workspace_id: workspaceId }, signal }),
+  /** Saves the editable body only; the server keeps the provenance block intact. */
+  updateDraft: (id: string, workspaceId: string, body: { title?: string; body: string }) =>
+    api.patch<{ draft: TrendDraft }>(`/trends/drafts/${encodeURIComponent(id)}`, { workspace_id: workspaceId, ...body }),
 }

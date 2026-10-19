@@ -1,7 +1,9 @@
+import { Link } from 'react-router-dom'
+import { EffectTag } from '@/components/growth/grammar'
 import { useState } from 'react'
 import {
   Sparkles, Instagram, Music2, RefreshCw, Copy, Check,
-  Bookmark, BookmarkCheck, Trash2, Hash, Zap, ChevronDown,
+  Bookmark, BookmarkCheck, Trash2, Hash, Zap,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -22,18 +24,9 @@ const TONES = [
   { value: 'promotional',  label: 'Promotional',   desc: 'Offer-focused & urgent', emoji: '🎉' },
 ]
 
-const NICHES = [
-  'Marmer & Granit Indonesia',
-  'Batu Alam Natural',
-  'Interior Design Premium',
-  'Lantai Marmer Impor',
-  'Granit Tiles Indonesia',
-]
-
-const HASHTAG_SETS: Record<string, string[]> = {
-  Instagram: ['#marmer','#granit','#batualam','#marmerindonesia','#granitindonesia','#interiordesign','#homedecor','#rumahminimalis','#desainrumah','#marmerputih','#granitlantai','#batualamnatural','#interiorinspiration','#luxuryhome','#homestyle','#renovasirumah','#arsitektur','#designinterior','#rumahidaman','#homedesign','#marmerimport','#granitpremium','#batumalam','#homesweethome','#interiorjakarta','#furnituredesign','#minimalisthome','#modernhome','#premiumstone','#marmerlokal'],
-  TikTok: ['#marmer','#granit','#batualam','#fyp','#viral','#fypindonesia','#tiktokindo','#rumahminimalis','#homedesign','#interiordesign','#homedecor','#marmerputih','#granitlantai','#batualamnatural','#marmerindonesia','#renovasirumah','#desainrumah','#rumahidaman','#homeinspo','#luxuryhome','#trendingid','#kontenindonesia','#homevibe','#aesthetic','#homestyle','#bangunanrumah','#arsitektur','#materialrumah','#granitpremium','#premiumstone'],
-}
+// Brand-neutral: RockBase is open source, so no operator niche or hashtag set
+// is baked in. Hashtags come only from the AI response — never from a preset.
+const EXAMPLE_TOPICS = ['New seasonal product launch', 'Behind the scenes at the workshop', 'Customer question of the week', 'How-to tip for beginners']
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 function shortId() { return Math.random().toString(36).slice(2, 9) }
@@ -43,7 +36,7 @@ export default function AIWriter() {
   const [topic, setTopic]         = useState('')
   const [platform, setPlatform]   = useState<'Instagram' | 'TikTok'>('Instagram')
   const [tone, setTone]           = useState('casual')
-  const [niche, setNiche]         = useState(NICHES[0])
+  const [niche, setNiche]         = useState('')
   const [batchMode, setBatchMode] = useState(false)
   const [batchCount, setBatchCount] = useState(7)
 
@@ -101,18 +94,18 @@ export default function AIWriter() {
           topic, platform, tone, count: batchCount, niche,
         })
         setCaptions(data.captions || [])
-        setHashtags(data.hashtags || HASHTAG_SETS[platform])
+        setHashtags(data.hashtags || [])
       } else {
         const { data } = await api.post<{ captions: Record<string, string>; hashtags: Record<string, string[]> }>('/ai/generate-captions', {
           topic, platforms: [platform], language: 'Indonesian',
         })
         const cap = data.captions?.[platform]
         setCaptions(cap ? [cap] : [])
-        setHashtags(data.hashtags?.[platform] || HASHTAG_SETS[platform])
+        setHashtags(data.hashtags?.[platform] || [])
       }
       toast.success('Captions generated!')
     } catch {
-      toast.error('Generation failed. Using fallback mode.')
+      toast.error('Generation failed — nothing was created or saved. Check the AI provider configuration.')
     } finally {
       setGenerating(false)
     }
@@ -126,11 +119,12 @@ export default function AIWriter() {
       {/* ── Left: Controls ──────────────────────────────────────────── */}
       <div className="space-y-4">
         <div>
-          <h1 className="text-xl font-bold flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-purple-400" /> AI Writer
+          <p className="eyebrow">Create · Optional AI</p>
+          <h1 className="font-display mt-1.5 text-2xl font-semibold flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-patina" /> Caption assistant
           </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Powered by Gemini · Optimized for Marmer & Granit niche.
+          <p className="text-sm text-muted-foreground mt-1">
+            Sends your topic to the AI provider configured on this install (Google Gemini) only when you press Generate. Requests may cost money. Saved captions stay in this browser and appear in <Link to="/studio" className="underline">Studio</Link>.
           </p>
         </div>
 
@@ -143,7 +137,7 @@ export default function AIWriter() {
             <Textarea
               value={topic}
               onChange={e => setTopic(e.target.value)}
-              placeholder="e.g. Marmer Carrara untuk meja dapur, Granit 60×60 motif kayu, Batu alam untuk dinding eksterior..."
+              placeholder="What is the post about? e.g. a product, a tip, an announcement…"
               rows={3}
               className="resize-none text-sm"
             />
@@ -177,8 +171,10 @@ export default function AIWriter() {
           </CardContent>
         </Card>
 
+        {!batchMode && <p className="px-1 text-xs text-muted-foreground">A single caption uses topic and platform only. Turn on batch mode to set tone and niche — those settings are sent only in batch requests.</p>}
+
         {/* Tone */}
-        <Card>
+        {batchMode && <Card>
           <CardHeader className="pb-2"><CardTitle className="text-sm">Tone</CardTitle></CardHeader>
           <CardContent className="space-y-2">
             {TONES.map(t => (
@@ -201,24 +197,21 @@ export default function AIWriter() {
               </button>
             ))}
           </CardContent>
-        </Card>
+        </Card>}
 
         {/* Niche */}
-        <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm">Niche Preset</CardTitle></CardHeader>
+        {batchMode && <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm">Niche / audience</CardTitle></CardHeader>
           <CardContent>
-            <div className="relative">
-              <select
-                value={niche}
-                onChange={e => setNiche(e.target.value)}
-                className="w-full appearance-none rounded-lg border border-border bg-secondary px-3 py-2 text-sm pr-8 focus:outline-none focus:ring-1 focus:ring-purple-500"
-              >
-                {NICHES.map(n => <option key={n} value={n}>{n}</option>)}
-              </select>
-              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-            </div>
+            <input
+              value={niche}
+              onChange={e => setNiche(e.target.value)}
+              placeholder="e.g. specialty coffee, home ceramics…"
+              aria-label="Niche or audience"
+              className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-purple-500"
+            />
           </CardContent>
-        </Card>
+        </Card>}
 
         {/* Batch mode */}
         <Card>
@@ -270,6 +263,7 @@ export default function AIWriter() {
             : <><Zap className="h-4 w-4" /> {batchMode ? `Generate ${batchCount} Captions` : 'Generate Caption'}</>
           }
         </Button>
+        <div className="flex justify-center"><EffectTag effect="ai" /></div>
       </div>
 
       {/* ── Right: Results ──────────────────────────────────────────── */}
@@ -341,12 +335,7 @@ export default function AIWriter() {
                     <p className="text-sm text-muted-foreground mt-1">Enter a topic and click Generate</p>
                   </div>
                   <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground max-w-xs">
-                    {[
-                      'Marmer Carrara impor',
-                      'Granit anti-slip kamar mandi',
-                      'Batu alam dinding eksterior',
-                      'Promo akhir tahun marmer',
-                    ].map(s => (
+                    {EXAMPLE_TOPICS.map(s => (
                       <button
                         key={s}
                         onClick={() => setTopic(s)}
@@ -380,7 +369,7 @@ export default function AIWriter() {
                 ))}
                 <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground py-4">
                   <RefreshCw className="h-4 w-4 animate-spin text-purple-400" />
-                  Generating with Gemini AI…
+                  Waiting for the AI provider…
                 </div>
               </div>
             )}
