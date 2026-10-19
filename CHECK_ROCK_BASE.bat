@@ -68,11 +68,13 @@ if not exist "%PROJECT_DIR%\frontend\node_modules" (
 
 echo.
 echo Checking Redis on 127.0.0.1:6379...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ok = Test-NetConnection -ComputerName 127.0.0.1 -Port 6379 -InformationLevel Quiet; if ($ok) { exit 0 } else { exit 1 }" >nul 2>nul
+rem Use the same supervisor the launcher uses so this check cannot disagree with
+rem startup: it resolves the binary from disk when PATH is stale and probes PING.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%\scripts\ensure-redis.ps1" -CheckOnly
 if errorlevel 1 (
-  echo [WARN] Redis is not reachable. Queue jobs will not run until Redis is started.
+  echo [WARN] Redis is not running. START_ROCKBASE.bat will start it automatically.
 ) else (
-  echo [OK] Redis is reachable.
+  echo [OK] Redis is reachable and answering PING.
 )
 
 echo.

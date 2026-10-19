@@ -52,6 +52,21 @@ The setup script:
 
 Redis must be reachable at `127.0.0.1:6379` for queued mass posting jobs.
 
+`START_ROCKBASE.bat` handles this automatically through `scripts/ensure-redis.ps1`:
+
+- it resolves `redis-server.exe` from disk, WinGet's package tree and the registry PATH,
+  so a terminal opened before the install still finds the binary
+- it starts Redis on `127.0.0.1:6379` with `protected-mode` on and no network exposure
+- it registers the `RockBaseRedis` logon task so Redis survives a reboot
+- it preserves queue data in `rockbase-data\redis` (RDB + AOF)
+
+You do not need to start Redis by hand. Run the helper directly when debugging:
+
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ensure-redis.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ensure-redis.ps1 -CheckOnly
+```
+
 4. Start ROCK BASE.
 
 ```bat
@@ -115,6 +130,14 @@ If backend is not reachable:
 - make sure `PORT=3010`
 - make sure Redis is running
 - run `cd backend && npm run dev` to see the error directly
+
+If the launcher stops with `Redis is unavailable`:
+
+- run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ensure-redis.ps1 -CheckOnly`
+  to see whether the binary is missing or the server is not running
+- the launcher resolves Redis from disk, never from an inherited PATH, so a stale
+  terminal cannot hide an install any more
+- queue data lives in `rockbase-data\redis`; never delete that folder to "fix" Redis
 
 If posting fails with media errors:
 
