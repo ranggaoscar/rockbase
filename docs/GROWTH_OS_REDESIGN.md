@@ -85,18 +85,29 @@ provenance rejected, empty title rejected, edit preserves provenance, hostile or
 
 ## Persistence — honest status
 
-| Draft source | Stored in | Shown as |
-|---|---|---|
-| Radar briefs | Prisma `Draft` (workspace) | "RockBase" |
-| Studio blank drafts, Caption assistant | this browser's localStorage | "This browser" (ochre), with export |
-| Legacy Content Planner seeds | localStorage | read-only, link to Compose |
+| Draft source | Stored in | Id | Modes | Shown as |
+|---|---|---|---|---|
+| Radar briefs | Prisma `Draft` (workspace) via `/api/trends/drafts` | `trend-<sha256>` | Local only | "RockBase" + evidence |
+| Studio blank drafts ("New draft") | Prisma `Draft` (workspace) via `/api/studio/drafts` | `studio-<32 hex>` | Local + Server | "RockBase" |
+| Studio notes written before the server store | this browser's localStorage (`rockbase.studio.drafts`) | `note-…` | any | "This browser" (ochre) + one-time **Move to RockBase** |
+| Caption assistant (`sc_drafts`) | this browser's localStorage | — | any | "This browser"; "Copy into RockBase as an editable draft" creates a Studio draft |
+| Legacy Content Planner seeds | localStorage | — | any | read-only, link to Compose |
 
-**Not yet unified.** A server-side store for blank drafts is the next API step.
+**Studio draft store** (`backend/src/routes/studioDraftRoutes.ts`, wired in `services/StudioRuntime.ts`):
+
+- `GET /api/studio/drafts?workspace_id=` (summaries), `POST /api/studio/drafts`, `GET|PATCH /api/studio/drafts/:id`. Same `Draft` table, no new database or migration.
+- Each draft carries title, body, format (`article | social_post | reel`), `brandKey` (validated against the workspace brand registry the UI uses) and a **server-authored** `source` (`blank`, `caption_copy`, `browser_import` with the browser id/created time). The metadata sits behind the same provenance separator as Radar briefs and is re-attached on every PATCH; a body containing the separator is rejected (422).
+- Local Mode: loopback local owner + host/origin gate (as Trends). Server Mode: WorkspaceUser membership decides the workspace (Admin is not a bypass; foreign workspaces answer 404), writes need Admin/Operator.
+- Moving browser notes is idempotent per workspace + browser id. Originals stay in the browser (hidden from the library, shown as a backup count) until the operator confirms **Remove browser copies**.
+- No delete endpoint yet; no queue, post, Google or AI call.
+
+`studio-draft-routes-test.ts`: **81 assertions pass** — namespace, validation 422, cross-workspace 404, Radar rows invisible to Studio, metadata-preserving edit, idempotent parallel move, local origin 403, Server Mode membership/role gates, import allow-list.
 
 ## Incremental plan
 
 - **Done in shell/UI:** IA, tokens, grammars, Today, Radar, Site & Search, Studio, Results, Publish/Setup hubs, Queue trust, AI Writer neutrality, mobile.
-- **Needs persistence/API next:** a general workspace draft store (POST/PATCH for blank drafts, with a brand key); draft status (draft/in review/ready) with real persistence; a link from a published post or exported article back to its brief so Results can show *related* (not attributed) changes.
+- **Done in API:** workspace Studio draft store for blank drafts (see Persistence).
+- **Needs persistence/API next:** deleting/archiving Studio drafts; draft status (draft/in review/ready) with real persistence; a link from a published post or exported article back to its brief so Results can show *related* (not attributed) changes.
 - **Deliberately deferred:** social reach/engagement analytics (no real source), any growth score, AI auto-publish, multi-user review (Local Mode is single-operator), route-level code-splitting (bundle is 1.18 MB, mainly legacy Campaigns/Compose).
 
 ## Verification

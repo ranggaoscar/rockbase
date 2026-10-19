@@ -9,8 +9,8 @@ import { cn } from '@/lib/utils'
 function Monogram({ name, active }: { name: string; active?: boolean }) {
   const letters = name.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase() || '·'
   return (
-    <span className={cn('flex h-7 w-7 shrink-0 items-center justify-center rounded-md border text-[11px] font-semibold font-display',
-      active ? 'border-patina/40 bg-patina/15 text-patina' : 'border-border bg-secondary text-muted-foreground')}>
+    <span className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] border text-[12px] font-semibold font-display shadow-[inset_0_1px_0_hsl(0_0%_100%/0.1)]',
+      active ? 'border-patina/40 bg-[linear-gradient(145deg,hsl(var(--patina)/0.32),hsl(var(--patina)/0.08))] text-patina' : 'border-border bg-[linear-gradient(145deg,hsl(var(--secondary)),hsl(var(--card)))] text-muted-foreground')}>
       {letters}
     </span>
   )
@@ -27,10 +27,10 @@ export default function ContextSwitcher({ variant = 'rail' }: { variant?: 'rail'
   const shown = registry.status === 'error' ? '?' : registry.status === 'loading' ? '·' : ctx.label
 
   const trigger = variant === 'rail' ? (
-    <button className="group flex w-full items-center gap-2.5 rounded-lg border border-border bg-background/40 px-2.5 py-2 text-left transition-colors hover:border-[hsl(var(--line-strong))] hover:bg-secondary/60" aria-label="Switch brand context">
+    <button className="sheen group flex w-full items-center gap-2.5 rounded-xl border border-border bg-background/40 px-2.5 py-2 text-left transition-colors hover:border-[hsl(var(--line-strong))] hover:bg-secondary/60" aria-label="Switch brand context">
       <Monogram name={shown} active />
       <span className="min-w-0 flex-1">
-        <span className="block text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Working for</span>
+        <span className="block text-[11px] text-muted-foreground">Working for</span>
         <span className="block truncate text-sm font-medium text-foreground">{registry.status === 'error' ? 'Registry offline' : ctx.label}</span>
       </span>
       <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground group-hover:text-foreground" />
@@ -58,7 +58,7 @@ export default function ContextSwitcher({ variant = 'rail' }: { variant?: 'rail'
         {registry.status === 'ready' && registry.workspaces.map((workspace, index) => (
           <div key={workspace.id}>
             {index > 0 && <DropdownMenuSeparator />}
-            <DropdownMenuLabel className="flex items-center gap-1.5 px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            <DropdownMenuLabel className="flex items-center gap-1.5 px-2 pb-1 pt-1.5 text-[11px] font-medium text-muted-foreground">
               <Layers className="h-3 w-3" />{workspace.name}
             </DropdownMenuLabel>
             <DropdownMenuItem className="gap-2.5 py-2" onSelect={() => setContext({ workspaceId: workspace.id, brandKey: '' })}>

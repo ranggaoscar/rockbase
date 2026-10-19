@@ -65,6 +65,7 @@ const router = createBrowserRouter(createRoutesFromElements(
         {/* Create */}
         <Route path="studio" element={guard(<Studio />)} />
         <Route path="studio/d/:id" element={guard(<StudioEditor kind="radar" />)} />
+        <Route path="studio/s/:id" element={guard(<StudioEditor kind="studio" />)} />
         <Route path="studio/n/:id" element={guard(<StudioEditor kind="note" />)} />
         <Route path="studio/c/:id" element={guard(<StudioEditor kind="caption" />)} />
         <Route path="ai-writer" element={guard(<AIWriter />)} />

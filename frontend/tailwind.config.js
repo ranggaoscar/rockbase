@@ -13,6 +13,7 @@ export default {
     extend: {
       fontFamily: {
         sans: ['var(--font-sans)'],
+        display: ['var(--font-display)'],
         mono: ['var(--font-mono)'],
       },
       colors: {
@@ -94,6 +95,11 @@ export default {
           from: { transform: 'translateX(24px)', opacity: '0' },
           to: { transform: 'translateX(0)', opacity: '1' },
         },
+        // Hero reveal: the one orchestrated moment on load.
+        rise: {
+          from: { opacity: '0', transform: 'translateY(12px)', filter: 'blur(4px)' },
+          to: { opacity: '1', transform: 'translateY(0)', filter: 'blur(0)' },
+        },
         pulse: {
           '0%, 100%': { opacity: '1' },
           '50%': { opacity: '0.4' },
@@ -106,6 +112,7 @@ export default {
         'page-in': 'page-in 0.2s ease-out',
         'sheet-up': 'sheet-up 0.24s cubic-bezier(0.2, 0.8, 0.2, 1)',
         'slide-in-right': 'slide-in-right 0.24s cubic-bezier(0.2, 0.8, 0.2, 1)',
+        rise: 'rise 0.7s cubic-bezier(0.16, 1, 0.3, 1) both',
         'pulse-slow': 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
       },
     },
