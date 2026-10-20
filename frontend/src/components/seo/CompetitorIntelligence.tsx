@@ -11,6 +11,7 @@ import { actionableCompetitorFinding, competitorApi, publicEvidenceUrl, type Com
 import { freshness, destination } from '@/lib/workQueue'
 import { isLocalMode } from '@/components/layout/nav'
 import { useAppStore } from '@/store/useAppStore'
+import CompetitorSnapshot, { HistoricalLinkDiff } from '@/components/seo/CompetitorSnapshot'
 
 /** One native work surface under Site & Search (and a focused evidence entry from Radar). */
 export default function CompetitorIntelligence() {
@@ -19,15 +20,17 @@ export default function CompetitorIntelligence() {
   const role = useAppStore(s => s.user?.role)
   const canWrite = isLocalMode || ['Admin','Operator'].includes(role || '')
   const [storedList, setList] = useState<Competitor[]>([]), [storedReport, setReport] = useState<CompetitorReport | null>(null)
+  const [reportKey, setReportKey] = useState('')
   const [scans, setScans] = useState<CompetitorScan[]>([])
   const [loading, setLoading] = useState(false), [busy, setBusy] = useState(''), [error,setError] = useState(''), [note,setNote] = useState('')
   const [showRegister,setShowRegister] = useState(false), [name,setName] = useState(''), [url,setUrl] = useState(''), [brand,setBrand] = useState(ctx.brandKey)
   const [maxUrls,setMaxUrls] = useState(10), [nonce,setNonce] = useState(0)
   const selectedId = params.get('competitor') || '', selectedScan = params.get('competitor_scan') || ''
+  const selectionKey = JSON.stringify([ctx.workspaceId,ctx.brandKey,selectedId,selectedScan])
   const scope = `${ctx.workspaceId}:${ctx.brandKey}`, active = useRef(scope); active.current = scope
   const list = storedList.filter(c => c.workspace_id === ctx.workspaceId && (!ctx.brandKey || c.brand_key === ctx.brandKey))
   const selected = list.find(c => String(c.id) === selectedId)
-  const report = storedReport && selected && String(storedReport.competitor.id) === String(selected.id) && storedReport.competitor.workspace_id === ctx.workspaceId && storedReport.competitor.brand_key === selected.brand_key ? storedReport : null
+  const report = reportKey === selectionKey && storedReport && selected && String(storedReport.competitor.id) === String(selected.id) && storedReport.competitor.workspace_id === ctx.workspaceId && storedReport.competitor.brand_key === selected.brand_key && (!selectedScan || String(storedReport.scan?.id) === selectedScan) ? storedReport : null
   const findingFocus = params.get('finding') || ''
   useEffect(() => {setBusy('');setNote('')},[scope])
 
@@ -41,12 +44,12 @@ export default function CompetitorIntelligence() {
     return ()=>ctl.abort()
   },[scope,ctx.registry.status,nonce])
   useEffect(()=>{
-    setReport(null);setScans([])
+    setReport(null);setScans([]);setReportKey('')
     if (!selected) return
     const ctl=new AbortController(); const ws=ctx.workspaceId
     competitorApi.scans(ws,selected.id,ctl.signal).then(async ({data}) => {
       if (ctl.signal.aborted) return
-      setScans(data)
+      setScans(data);setReportKey(selectionKey)
       const latest = data[0]
       if (!latest) { setReport({competitor:selected,scan:null,previous_scan:null,findings:[],coverage:{},limits:[]}); return }
       if (!selectedScan && ['queued','running'].includes(latest.status)) { setReport({competitor:selected,scan:latest,previous_scan:null,findings:[],coverage:{},limits:[]}); return }
@@ -104,17 +107,18 @@ export default function CompetitorIntelligence() {
     {selected&&<>
       <section className="flex flex-wrap items-end justify-between gap-4 rounded-xl border border-border px-4 py-4">
         <div className="min-w-0"><p className="text-sm font-medium">{selected.name} <span className="text-muted-foreground">→ {ctx.workspace?.brands.find(b=>b.key===selected.brand_key)?.name||selected.brand_key}</span></p>{publicEvidenceUrl(selected.base_url)&&<a className="mt-1 inline-flex max-w-full items-center gap-1 break-all text-xs text-patina" href={publicEvidenceUrl(selected.base_url)} target="_blank" rel="noreferrer">{selected.base_url}<ExternalLink className="h-3 w-3 shrink-0"/></a>}<p className="mt-2 text-xs text-muted-foreground">HTTP only · ≤25 pages per scan · five historical scans retained · robots/access rules enforced</p></div>
-        <div className="flex flex-wrap items-end gap-2"><div><Label htmlFor="competitor-limit" className="text-xs">Page limit</Label><Input id="competitor-limit" type="number" className="mt-1 w-20" min={1} max={25} value={maxUrls} onChange={e=>setMaxUrls(Number(e.target.value))}/></div><Button onClick={startScan} disabled={!canWrite||!!busy||!!scanBusy||maxUrls<1||maxUrls>25}>{scanBusy||busy==='scan'?<Loader2 className="animate-spin"/>:<RotateCw/>}{scanBusy?'Scan running':'Scan public pages'}</Button></div>
+        <div className="flex flex-wrap items-end gap-2"><div><Label htmlFor="competitor-limit" className="text-xs">Next scan limit</Label><Input id="competitor-limit" type="number" className="mt-1 w-20" min={1} max={25} value={maxUrls} onChange={e=>setMaxUrls(Number(e.target.value))}/></div><Button onClick={startScan} disabled={!canWrite||!!busy||!!scanBusy||maxUrls<1||maxUrls>25}>{scanBusy||busy==='scan'?<Loader2 className="animate-spin"/>:<RotateCw/>}{scanBusy?'Scan running':'Scan public pages'}</Button></div>
       </section>
       <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground"><label htmlFor="competitor-history">Snapshot history</label><select id="competitor-history" className="max-w-full rounded border border-border bg-background p-2" value={selectedScan} onChange={e=>choose(String(selected.id),e.target.value)}><option value="">Latest available snapshot</option>{scans.map(s=><option key={s.id} value={String(s.id)}>#{s.id} · {s.status} · {s.finished_at||s.started_at}</option>)}</select><span>{current?`#${current.id} · ${current.status} · ${current.pages_count} observed pages`:'No scan yet'}</span></div>
       {current?.error&&<Notice tone="warn">Scan diagnostic: {current.error}. Inaccessible or unobserved pages are not confirmed deleted.</Notice>}
+      {report && <CompetitorSnapshot key={`${scope}:${selected.id}:${report.scan?.id}`} report={report} />}
       <SectionTitle>Observed findings <span className="text-muted-foreground">· {findings.length}</span></SectionTitle>
       {!report?<p className="text-sm text-muted-foreground">Reading stored evidence…</p>:!findings.length?<div className="panel-quiet p-5 text-sm text-muted-foreground">{current?'No comparable changes found in this bounded snapshot. This is not proof the entire site is unchanged.':'Registering did not crawl. Start a bounded scan explicitly to establish a baseline.'}</div>:<ol className="panel divide-y divide-border">{findings.map(f=>{
         const age=freshness(f.observed_at,30,Date.now()), actionable=actionableCompetitorFinding(f)
         return <li key={f.id} id={`competitor-finding-${f.id}`} className={`scroll-mt-20 space-y-3 p-4 sm:p-5 ${findingFocus===f.id?'bg-patina/5 ring-1 ring-inset ring-patina/30':''}`}>
           <div className="flex flex-wrap gap-2 text-xs"><span className={f.category==='verified_change'?'text-patina':'text-ochre'}>{f.category.replace(/_/g,' ')}</span><span className="text-muted-foreground">{f.confidence} · {age} · {f.observed_at?ago(f.observed_at):'date unknown'}</span></div><h3 className="font-medium">{f.title}</h3><p className="text-sm leading-relaxed text-muted-foreground">{f.reason}</p>
-          {Object.keys(f.changes||{}).length>0&&<dl className="space-y-3">{Object.entries(f.changes).map(([field,change])=><div key={field} className="rounded border border-border p-3 text-xs"><dt className="font-medium">{field.replace(/_/g,' ')}</dt><dd className="mt-2 grid gap-2 sm:grid-cols-2"><div className="min-w-0 break-words"><span className="block text-muted-foreground">Before</span><pre className="mt-1 whitespace-pre-wrap break-all font-sans">{JSON.stringify(change.before,null,2)}</pre></div><div className="min-w-0 break-words"><span className="block text-muted-foreground">After</span><pre className="mt-1 whitespace-pre-wrap break-all font-sans">{JSON.stringify(change.after,null,2)}</pre></div></dd></div>)}</dl>}
-          <div className="space-y-1 border-l-2 border-patina/30 pl-3 text-xs"><p className="text-muted-foreground">Observed {f.observed_at||'unknown'}{f.previous_observed_at?` · previous ${f.previous_observed_at}`:''}</p>{f.source_urls.map(u=>publicEvidenceUrl(u)?<a key={u} className="block break-all text-patina underline-offset-2 hover:underline" href={publicEvidenceUrl(u)} target="_blank" rel="noreferrer">{u} ↗</a>:null)}</div>
+          {Object.keys(f.changes||{}).length>0&&<dl className="space-y-3">{Object.entries(f.changes).map(([field,change])=><div key={field} className="rounded border border-border p-3 text-xs"><dt className="font-medium">{field.replace(/_/g,' ')}</dt>{field==='internal_links'?<dd><HistoricalLinkDiff before={change.before} after={change.after}/></dd>:<dd className="mt-2 grid gap-2 sm:grid-cols-2"><div className="min-w-0 break-words"><span className="block text-muted-foreground">Before</span><pre className="mt-1 whitespace-pre-wrap break-all font-sans">{JSON.stringify(change.before,null,2)}</pre></div><div className="min-w-0 break-words"><span className="block text-muted-foreground">After</span><pre className="mt-1 whitespace-pre-wrap break-all font-sans">{JSON.stringify(change.after,null,2)}</pre></div></dd>}</div>)}</dl>}
+          <div className="space-y-1 border-l-2 border-patina/30 pl-3 text-xs"><p className="break-words text-muted-foreground [overflow-wrap:anywhere]">Observed {f.observed_at||'unknown'}{f.previous_observed_at?` · previous ${f.previous_observed_at}`:''}</p>{f.source_urls.map(u=>publicEvidenceUrl(u)?<a key={u} className="block break-all text-patina underline-offset-2 hover:underline" href={publicEvidenceUrl(u)} target="_blank" rel="noreferrer">{u} ↗</a>:null)}</div>
           <p className="text-sm"><span className="font-medium">Next: </span>{f.next_action}</p>
           {actionable&&<div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={!canWrite||!!busy||age!=='current'} onClick={()=>brief(f)}>{busy===f.id?<Loader2 className="animate-spin"/>:<ArrowRight/>}Prepare original Studio brief</Button>{isLocalMode&&<Button size="sm" variant="outline" asChild><Link to={destination({workspaceId:ctx.workspaceId,brandKey:selected.brand_key,brandName:selected.name},`/trends?competitor=${selected.id}&competitor_scan=${f.scan_id}&finding=${encodeURIComponent(f.id)}`)}><Radar/>Review in Radar</Link></Button>}</div>}
           {age!=='current'&&actionable&&<p className="text-xs text-ochre">Evidence must be re-verified before preparing a new brief. Scan only through an explicit action.</p>}

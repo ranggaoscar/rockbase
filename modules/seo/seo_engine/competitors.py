@@ -80,25 +80,81 @@ def compare_pages(old_pages, new_pages, *, current_scan_id, previous_scan_id, br
     coverage = {"previous_successful_html_pages": len(old), "current_successful_html_pages": len(new), "unobserved_prior_urls": unseen, "deleted_confirmed": 0, "failed_or_non_html_count": len(failed), "scope": "successfully fetched HTML pages only"}
     return findings, coverage
 
+INSPECTOR_FIELDS = ("url", "final_url", "status_code", "content_type", "title", "description", "h1", "headings", "canonical", "indexable", "meta_robots", "x_robots_tag", "internal_links", "error", "render_mode", "observed_at")
+
+
+def snapshot_inspector(pages, scan):
+    """Return a safe read-only projection and deterministic snapshot observations."""
+    observed_at = scan.get("finished_at") or scan.get("started_at")
+    projected = [{**{key: page.get(key) for key in INSPECTOR_FIELDS if key in page}, "observed_at": page.get("observed_at", observed_at), "successful_html": _valid(page)} for page in pages]
+    successful = [page for page in pages if _valid(page)]
+    unavailable = [page for page in pages if not _valid(page)]
+    def known_count(field, predicate):
+        if not successful or any(field not in page or page.get(field) is None for page in successful):
+            return None
+        return sum(predicate(page.get(field)) for page in successful)
+    headings_known = bool(successful) and all("headings" in page and page.get("headings") is not None for page in successful)
+    headings_count = sum(len(page.get("headings") or []) for page in successful if isinstance(page.get("headings"), list)) if headings_known else None
+    titles = [str(page.get("title") or "").strip().casefold() for page in successful if "title" in page and page.get("title") is not None]
+    title_counts = {}
+    for title in titles:
+        if title:
+            title_counts[title] = title_counts.get(title, 0) + 1
+    duplicate_title_pages = sum(count for count in title_counts.values() if count > 1)
+    links = [link for page in successful for link in (page.get("internal_links") or [])]
+    summary = scan.get("summary") or {}
+    discovered = summary.get("discovered_count", summary.get("discovered"))
+    limit = scan.get("max_urls")
+    return projected, {
+        "successful_html": len(successful), "unavailable": len(unavailable),
+        "missing_title": known_count("title", lambda v: not str(v).strip()),
+        "missing_description": known_count("description", lambda v: not str(v).strip()),
+        "missing_h1": known_count("h1", lambda v: not v),
+        "multiple_h1": known_count("h1", lambda v: isinstance(v, (list, tuple)) and len(v) > 1),
+        "duplicate_title_pages": duplicate_title_pages if successful and all(p.get("title") is not None for p in successful) else None,
+        "headings_count": headings_count, "headings_available": headings_known,
+        "unique_internal_targets": len(set(links)) if successful and all(isinstance(p.get("internal_links"), list) for p in successful) else None,
+        "link_references": sum(len(p.get("link_edges") or []) for p in successful) if any("link_edges" in p for p in successful) else (len(links) if links or any("internal_links" in p for p in successful) else None),
+        "locale_variants": None,
+        "indexable": known_count("indexable", bool),
+        "non_indexable": known_count("indexable", lambda v: not bool(v)),
+        "discovered": discovered, "limit": limit,
+        "omitted": max(0, discovered - len(pages)) if isinstance(discovered, int) else None,
+        "limit_reached": summary.get("limit_reached"),
+        "baseline": scan.get("baseline", False),
+        "own_baseline": scan.get("own_baseline", {"available": False, "pages": 0}),
+        "own_baseline_coverage": "same workspace and brand relationship; recent completed scans only",
+        "complete": scan.get("status") == "completed" and not unavailable and not summary.get("limit_reached") and (not isinstance(discovered, int) or discovered <= len(pages)),
+        "banner": ["Bounded/incomplete snapshot: unvisited or unavailable URLs are not deleted; full-site coverage is not established."] if unavailable or summary.get("limit_reached") or scan.get("status") != "completed" or (isinstance(discovered, int) and discovered > len(pages)) else [],
+        "observed_at": scan.get("finished_at") or scan.get("started_at"),
+    }
+
+
 def analyze(repo, competitor, scan_id=None):
+
     scans = repo.scans(competitor["website_id"], competitor["workspace_id"])
     scan = next((s for s in scans if s["id"] == scan_id), None) if scan_id else scans[0] if scans else None
     if not scan:
         if scan_id:
             raise LookupError("Competitor scan not found")
-        return {"competitor": competitor, "scan": None, "previous_scan": None, "findings": [], "coverage": {}, "limits": ["Registration did not crawl; no snapshot yet."]}
+        return {"competitor": competitor, "scan": None, "previous_scan": None, "findings": [], "coverage": {}, "pages": [], "observations": None, "limits": ["Registration did not crawl; no snapshot yet."]}
     if scan["status"] in {"queued", "running"}:
-        return {"competitor": competitor, "scan": scan, "previous_scan": None, "findings": [], "coverage": {}, "limits": ["Scan pending; no change inferred."]}
+        return {"competitor": competitor, "scan": scan, "previous_scan": None, "findings": [], "coverage": {}, "pages": [], "observations": None, "limits": ["Scan pending; no change inferred."]}
     previous = next((s for s in scans if s["id"] < scan["id"] and s["status"] == "completed"), None)
     current_pages = repo.rows("pages", scan["id"], analysis=False)
     old_pages = repo.rows("pages", previous["id"], analysis=False) if previous else []
     at = scan.get("finished_at") or scan.get("started_at")
     prior_at = (previous.get("finished_at") or previous.get("started_at")) if previous else None
     findings, coverage = compare_pages(old_pages, current_pages, current_scan_id=scan["id"], previous_scan_id=previous["id"] if previous else None, brand_key=competitor["brand_key"], competitor_id=competitor["id"], observed_at=at, previous_observed_at=prior_at)
+
     if scan["status"] != "completed":
         findings = [f for f in findings if f["category"] in {"unavailable", "unverified"}]
         findings.append({"id": f"failure-{competitor['id']}-{scan['id']}", "category": "unavailable", "title": "Competitor scan did not complete", "reason": scan.get("error") or scan["status"], "next_action": "Inspect the failure; retry explicitly only if permitted. No deletion or growth claim.", "source_urls": [competitor["base_url"]], "observed_at": at, "previous_observed_at": prior_at, "changes": {}, "confidence": "low", "scan_id": scan["id"], "previous_scan_id": previous["id"] if previous else None, "brand_key": competitor["brand_key"], "competitor_id": competitor["id"]})
     coverage["evidence_fresh"] = fresh(at)
     add_coverage_gaps(repo, competitor, scan, current_pages, findings, coverage)
+    pages, observations = snapshot_inspector(current_pages, scan)
+    observations["baseline"] = previous is None
+    observations["own_baseline"] = {"available": coverage["owned_baseline_pages"] > 0, "pages": coverage["owned_baseline_pages"]}
     return {"competitor": competitor, "scan": scan, "previous_scan": previous, "findings": findings, "coverage": coverage,
+            "pages": pages, "observations": observations,
             "limits": ["HTTP-only public-page snapshots; no browser, login, or JavaScript rendering.", "Unobserved URLs are not confirmed deleted.", "No competitor body copy is included."]}

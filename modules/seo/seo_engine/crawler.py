@@ -17,11 +17,15 @@ from .policy import PoliteClient, internal_url, normalize_url, origin
 from .rules import audit_pages, extract_page, failed_page
 from .graph import build_graph
 from .triage import enrich_issue
+from .sampling import order_representative_urls
 
 
 class SeoCrawler:
-    def __init__(self, repo, scan, website, *, client=None):
+    def __init__(self, repo, scan, website, *, client=None, representative=False):
         self.repo, self.scan, self.website = repo, scan, website
+        self.representative = representative
+        self.language_variants_deferred = 0
+
         self.client = client or PoliteClient(website["base_url"])
         self.admitted, self.discovered, self.pages = set(), set(), []
         self.summary = {"status_counts": {}, "priority_counts": {}, "indexable_count": 0,
@@ -41,11 +45,16 @@ class SeoCrawler:
 
     async def admit(self, urls):
         accepted = []
+        normalized = []
         for value in urls:
             url = internal_url(value, self.website["base_url"], self.website["base_url"])
-            if not url:
-                continue
-            self.discovered.add(url)
+            if url:
+                self.discovered.add(url)
+                normalized.append(url)
+        if self.representative:
+            normalized, deferred = order_representative_urls(normalized)
+            self.language_variants_deferred = order_representative_urls(self.discovered)[1]
+        for url in normalized:
             if url in self.admitted:
                 continue
             if len(self.admitted) >= self.scan["max_urls"]:
@@ -59,6 +68,7 @@ class SeoCrawler:
                 self.persist(page)
             else:
                 accepted.append(url)
+
         return accepted
 
     async def sitemaps(self, text):
@@ -137,6 +147,18 @@ class SeoCrawler:
         try:
             robots, self.summary["robots_status"] = await self.client.load_robots()
             seeds = [self.website["base_url"], *(await self.sitemaps(robots))]
+            if self.representative:
+                seeds, self.language_variants_deferred = order_representative_urls(seeds)
+                self.summary["sampling"] = {
+                    "policy": "root-and-page-family coverage first; language variants deferred; deterministic bounded sample",
+                    "language_variants_deferred": self.language_variants_deferred,
+                    "accepted_sample_count": 0,
+                    "omitted_sample_count": 0,
+                    "bounded": True,
+                    "incomplete": True,
+                    "exhaustive_languages": False,
+                    "content_equivalence_claimed": False,
+                }
             storage = MemoryStorageClient()
             # Never reuse Crawlee's cached default queue across independent scans/tests.
             queue = await RequestQueue.open(name=f'seo-{uuid4().hex}', storage_client=storage)
@@ -192,6 +214,15 @@ class SeoCrawler:
             self.repo.save_issues(self.scan["id"], issues)
             self.summary["priority_counts"] = dict(Counter(i["priority"] for i in issues))
             self.summary["discovered_count"] = len(self.discovered)
+            if self.representative:
+                self.summary["sampling"].update({
+                    "accepted_sample_count": len(self.admitted),
+                    "fetched_page_count": sum(p["status_code"] is not None for p in self.pages),
+                    "robots_denied_count": self.summary["skipped_robots"],
+                    "omitted_sample_count": max(0, len(self.discovered) - len(self.admitted)),
+                    "language_variants_deferred": self.language_variants_deferred,
+                    "incomplete": True,
+                })
             fetched = [p for p in self.pages if p["status_code"] is not None]
             if self.client.halted:
                 self.summary["warnings"].append("HTTP 429 encountered; scan stopped early. Coverage incomplete.")
