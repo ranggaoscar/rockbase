@@ -88,7 +88,7 @@ function useToday(workspaceId: string, brandKey: string, websiteId: string, read
       setRadar({ status: !data.candidates.length ? 'empty' : ageDays(fetched) > 2 ? 'stale' : 'ok', data, detail: fetched ? `Feed ${ago(fetched)}` : 'No feed snapshot yet' })
     }).catch((e) => { if (alive()) setRadar({ status: 'error', detail: errorText(e, 'Radar unavailable') }) })
 
-    loadLibrary(workspaceId, isLocalMode, ctl.signal).then((raw) => { const data = { ...raw, drafts: scopeDrafts(raw.drafts, brandKey) }; if (alive()) setLibrary({ status: data.rockbase === 'error' ? 'error' : data.drafts.length ? 'ok' : 'empty', data, detail: data.rockbaseError }) })
+    loadLibrary(workspaceId, isLocalMode, ctl.signal).then((raw) => { const scoped = scopeDrafts(raw.drafts, brandKey).filter((d) => d.status !== 'archived'); const data = { ...raw, drafts: scoped }; if (alive()) setLibrary({ status: data.rockbase === 'error' ? 'error' : data.drafts.length ? 'ok' : 'empty', data, detail: data.rockbaseError }) })
 
     Promise.all([activityApi.operationsSummary(), activityApi.publishingQueue().then((r) => r.data.rows as QueueRow[]).catch(() => null)])
       .then(([{ data }, rows]) => { if (alive()) setOps({ status: data.accounts.total ? 'ok' : 'empty', data: { summary: data, rows }, detail: data.accounts.total ? `${data.accounts.total} accounts` : 'Optional · no accounts' }) })

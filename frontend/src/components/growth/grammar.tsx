@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { AlertTriangle, ArrowUpRight, CircleSlash, Clock3, Cloud, HardDrive, Loader2, Lock, PlugZap, Sparkles, Send } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { statusHint, statusLabel, type StudioStatus } from '@/lib/drafts'
 
 /* ──────────────────────────────────────────────────────────────────────────
  * Evidence grade — "how do we know this?"
@@ -145,6 +146,27 @@ export function Notice({ tone = 'info', children, action, className }: { tone?: 
       <div className="min-w-0 flex-1 break-words">{children}</div>
       {action}
     </div>
+  )
+}
+
+/**
+ * Review status of a Studio draft. Distinct from evidence grade: this says where a
+ * draft sits in the review flow, not how well it is supported. Archived is drawn with
+ * a dashed border so it never reads like an active draft.
+ */
+export function StatusTag({ status, className }: { status: StudioStatus; className?: string }) {
+  const tone: Record<StudioStatus, string> = {
+    draft: 'border-border text-muted-foreground',
+    in_review: 'border-ochre/40 bg-[hsl(var(--ochre)/0.08)] text-ochre',
+    ready: 'border-patina/40 bg-[hsl(var(--patina)/0.08)] text-patina',
+    archived: 'border-dashed border-border/70 text-muted-foreground/70',
+  }
+  const dot: Record<StudioStatus, string> = { draft: 'bg-chalk/60', in_review: 'bg-ochre', ready: 'bg-patina', archived: 'bg-muted-foreground/40' }
+  return (
+    <span title={statusHint[status]} className={cn('inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] leading-4', tone[status], className)}>
+      <span aria-hidden className={cn('h-1.5 w-1.5 shrink-0 rounded-full', dot[status])} />
+      {statusLabel[status]}
+    </span>
   )
 }
 
