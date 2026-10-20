@@ -14,6 +14,21 @@ import { trendsApi, type TrendDraftSummary } from '@/components/trends/api'
 export type DraftStore = 'rockbase' | 'browser'
 export type DraftOrigin = 'radar' | 'ai-writer' | 'studio' | 'content-planner'
 export type DraftFormat = 'article' | 'social_post' | 'reel' | 'caption'
+/**
+ * Review status of a Studio draft. Held by the server (not this tab), so the same
+ * draft has the same state in every browser. Radar briefs have no review status.
+ */
+export type StudioStatus = 'draft' | 'in_review' | 'ready' | 'archived'
+
+export const statusLabel: Record<StudioStatus, string> = { draft: 'Draft', in_review: 'In review', ready: 'Ready', archived: 'Archived' }
+export const statusHint: Record<StudioStatus, string> = {
+  draft: 'Being written. Not reviewed yet.',
+  in_review: 'Someone is reviewing it. Edits still allowed.',
+  ready: 'Reviewed and ready to export to reduce risk or continue in Compose.',
+  archived: 'Closed without deleting. Restore it to keep editing.',
+}
+/** Library order: work in progress first, archived last. */
+export const statusOrder: StudioStatus[] = ['draft', 'in_review', 'ready', 'archived']
 
 export interface LibraryDraft {
   key: string
@@ -29,6 +44,8 @@ export interface LibraryDraft {
   platform?: string | null
   /** Brand the draft belongs to; null means not assigned to a brand. */
   brandKey?: string | null
+  /** Review status, when the store keeps one (Studio drafts only). */
+  status?: StudioStatus | null
 }
 
 export const PROVENANCE_SEPARATOR = '\n\n---\nProvenance (review, not a publication claim):\n'
@@ -41,7 +58,7 @@ export function splitProvenance(content: string): { body: string; provenance: Re
 }
 
 export const formatLabel: Record<DraftFormat, string> = { article: 'Article brief', social_post: 'Social post', reel: 'Reel script', caption: 'Caption' }
-export const originLabel: Record<DraftOrigin, string> = { radar: 'From Radar', 'ai-writer': 'Caption assistant', studio: 'Studio note', 'content-planner': 'Content Planner (legacy)' }
+export const originLabel: Record<DraftOrigin, string> = { radar: 'From Radar', 'ai-writer': 'Caption assistant', studio: 'Studio draft', 'content-planner': 'Content Planner (legacy)' }
 export const isSocial = (format: DraftFormat) => format !== 'article'
 
 /* Browser-only stores ──────────────────────────────────────────────────── */
@@ -71,10 +88,17 @@ export type StudioSource =
   | { kind: 'blank' }
   | { kind: 'caption_copy' }
   | { kind: 'browser_import'; browser_id: string; browser_created_at?: string }
+/** A navigation fact recorded by the server: the draft was opened in Compose. */
+export interface StudioHandoff { channel: string; at: string; count: number }
+/** A post this draft was linked to. Status is queue/publish state — never engagement. */
+export interface StudioPostRef { id: string; status: string; at: string }
 export interface StudioDraft {
   id: string; workspaceId: string; title: string; body: string; format: StudioFormat; brandKey: string | null
+  status: StudioStatus
+  statusChangedAt: string | null
   /** Written by the server, never by the client. */
   source: { kind: string; label?: string; browserId?: string; browserCreatedAt?: string; movedAt?: string }
+  distribution: { handoffs: StudioHandoff[]; posts: StudioPostRef[] }
   createdAt: string; updatedAt: string
 }
 export type StudioDraftSummary = Omit<StudioDraft, 'body'> & { excerpt: string }
@@ -84,9 +108,26 @@ export const studioApi = {
   get: (id: string, workspaceId: string) => api.get<{ draft: StudioDraft }>(`/studio/drafts/${encodeURIComponent(id)}`, { params: { workspace_id: workspaceId } }),
   create: (input: { workspaceId: string; format: StudioFormat; brandKey?: string | null; title?: string; body?: string; source: StudioSource }) =>
     api.post<{ draft: StudioDraft }>('/studio/drafts', { workspace_id: input.workspaceId, format: input.format, brand_key: input.brandKey || null, title: input.title, body: input.body, source: input.source }),
-  /** Title and body only; the server keeps format, brand and source. */
-  update: (id: string, workspaceId: string, body: { title?: string; body: string }) =>
+  /** Title, body and review status; the server keeps format, brand, source and distribution. */
+  update: (id: string, workspaceId: string, body: { title?: string; body?: string; status?: StudioStatus }) =>
     api.patch<{ draft: StudioDraft }>(`/studio/drafts/${encodeURIComponent(id)}`, { workspace_id: workspaceId, ...body }),
+  /** Records that the draft left Studio for Compose. Posts nothing. */
+  handoff: (id: string, workspaceId: string) =>
+    api.post<{ draft: StudioDraft }>(`/studio/drafts/${encodeURIComponent(id)}/handoff`, { workspace_id: workspaceId, channel: 'compose' }),
+  /** Sequential batches respect the route's 20-id limit and preserve earlier links. */
+  linkPosts: async (id: string, workspaceId: string, postIds: string[]) => {
+    if (!postIds.length) throw new Error('No post ids to link.')
+    let draft: StudioDraft | undefined
+    let linked = 0
+    for (let offset = 0; offset < postIds.length; offset += 20) {
+      const { data } = await api.post<{ draft: StudioDraft; linked: number }>(`/studio/drafts/${encodeURIComponent(id)}/distribution`, {
+        workspace_id: workspaceId, post_ids: postIds.slice(offset, offset + 20),
+      })
+      draft = data.draft
+      linked += data.linked
+    }
+    return { data: { draft: draft!, linked } }
+  },
 }
 
 /* Moving browser notes to RockBase ──────────────────────────────────────
@@ -137,7 +178,7 @@ export function browserDrafts(): LibraryDraft[] {
 }
 
 export function studioToLibrary(d: StudioDraftSummary): LibraryDraft {
-  return { key: `rb-studio:${d.id}`, id: d.id, store: 'rockbase', origin: 'studio', format: d.format, title: d.title || 'Untitled', excerpt: d.excerpt, updatedAt: d.updatedAt, brandKey: d.brandKey }
+  return { key: `rb-studio:${d.id}`, id: d.id, store: 'rockbase', origin: 'studio', format: d.format, title: d.title || 'Untitled', excerpt: d.excerpt, updatedAt: d.updatedAt, brandKey: d.brandKey, status: d.status }
 }
 
 export function trendToLibrary(d: TrendDraftSummary): LibraryDraft {
@@ -192,7 +233,13 @@ export function draftHref(d: LibraryDraft, workspaceId: string) {
 }
 
 const sortDrafts = (list: LibraryDraft[]) => [...list].sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
-const excerpt = (text: string) => text.replace(/^#+\s*/gm, '').replace(/[*_>`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 180)
+const excerpt = (text: string) => {
+  const clean = text.replace(/^#+\s*/gm, '').replace(/[*_>`]/g, '').replace(/\s+/g, ' ').trim()
+  if (clean.length <= 180) return clean
+  const cut = clean.slice(0, 180)
+  const space = cut.lastIndexOf(' ')
+  return `${cut.slice(0, space > 120 ? space : 180).trimEnd()}…`
+}
 
 /** Saves text as a Markdown file on the operator's machine. No network. */
 export function downloadMarkdown(filename: string, text: string) {

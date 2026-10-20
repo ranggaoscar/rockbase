@@ -12,40 +12,104 @@ import { getRockBaseMode } from '../middleware/runtimeMode';
  * Local Mode: the loopback local owner, behind the same origin gate as Trends.
  * Server Mode: WorkspaceUser membership (Admin is not a bypass); writes need Admin/Operator.
  * Never imports or invokes a publishing, queue or Google service.
+ *
+ * Review flow: every draft carries a server-held status (draft → in_review → ready,
+ * archived as the end state, restore back to draft). Status, brand and source sit
+ * behind the provenance separator and are re-attached on every edit. The router also
+ * records distribution references: an explicit Compose handoff (a navigation fact,
+ * not a publication claim) and post ids the caller must prove exist in the same
+ * workspace. A post reference carries only queue/publish state — never engagement.
  */
 export interface StudioDependencies {
   /** Workspaces the caller may use. `null` = the Local Mode owner, who owns every workspace. */
   workspaces(userId: string | null): Promise<Array<{ id: string; name: string }>>;
   brands(workspace: string): Promise<Array<{ key: string }>>;
   drafts: { create(args: any): Promise<any>; upsert(args: any): Promise<any>; findFirst(args: any): Promise<any>; findMany(args: any): Promise<any[]>; update(args: any): Promise<any> };
+  /** Read-only existence check for distribution references. Nothing is written here. */
+  posts: { findMany(args: any): Promise<Array<{ id: string; status: string }>> };
 }
 
 export const STUDIO_FORMATS = ['article', 'social_post', 'reel'] as const;
-type StudioFormat = typeof STUDIO_FORMATS[number];
+export const STUDIO_STATUSES = ['draft', 'in_review', 'ready', 'archived'] as const;
+export type StudioFormat = typeof STUDIO_FORMATS[number];
+export type StudioStatus = typeof STUDIO_STATUSES[number];
+/** The review flow as a real state machine; archived leaves only through Restore. */
+const TRANSITIONS: Record<StudioStatus, StudioStatus[]> = {
+  draft: ['in_review', 'ready', 'archived'],
+  in_review: ['draft', 'ready', 'archived'],
+  ready: ['draft', 'in_review', 'archived'],
+  archived: ['draft'],
+};
+const HANDOFF_CHANNELS = ['compose'] as const;
+const STATUS_LABEL: Record<StudioStatus, string> = { draft: 'draft', in_review: 'in review', ready: 'ready', archived: 'archived' };
+
 const PROVENANCE = '\n\n---\nProvenance (review, not a publication claim):\n';
 const DRAFT_ID = /^studio-[a-f0-9]{32}$/;
 const BROWSER_ID = /^[\w-]{1,100}$/;
+const POST_ID = /^[\w-]{1,64}$/;
 const WRITE_ROLES = ['Admin', 'Operator'];
 const COLUMNS = { id: true, workspaceId: true, title: true, content: true, createdAt: true, updatedAt: true } as const;
+const MAX_POST_REFS = 50;
 
 class StudioRouteError extends Error { constructor(public status: number, message: string) { super(message); } }
 
 interface Row { id: string; workspaceId: string; title: string | null; content: string; createdAt: Date | string; updatedAt: Date | string }
-function parse(row: Row) {
-  const at = row.content.indexOf(PROVENANCE);
-  const body = at >= 0 ? row.content.slice(0, at) : row.content;
+interface Handoff { channel: string; at: string; count: number }
+interface PostRef { id: string; status: string; at: string }
+interface Distribution { handoffs: Handoff[]; posts: PostRef[] }
+
+function splitContent(content: string) {
+  const at = content.indexOf(PROVENANCE);
+  const body = at >= 0 ? content.slice(0, at) : content;
   let meta: Record<string, any> = {};
-  try { meta = at >= 0 ? JSON.parse(row.content.slice(at + PROVENANCE.length)) : {}; } catch { meta = {}; }
+  try { meta = at >= 0 ? JSON.parse(content.slice(at + PROVENANCE.length)) : {}; } catch { meta = {}; }
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) meta = {};
+  return { body, meta };
+}
+const joinContent = (body: string, meta: Record<string, unknown>) => body + PROVENANCE + JSON.stringify(meta, null, 2);
+
+const statusOf = (meta: Record<string, any>): StudioStatus =>
+  (STUDIO_STATUSES as readonly string[]).includes(meta.status as string) ? meta.status as StudioStatus : 'draft';
+
+/** Stored references, filtered down to the shapes this router writes. */
+function distributionOf(meta: Record<string, any>): Distribution {
+  const stored = meta.distribution && typeof meta.distribution === 'object' ? meta.distribution : {};
+  const handoffs: Handoff[] = Array.isArray(stored.handoffs)
+    ? stored.handoffs.filter((h: any) => h && typeof h.channel === 'string' && typeof h.at === 'string' && Number.isFinite(Date.parse(h.at)))
+      .map((h: any) => ({ channel: h.channel, at: new Date(h.at).toISOString(), count: Number.isFinite(h.count) ? h.count : 1 })).slice(-5)
+    : [];
+  const posts: PostRef[] = Array.isArray(stored.posts)
+    ? stored.posts.filter((p: any) => p && typeof p.id === 'string' && typeof p.status === 'string')
+      .map((p: any) => ({ id: p.id, status: p.status, at: typeof p.at === 'string' && Number.isFinite(Date.parse(p.at)) ? new Date(p.at).toISOString() : new Date(0).toISOString() }))
+      .slice(-MAX_POST_REFS)
+    : [];
+  return { handoffs, posts };
+}
+
+function parse(row: Row) {
+  const { body, meta } = splitContent(row.content);
   const format: StudioFormat = STUDIO_FORMATS.includes(meta.format) ? meta.format : 'article';
   return { id: row.id, workspaceId: row.workspaceId, title: row.title || '', body, format,
     brandKey: typeof meta.brandKey === 'string' ? meta.brandKey : null,
+    status: statusOf(meta),
+    statusChangedAt: typeof meta.statusChangedAt === 'string' ? meta.statusChangedAt : null,
     source: meta.source && typeof meta.source === 'object' ? meta.source : { kind: 'unknown' },
+    distribution: distributionOf(meta),
     createdAt: new Date(row.createdAt).toISOString(), updatedAt: new Date(row.updatedAt).toISOString() };
 }
 const summary = (row: Row) => {
   const { body, ...rest } = parse(row);
-  return { ...rest, excerpt: body.replace(/^#+\s*/gm, '').replace(/[*_>`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 180) };
+  return { ...rest, excerpt: excerptOf(body) };
 };
+
+/** Library excerpt: cut on a word boundary and say it was cut, instead of stopping mid-word. */
+function excerptOf(body: string): string {
+  const text = body.replace(/^#+\s*/gm, '').replace(/[*_>`]/g, '').replace(/\s+/g, ' ').trim();
+  if (text.length <= 180) return text;
+  const cut = text.slice(0, 180);
+  const space = cut.lastIndexOf(' ');
+  return `${cut.slice(0, space > 120 ? space : 180).trimEnd()}…`;
+}
 
 function text(value: unknown, field: string, max: number, fallback = ''): string {
   if (value === undefined) return fallback;
@@ -106,13 +170,21 @@ export function createStudioRouter(deps: StudioDependencies): Router {
 
   router.get('/drafts', handle(async req => {
     const workspace = await scope(req);
+    const requested = req.query.status;
+    if (requested !== undefined && (typeof requested !== 'string' || !(STUDIO_STATUSES as readonly string[]).includes(requested))) {
+      throw new StudioRouteError(422, 'Status filter must be draft, in_review, ready or archived.');
+    }
     const rows = await deps.drafts.findMany({ where: { workspaceId: workspace, id: { startsWith: 'studio-' } }, orderBy: { updatedAt: 'desc' }, take: 200, select: COLUMNS });
-    return { drafts: rows.map(summary) };
+    // Filtered after the bounded read; the library also filters client-side, so a full page is never lost.
+    const drafts = rows.map(summary);
+    return { drafts: requested ? drafts.filter(d => d.status === requested) : drafts };
   }));
   router.post('/drafts', handle(async req => {
     const workspace = await scope(req, true);
     const format = req.body?.format;
     if (!STUDIO_FORMATS.includes(format)) throw new StudioRouteError(422, 'Format must be article, social_post or reel.');
+    // A new draft always starts unreviewed; review state is a server transition, not a create field.
+    if (req.body?.status !== undefined && req.body.status !== 'draft') throw new StudioRouteError(422, 'New drafts always start as draft.');
     const title = text(req.body?.title, 'Title', 200).trim();
     const body = text(req.body?.body, 'Draft body', 50_000);
     const origin = source(req.body?.source);
@@ -124,7 +196,7 @@ export function createStudioRouter(deps: StudioDependencies): Router {
       brandKey = req.body.brand_key;
     }
     const id = origin.id(workspace);
-    const content = body + PROVENANCE + JSON.stringify({ store: 'RockBase Studio', format, brandKey, source: origin.record }, null, 2);
+    const content = joinContent(body, { store: 'RockBase Studio', format, brandKey, status: 'draft', source: origin.record, distribution: { handoffs: [], posts: [] } });
     const data = { id, workspaceId: workspace, title: title || null, content, mediaUrls: '[]', platforms: '[]', hashtags: '[]' };
     const row = origin.record.kind === 'browser_import'
       ? await deps.drafts.upsert({ where: { id }, update: {}, create: data, select: COLUMNS })
@@ -133,17 +205,92 @@ export function createStudioRouter(deps: StudioDependencies): Router {
     return { draft: parse(row) };
   }));
   router.get('/drafts/:id', handle(async req => ({ draft: parse(await owned(req, await scope(req))) })));
-  /** Title and body only. Format, brand and source are re-attached from the stored row. */
+  /**
+   * Body, title and review status. Format, brand, source and distribution are re-attached
+   * from the stored row. Status + text arrive in one request so a status change never
+   * drops unsaved text.
+   */
   router.patch('/drafts/:id', handle(async req => {
     const workspace = await scope(req, true);
-    if (typeof req.body?.body !== 'string') throw new StudioRouteError(422, 'Draft body is required.');
-    const body = text(req.body.body, 'Draft body', 50_000);
-    const title = req.body?.title === undefined ? undefined : text(req.body.title, 'Title', 200).trim();
     const existing = await owned(req, workspace);
-    const at = existing.content.indexOf(PROVENANCE);
-    const row = await deps.drafts.update({ where: { id: existing.id }, select: COLUMNS,
-      data: { content: body + (at >= 0 ? existing.content.slice(at) : ''), ...(title !== undefined ? { title: title || null } : {}) } });
+    const { body: currentBody, meta } = splitContent(existing.content);
+    const current = statusOf(meta);
+    const wantsBody = req.body?.body !== undefined;
+    const wantsTitle = req.body?.title !== undefined;
+    const wantsStatus = req.body?.status !== undefined;
+    if (!wantsBody && !wantsTitle && !wantsStatus) throw new StudioRouteError(422, 'Nothing to save: send a body, a title or a status.');
+    if (current === 'archived' && (wantsBody || wantsTitle)) throw new StudioRouteError(409, 'This draft is archived. Restore it before editing.');
+    const body = wantsBody ? text(req.body.body, 'Draft body', 50_000) : currentBody;
+    const title = wantsTitle ? text(req.body.title, 'Title', 200).trim() : undefined;
+    let status = current;
+    if (wantsStatus) {
+      const requested = req.body.status;
+      if (typeof requested !== 'string' || !(STUDIO_STATUSES as readonly string[]).includes(requested)) {
+        throw new StudioRouteError(422, 'Status must be draft, in_review, ready or archived.');
+      }
+      if (requested !== current) {
+        if (!TRANSITIONS[current].includes(requested as StudioStatus)) {
+          throw new StudioRouteError(422, `A ${STATUS_LABEL[current]} draft cannot move straight to ${STATUS_LABEL[requested as StudioStatus]}. Restore it first.`);
+        }
+        if (requested === 'ready' && (!(title ?? existing.title ?? '').trim() || !body.trim())) {
+          throw new StudioRouteError(422, 'A draft needs a title and a body before it can be marked ready.');
+        }
+        status = requested as StudioStatus;
+      }
+    }
+    const nextMeta = { ...meta, status, ...(status !== current ? { statusChangedAt: new Date().toISOString() } : {}), distribution: distributionOf(meta) };
+    const row = await deps.drafts.update({ where: { id: existing.id }, select: COLUMNS, data: {
+      content: joinContent(body, nextMeta),
+      ...(title !== undefined ? { title: title || null } : {}),
+    } });
     return { draft: parse(row) };
+  }));
+  /** Records that this draft left Studio for Compose. A navigation fact — not a publication claim. */
+  router.post('/drafts/:id/handoff', handle(async req => {
+    const workspace = await scope(req, true);
+    const channel = req.body?.channel;
+    if (typeof channel !== 'string' || !(HANDOFF_CHANNELS as readonly string[]).includes(channel)) throw new StudioRouteError(422, 'Handoff channel must be compose.');
+    const existing = await owned(req, workspace);
+    const { body, meta } = splitContent(existing.content);
+    const status = statusOf(meta);
+    if (status === 'archived') throw new StudioRouteError(409, 'Restore this archived draft before continuing it in Compose.');
+    const distribution = distributionOf(meta);
+    const at = new Date().toISOString();
+    const prior = distribution.handoffs.find(h => h.channel === channel);
+    const handoffs = prior
+      ? distribution.handoffs.map(h => h.channel === channel ? { channel, at, count: h.count + 1 } : h)
+      : [...distribution.handoffs, { channel, at, count: 1 }].slice(-5);
+    const row = await deps.drafts.update({ where: { id: existing.id }, select: COLUMNS,
+      data: { content: joinContent(body, { ...meta, status, distribution: { ...distribution, handoffs } }) } });
+    return { draft: parse(row) };
+  }));
+  /**
+   * Links a draft to posts that already exist in this workspace. Every id is verified
+   * against the caller's workspace, so a client cannot fabricate a reference; a stored
+   * status is queue/publish state only, never engagement, reach or conversion.
+   */
+  router.post('/drafts/:id/distribution', handle(async req => {
+    const workspace = await scope(req, true);
+    const ids = req.body?.post_ids;
+    if (!Array.isArray(ids) || ids.length === 0 || ids.length > 20 || ids.some(id => typeof id !== 'string' || !POST_ID.test(id))) {
+      throw new StudioRouteError(422, 'post_ids must be 1 to 20 post ids.');
+    }
+    const existing = await owned(req, workspace);
+    const { body, meta } = splitContent(existing.content);
+    if (statusOf(meta) === 'archived') throw new StudioRouteError(409, 'Restore this archived draft before linking distribution.');
+    const rows = await deps.posts.findMany({ where: { workspaceId: workspace, id: { in: ids } }, select: { id: true, status: true } });
+    if (rows.length === 0) throw new StudioRouteError(422, 'No post in this workspace matched those ids; nothing was linked.');
+    const distribution = distributionOf(meta);
+    const at = new Date().toISOString();
+    const posts = [...distribution.posts];
+    for (const found of rows) {
+      const ref: PostRef = { id: found.id, status: String(found.status), at };
+      const index = posts.findIndex(p => p.id === found.id);
+      if (index >= 0) posts[index] = ref; else posts.push(ref);
+    }
+    const row = await deps.drafts.update({ where: { id: existing.id }, select: COLUMNS,
+      data: { content: joinContent(body, { ...meta, distribution: { ...distribution, posts: posts.slice(-MAX_POST_REFS) } }) } });
+    return { draft: parse(row), linked: rows.length };
   }));
   return router;
 }

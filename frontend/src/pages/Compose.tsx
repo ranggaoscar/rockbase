@@ -24,6 +24,7 @@ import {
 import { cn, statusLabel } from '@/lib/utils'
 import api, { accountGroupsApi, campaignsApi, postsApi } from '@/lib/api'
 import { trendsApi, type TrendDraft } from '@/components/trends/api'
+import { studioApi, type StudioDraft } from '@/lib/drafts'
 import { AccountLoadoutPresetManager } from '@/components/common/AccountLoadoutPresetManager'
 import type { AccountLoadoutPreset } from '@/lib/accountLoadoutPresets'
 import { CampaignTemplatePresetManager } from '@/components/common/CampaignTemplatePresetManager'
@@ -254,10 +255,18 @@ export default function Compose() {
   const shouldLoadVariationAssignments = searchParams.get('variationAssignments') === '1'
   const trendDraftId = searchParams.get('draftId')
   const trendWorkspaceId = searchParams.get('workspace_id')
+  // A Studio draft can be continued here; applying it stays an explicit click.
+  const studioDraftId = searchParams.get('studioDraftId')
+  const studioDraftWorkspaceId = searchParams.get('workspace_id')
   const [trendDraft, setTrendDraft] = useState<TrendDraft | null>(null)
   const [trendDraftLoading, setTrendDraftLoading] = useState(false)
   const [trendDraftError, setTrendDraftError] = useState('')
   const [trendDraftApplied, setTrendDraftApplied] = useState(false)
+  const [studioDraft, setStudioDraft] = useState<StudioDraft | null>(null)
+  const [studioDraftLoading, setStudioDraftLoading] = useState(false)
+  const [studioDraftError, setStudioDraftError] = useState('')
+  const [studioDraftApplied, setStudioDraftApplied] = useState(false)
+  const [studioLinkNote, setStudioLinkNote] = useState('')
   const [accounts, setAccounts] = useState<Account[]>([])
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [accountGroups, setAccountGroups] = useState<AccountGroupSummary[]>([])
@@ -319,6 +328,52 @@ export default function Compose() {
       .finally(() => { if (!cancelled) setTrendDraftLoading(false) })
     return () => { cancelled = true }
   }, [trendDraftId, trendWorkspaceId])
+
+  // Studio draft handoff: read-only preview until the operator applies it.
+  useEffect(() => {
+    setStudioDraft(null); setStudioDraftApplied(false); setStudioLinkNote('')
+    if (!studioDraftId || !studioDraftWorkspaceId) { setStudioDraftError(''); setStudioDraftLoading(false); return }
+    let cancelled = false
+    setStudioDraftLoading(true); setStudioDraftError('')
+    studioApi.get(studioDraftId, studioDraftWorkspaceId)
+      .then(({ data }) => { if (!cancelled) setStudioDraft(data.draft) })
+      .catch((error: unknown) => {
+        const value = error as { response?: { data?: { error?: string } }; message?: string }
+        if (!cancelled) setStudioDraftError(value.response?.data?.error || value.message || 'Studio draft could not be loaded.')
+      })
+      .finally(() => { if (!cancelled) setStudioDraftLoading(false) })
+    return () => { cancelled = true }
+  }, [studioDraftId, studioDraftWorkspaceId])
+
+  function applyStudioDraftToCaption() {
+    if (!studioDraft || studioDraftLoading || studioDraft.id !== studioDraftId) return
+    setCaption(studioDraft.body)
+    setStudioDraftApplied(true)
+    setVisionPlans([])
+    setMode('broadcast')
+    setSelected(new Set())
+    setSelectedGroupIds(new Set())
+    setMediaFiles([])
+    setMediaPreviews([])
+  }
+
+  /**
+   * After posts exist, asks the Studio store to link them to the draft it came from.
+   * The server verifies every id belongs to this workspace; the stored status is queue
+   * state only, never engagement, reach or conversion.
+   */
+  async function linkStudioPosts(posts: Array<{ id?: string }> | undefined) {
+    if (!studioDraftId || !studioDraftWorkspaceId || !studioDraftApplied || !studioDraft) return
+    const ids = (posts ?? []).map((post) => post?.id).filter((id): id is string => typeof id === 'string')
+    if (ids.length === 0) return
+    try {
+      const { data } = await studioApi.linkPosts(studioDraftId, studioDraftWorkspaceId, ids)
+      setStudioDraft(data.draft)
+      setStudioLinkNote(`Linked ${data.linked} queued post${data.linked === 1 ? '' : 's'} back to the Studio draft. Queue state only — not engagement.`)
+    } catch {
+      setStudioLinkNote('The submit returned post ids, but distribution linking did not finish. Some references may already be saved; check Studio before retrying. The posting submission was not repeated.')
+    }
+  }
 
   function applyTrendDraftToCaption() {
     if (!trendDraft || trendDraftLoading || trendDraft.id !== trendDraftId || trendDraft.workspaceId !== trendWorkspaceId) return
@@ -1058,6 +1113,7 @@ export default function Compose() {
       const { data } = await postsApi.bulkMulti(formData)
 
       toast.success(data.message || `Queued posts successfully`)
+      await linkStudioPosts(data.posts)
       const skipped = new Set([
         ...unhealthyAccounts.map(a => a.id),
         ...(data.skippedAccounts || []).map((a: any) => a.accountId),
@@ -1130,7 +1186,8 @@ export default function Compose() {
       }
 
       mediaFiles.forEach((file) => formData.append('media', file))
-      await postsApi.bulkMulti(formData)
+      const { data } = await postsApi.bulkMulti(formData)
+      await linkStudioPosts(data.posts)
       setResults(prev => prev.map(p => failedIds.has(p.accountId) ? { ...p, status: 'success', error: undefined } : p))
       toast.success('Retry queued with media')
     } catch (err: any) {
@@ -1333,6 +1390,28 @@ export default function Compose() {
                 <details className="min-w-0"><summary className="cursor-pointer text-sm text-purple-300">Preview draft & provenance</summary><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-background p-3 font-sans text-xs">{trendDraft.content}</pre></details>
                 {trendDraftApplied && <p role="status" className="text-xs text-emerald-300">Applied to the editor. No accounts, media, schedule, queue or publish action was selected.</p>}
                 <Button type="button" variant="outline" onClick={applyTrendDraftToCaption} aria-label="Apply Trend Radar draft to caption">Apply to caption editor</Button>
+              </>}
+            </CardContent>
+          </Card>
+        )}
+
+        {(studioDraftLoading || studioDraft || studioDraftError) && (
+          <Card className="border-patina/30 bg-patina/[0.04]">
+            <CardContent className="space-y-3 p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="outline" className="border-patina/40 text-patina">Studio draft</Badge>
+                <p className="text-sm font-bold">{studioDraftLoading ? 'Loading saved draft…' : studioDraft?.title || 'Draft unavailable'}</p>
+                {studioDraft && <Badge variant="outline" className="border-border text-muted-foreground">{studioDraft.status.replace('_', ' ')}</Badge>}
+              </div>
+              {studioDraftError && <p role="alert" className="break-words text-sm text-red-300">{studioDraftError}</p>}
+              {studioDraft && <>
+                <p className="text-xs text-muted-foreground">Read-only here. Applying copies the draft text into the caption editor; accounts, media, schedule and pacing stay yours to choose. Nothing is posted by applying.</p>
+                {studioDraft.format === 'article' && <p className="rounded-md border border-ochre/30 bg-ochre/[0.06] px-3 py-2 text-xs text-ochre">This is an article brief, not a caption. It's easier to export in Studio. <a className="underline" href={`/studio/s/${encodeURIComponent(studioDraft.id)}?workspace_id=${encodeURIComponent(studioDraft.workspaceId)}`}>Open in Studio</a></p>}
+                <details className="min-w-0"><summary className="cursor-pointer text-sm text-patina">Preview draft</summary><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-background p-3 font-sans text-xs">{studioDraft.body}</pre></details>
+                <p className="text-xs text-muted-foreground"><a className="underline" href={`/studio/s/${encodeURIComponent(studioDraft.id)}?workspace_id=${encodeURIComponent(studioDraft.workspaceId)}`}>Edit the saved draft in Studio</a> — this preview never writes back to it.</p>
+                {studioDraftApplied && <p role="status" className="text-xs text-emerald-300">Applied to the editor. No accounts, media, schedule, queue or publish action was selected.</p>}
+                {studioLinkNote && <p role="status" className="break-words text-xs text-muted-foreground">{studioLinkNote}</p>}
+                <Button type="button" variant="outline" onClick={applyStudioDraftToCaption} aria-label="Apply Studio draft to caption editor">Apply to caption editor</Button>
               </>}
             </CardContent>
           </Card>

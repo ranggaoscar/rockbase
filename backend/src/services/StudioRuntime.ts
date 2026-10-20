@@ -10,5 +10,7 @@ export function studioDependencies(): StudioDependencies { return {
   }),
   brands: workspaceBrands,
   drafts: prisma.draft,
+  // Existence check only: the Studio store never creates or mutates posts.
+  posts: prisma.post,
 }; }
 export const studioRouter = createStudioRouter(studioDependencies());

@@ -4,10 +4,10 @@ import { FileText, Film, HardDriveUpload, Loader2, MessageSquareText, PenLine, P
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import Sheet from '@/components/growth/Sheet'
-import { EffectTag, GradeTag, Notice, PageHeader, SectionTitle, Void, ago, type Grade } from '@/components/growth/grammar'
+import { EffectTag, GradeTag, Notice, PageHeader, SectionTitle, StatusTag, Void, ago, type Grade } from '@/components/growth/grammar'
 import { isLocalMode } from '@/components/layout/nav'
 import { useWorkContext } from '@/lib/brandRegistry'
-import { draftHref, errorMessage, formatLabel, loadLibrary, movedOriginals, moveNotesToRockBase, newNoteId, removeMovedOriginals, scopeDrafts, originLabel, saveStudioNote, studioApi, unmovedNotes, type DraftFormat, type LibraryDraft, type LibraryLoad, type StudioFormat } from '@/lib/drafts'
+import { draftHref, errorMessage, formatLabel, loadLibrary, movedOriginals, moveNotesToRockBase, newNoteId, removeMovedOriginals, scopeDrafts, originLabel, saveStudioNote, statusLabel, statusOrder, studioApi, unmovedNotes, type DraftFormat, type LibraryDraft, type LibraryLoad, type StudioFormat, type StudioStatus } from '@/lib/drafts'
 import { cn } from '@/lib/utils'
 import Tilt from '@/components/growth/Tilt'
 
@@ -33,6 +33,13 @@ function Slab({ tone, className }: { tone: string; className?: string }) {
 const formatIcon: Record<DraftFormat, typeof FileText> = { article: FileText, social_post: MessageSquareText, reel: Film, caption: MessageSquareText }
 const classGrade: Record<string, Grade> = { gsc_opportunity: 'measured', rising_trend: 'observed', trend_observation: 'observed', content_idea: 'idea' }
 type Filter = 'all' | 'article' | 'social'
+/** 'active' is everything not archived: the default view of work in progress. */
+type StatusFilter = 'active' | StudioStatus
+const statusOf = (d: LibraryDraft): StudioStatus => d.status ?? 'draft'
+const STATUS_TABS: ReadonlyArray<{ key: StatusFilter; label: string }> = [
+  { key: 'active', label: 'Active' },
+  ...statusOrder.map((s) => ({ key: s as StatusFilter, label: statusLabel[s] })),
+]
 
 export default function Studio() {
   const ctx = useWorkContext()
@@ -40,6 +47,7 @@ export default function Studio() {
   const [params, setParams] = useSearchParams()
   const [load, setLoad] = useState<LibraryLoad | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('active')
   const [query, setQuery] = useState('')
   const [nonce, setNonce] = useState(0)
   const [busy, setBusy] = useState<StudioFormat | null>(null)
@@ -56,13 +64,27 @@ export default function Studio() {
     return () => ctl.abort()
   }, [ctx.workspaceId, ctx.registry.status, nonce])
 
-  const drafts = useMemo(() => {
+  /** Brand + format + search scope; the status tabs count inside it so the numbers agree with the rows. */
+  const scoped = useMemo(() => {
     const q = query.trim().toLowerCase()
     return scopeDrafts(load?.drafts ?? [], ctx.brandKey).filter((d) =>
       (filter === 'all' || (filter === 'article' ? d.format === 'article' : d.format !== 'article'))
       && (!q || `${d.title} ${d.excerpt} ${d.topic ?? ''}`.toLowerCase().includes(q)),
     )
   }, [load, filter, query, ctx.brandKey])
+  const counts = useMemo(() => {
+    const base: Record<StatusFilter, number> = { active: 0, draft: 0, in_review: 0, ready: 0, archived: 0 }
+    for (const d of scoped) {
+      const status = statusOf(d)
+      base[status] += 1
+      if (status !== 'archived') base.active += 1
+    }
+    return base
+  }, [scoped])
+  const drafts = useMemo(
+    () => scoped.filter((d) => (statusFilter === 'active' ? statusOf(d) !== 'archived' : statusOf(d) === statusFilter)),
+    [scoped, statusFilter],
+  )
 
   const articles = drafts.filter((d) => d.format === 'article')
   const social = drafts.filter((d) => d.format !== 'article')
@@ -150,18 +172,32 @@ export default function Studio() {
         </Notice>
       )}
 
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex gap-1.5" role="tablist" aria-label="Filter by format">
-          {([['all', 'All'], ['article', 'Articles & briefs'], ['social', 'Social']] as const).map(([key, label]) => (
-            <button key={key} role="tab" aria-selected={filter === key} onClick={() => setFilter(key)} className={cn('rounded-full border px-3.5 py-1.5 text-xs transition-colors', filter === key ? 'border-patina/40 bg-patina/10 text-foreground' : 'border-border text-muted-foreground hover:text-foreground')}>{label}</button>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Filter by review status">
+          {STATUS_TABS.map((tab) => (
+            <button key={tab.key} role="tab" aria-selected={statusFilter === tab.key} onClick={() => setStatusFilter(tab.key)}
+              className={cn('inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs transition-colors',
+                statusFilter === tab.key ? 'border-patina/40 bg-patina/10 text-foreground' : 'border-border text-muted-foreground hover:text-foreground')}>
+              {tab.label}<span className="font-data text-[10px] text-muted-foreground">{counts[tab.key]}</span>
+            </button>
           ))}
         </div>
-        <div className="ml-auto w-full sm:w-64"><Input aria-label="Search drafts" placeholder="Search drafts…" value={query} onChange={(e) => setQuery(e.target.value)} leftIcon={<Search />} /></div>
+        <div className="ml-auto flex w-full items-center gap-2 sm:w-auto">
+          <div className="flex gap-1" role="group" aria-label="Filter by format">
+            {([['all', 'All formats'], ['article', 'Articles'], ['social', 'Social']] as const).map(([key, label]) => (
+              <button key={key} aria-pressed={filter === key} onClick={() => setFilter(key)}
+                className={cn('rounded-lg px-2 py-1 text-[11px] transition-colors', filter === key ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground')}>{label}</button>
+            ))}
+          </div>
+          <div className="w-full sm:w-56"><Input aria-label="Search drafts" placeholder="Search drafts…" value={query} onChange={(e) => setQuery(e.target.value)} leftIcon={<Search />} /></div>
+        </div>
       </div>
+
+      {statusFilter === 'archived' && <p className="text-xs text-muted-foreground">Archived drafts are closed, not deleted. Open one and choose <span className="text-foreground">Restore</span> to keep editing it.</p>}
 
       {!load ? <div className="grid gap-3 md:grid-cols-2">{[0, 1, 2, 3].map((i) => <div key={i} className="h-28 animate-pulse rounded-lg bg-secondary/40" />)}</div>
         : scopeDrafts(load.drafts, ctx.brandKey).length === 0 ? <EmptyStudio onNew={() => setParams({ new: '1' })} />
-        : drafts.length === 0 ? <Void reason="No drafts match this filter." />
+        : drafts.length === 0 ? <Void reason={statusFilter === 'archived' ? 'Nothing archived yet.' : statusFilter === 'ready' ? 'No draft is ready yet. Open a draft and mark it ready once it has a title and a body.' : 'No drafts match this filter.'} />
         : (
           <div className="grid gap-10 lg:grid-cols-2">
             {(filter !== 'social') && <Shelf title="Articles & briefs" hint="Exported, not published — RockBase has no CMS connection." drafts={articles} workspaceId={ctx.workspaceId} />}
@@ -213,6 +249,7 @@ function Shelf({ title, hint, drafts, workspaceId }: { title: string; hint: stri
                     {d.excerpt && <span className="mt-0.5 line-clamp-2 block text-[13px] text-muted-foreground">{d.excerpt}</span>}
                     <span className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
                       <span>{formatLabel[d.format]}</span>
+                      {d.status && <StatusTag status={d.status} />}
                       {d.classification ? <GradeTag grade={classGrade[d.classification] ?? 'idea'}>{originLabel[d.origin]}{d.topic ? ` · ${d.topic}` : ''}</GradeTag> : <span>{originLabel[d.origin]}</span>}
                       <span className={cn('inline-flex items-center gap-1', d.store === 'browser' ? 'text-ochre' : 'text-patina/90')}><span className={cn('h-1.5 w-1.5 rounded-full', d.store === 'browser' ? 'bg-ochre' : 'bg-patina')} />{d.store === 'browser' ? 'This browser' : 'RockBase'}</span>
                       {!d.brandKey && <span>No brand</span>}

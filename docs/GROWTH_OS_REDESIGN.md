@@ -99,15 +99,38 @@ provenance rejected, empty title rejected, edit preserves provenance, hostile or
 - Each draft carries title, body, format (`article | social_post | reel`), `brandKey` (validated against the workspace brand registry the UI uses) and a **server-authored** `source` (`blank`, `caption_copy`, `browser_import` with the browser id/created time). The metadata sits behind the same provenance separator as Radar briefs and is re-attached on every PATCH; a body containing the separator is rejected (422).
 - Local Mode: loopback local owner + host/origin gate (as Trends). Server Mode: WorkspaceUser membership decides the workspace (Admin is not a bypass; foreign workspaces answer 404), writes need Admin/Operator.
 - Moving browser notes is idempotent per workspace + browser id. Originals stay in the browser (hidden from the library, shown as a backup count) until the operator confirms **Remove browser copies**.
-- No delete endpoint yet; no queue, post, Google or AI call.
+- No delete endpoint; archiving is the closing action. The Studio router reads existing Post ids/statuses for reference verification only; it never writes posts, invokes a publisher or queue, or calls Google/AI.
 
-`studio-draft-routes-test.ts`: **81 assertions pass** — namespace, validation 422, cross-workspace 404, Radar rows invisible to Studio, metadata-preserving edit, idempotent parallel move, local origin 403, Server Mode membership/role gates, import allow-list.
+`studio-draft-routes-test.ts`: **139 assertions pass** — namespace, validation 422, cross-workspace 404, Radar rows invisible to Studio, metadata-preserving edit, idempotent parallel move, review state machine, archived lock, Compose handoff, verified post references, local origin 403, Server Mode membership/role gates, import allow-list, word-boundary excerpt.
+
+## Phase 6 — one content workflow, end to end
+
+The journey is now carried by the same store, with no second dashboard, database or content system:
+
+**Opportunity (GSC / Radar / SEO) → Studio → Review → Ready → Compose → Publish → Activity**
+
+- **Review status is real persistence.** Every Studio draft carries `status` (`draft | in_review | ready | archived`) and `statusChangedAt` inside the same provenance block, on the same `Draft` row. No migration, no extra table.
+- **The state machine is server-side.** `draft ↔ in_review`, either → `ready`, any → `archived`; `archived` leaves only through Restore (→ `draft`). A move the server refuses is not offered in the UI. `ready` requires a non-empty title and body — a 422 keeps the client honest.
+- **A status move includes current edits.** The editor sends `{body, title, status}` in one PATCH when there are unsaved edits, so "Mark ready" saves that submitted text. This is not revision history or concurrent-edit protection. `archived` drafts are read-only (edit and handoff answer 409) until restored; Today excludes archived drafts from "Continue".
+- **Handoff is explicit and honest.** `POST /api/studio/drafts/:id/handoff {channel:'compose'}` records "opened in Compose" (channel, timestamp, count) — a navigation fact, not a publication. The editor then opens Compose with `?studioDraftId=…`; Compose shows the draft read-only until the operator presses **Apply to caption editor**.
+- **Distribution references are verified, not claimed.** `POST /api/studio/drafts/:id/distribution {post_ids[]}` only stores ids that exist as `Post` rows in the caller's workspace (`findMany`, read-only). If no supplied id matches, it returns 422 and nothing is linked; a mixed batch links only the matching ids and reports their count. A linked Post is a verified distribution reference, not proof of content equality, successful publication, engagement, reach or conversion. Its stored status is a queue/publish snapshot at link time.
+- **Handoff to the existing publisher.** No new publisher was added: Compose still queues through `/api/posts/bulk-multi`. After a real submit, Compose asks the Studio store to link the returned post ids in sequential batches of at most 20. A later batch failure can leave earlier references saved; the UI reports incomplete linking without retrying the posting submission. Each draft retains at most the latest 50 references, so the linked count is the processed count, not an all-time retained total.
+- **Export stays the article path.** Article briefs download as `.md` with the title as an H1; RockBase still has no CMS connection and says so.
+- **Library.** Status tabs with counts (Active = not archived, Draft, In review, Ready, Archived), a status badge per row, format filter and search; archived rows are dashed and excluded by default.
+
+Limitations, stated plainly:
+
+- The distribution endpoint verifies only existence in the workspace's `Post` table; it does not prove content equality or how the post originated. The Compose UI requests this link only after applying a Studio draft and receiving post ids from the existing submit flow, but the caption can be edited before submitting. The endpoint does not verify that UI sequence.
+- The list endpoint filters status after a bounded read (200 most recently updated rows per workspace); a workspace with more than 200 drafts could hide an older one from a status tab until it is opened directly.
+- No delete endpoint and no multi-user review: `in_review` means "someone is reviewing it" in a single-operator Local Mode; Server Mode still gates writes by membership and role, not by a reviewer assignment.
+- Post status stored on a reference is a snapshot from the moment of linking; RockBase does not refresh it or derive engagement/ reach/ conversion from it.
 
 ## Incremental plan
 
 - **Done in shell/UI:** IA, tokens, grammars, Today, Radar, Site & Search, Studio, Results, Publish/Setup hubs, Queue trust, AI Writer neutrality, mobile.
 - **Done in API:** workspace Studio draft store for blank drafts (see Persistence).
-- **Needs persistence/API next:** deleting/archiving Studio drafts; draft status (draft/in review/ready) with real persistence; a link from a published post or exported article back to its brief so Results can show *related* (not attributed) changes.
+- **Done in API (Phase 6):** review status with real persistence, archive/restore, Compose handoff and verified post references back to the draft (see *Phase 6*).
+- **Still open:** a link from an *exported article* back to its brief so Results can show *related* (not attributed) changes — export leaves RockBase, so there is nothing to verify against yet.
 - **Deliberately deferred:** social reach/engagement analytics (no real source), any growth score, AI auto-publish, multi-user review (Local Mode is single-operator), route-level code-splitting (bundle is 1.18 MB, mainly legacy Campaigns/Compose).
 
 ## Verification
@@ -122,6 +145,35 @@ provenance rejected, empty title rejected, edit preserves provenance, hostile or
   trip; unsaved-changes guard; command palette; no external network hosts; no unnamed buttons.
 - **Not verified:** live backend, real GSC/Google, real Trends feed, real accounts/sessions/queue, AI provider,
   and Compose/Campaigns flows beyond rendering. Fixture UI is not evidence of live integration.
+
+### Phase 6 acceptance — real backend, isolated data
+
+Run against the real Express backend (Local Mode) on an isolated SQLite database created with
+`prisma migrate deploy`, a throwaway SEO brand registry and a throwaway Redis on port 6390
+(`RUN_WORKERS_SEPARATELY=true`, so no posting worker ran). No social session, real database,
+real queue or Google/AI call was touched.
+
+- Studio → new draft → edit → **Mark ready with unsaved text**: one PATCH saved 313 characters *and*
+  set `ready`; `statusChangedAt` recorded.
+- Article brief (232 words) → **Send to review**: status `in_review`; server status filter returned
+  `in_review: [article]`, `ready: [social]`, `draft: []`, `archived: []`.
+- **Archive** → API edit `409 "This draft is archived. Restore it before editing."`, handoff `409`,
+  textareas read-only, Continue in Compose disabled, library `Active 0 / Archived 1`, Today's
+  Continue list excluded it. **Restore** → `draft`, 232 words intact.
+- **Continue in Compose** → handoff recorded (`channel: compose, count: 1`), Compose opened with the
+  draft read-only; **Apply to caption editor** filled the 313-character caption; no account, media,
+  schedule or publish action was selected.
+- **Distribution**: linking `post-acceptance-1` (a `queued` Post row inserted as fixture) returned
+  `200 linked: 1`, and the editor rendered it as `queued · just now` with the "not engagement, reach
+  or conversion" note; a fabricated id returned `422 nothing was linked`.
+- **Export**: `Download .md` produced a Markdown file named from the synthetic article title, starting
+  with the H1 and containing the body. Test content is not owner content or material-specification evidence.
+- Studio library/editor were captured at desktop 1440 and mobile 390; Compose was captured at desktop
+  1440. Captured pages had no console/page errors and `scrollWidth === innerWidth`. Raw screenshots,
+  exported content, databases and local QA paths are intentionally excluded from the public change.
+- **Still not verified:** a real publish (needs a healthy social session, media and the posting worker),
+  so post/activity rows above are fixtures, not publications; multi-workspace isolation in Server Mode
+  is covered by route tests, not by this browser run.
 
 ### Reproduce the preview
 
