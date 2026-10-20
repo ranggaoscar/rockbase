@@ -169,8 +169,8 @@ export const activityApi = {
     limit?: number
   }) => api.get('/activity', { params }),
   queueSummary: () => api.get('/activity/queue-summary'),
-  operationsSummary: () => api.get('/activity/operations-summary'),
-  publishingQueue: () => api.get('/activity/publishing-queue'),
+  operationsSummary: (workspaceId?: string) => api.get('/activity/operations-summary', { params: workspaceId ? { workspace_id: workspaceId } : undefined }),
+  publishingQueue: (workspaceId?: string) => api.get('/activity/publishing-queue', { params: workspaceId ? { workspace_id: workspaceId } : undefined }),
 }
 
 export const systemApi = {

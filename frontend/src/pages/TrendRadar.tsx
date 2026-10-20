@@ -12,6 +12,7 @@ import { defaultDiscoveryConfig, trendsApi, type BrandWatch, type DiscoveryConfi
 import { isLocalMode } from '@/components/layout/nav'
 import { useAppStore } from '@/store/useAppStore'
 import { cn } from '@/lib/utils'
+import { useWorkContext } from '@/lib/brandRegistry'
 
 type Classification = TrendCandidate['classification']
 const classificationLabels: Record<Classification, string> = {
@@ -49,6 +50,7 @@ function ModeUnavailable() {
 }
 
 function RadarWorkspace() {
+  const linkedContext = useWorkContext() // Resolve authorized Today deep-link context before loading brand evidence.
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
   const context = useAppStore((s) => s.context)
@@ -81,7 +83,7 @@ function RadarWorkspace() {
   const captureController = useRef<AbortController | null>(null)
 
   // Scope comes from the global brand context when it is valid for Radar's registry.
-  const workspaceId = workspaces.some((w) => w.id === context.workspaceId) ? context.workspaceId : workspaces[0]?.id || ''
+  const workspaceId = linkedContext.scopeError ? '' : workspaces.some((w) => w.id === context.workspaceId) ? context.workspaceId : workspaces[0]?.id || ''
   const scopedBrands = brands.filter((b) => b.workspace_id === workspaceId)
   const brandKey = scopedBrands.some((b) => b.key === context.brandKey) ? context.brandKey : ''
   const brandName = scopedBrands.find((b) => b.key === brandKey)?.name ?? ''
@@ -101,10 +103,11 @@ function RadarWorkspace() {
   }, [scope])
 
   const loadBrands = useCallback(async (signal?: AbortSignal) => {
+    if (linkedContext.scopeError) { setError('Invalid Today workspace or brand. Choose an authorized context.'); return }
     const { data } = await trendsApi.brands(context.workspaceId || undefined, signal)
     if (signal?.aborted) return
     setWorkspaces(data.workspaces || []); setBrands(data.brands || []); setWatchlists(data.watchlists || []); setRegistryLoaded(true)
-  }, [context.workspaceId])
+  }, [context.workspaceId, linkedContext.scopeError])
 
   useEffect(() => {
     const controller = new AbortController()

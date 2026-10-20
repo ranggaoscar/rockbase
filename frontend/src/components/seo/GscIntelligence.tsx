@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, CheckCircle2, ExternalLink, KeyRound, Loader2, Lock, PenLine, RefreshCw, Search, ShieldCheck, Unplug } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -176,7 +176,8 @@ function Performance({ website, workspaceId }: { website?: Website; workspaceId:
   const [loading, setLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [savingMapping, setSavingMapping] = useState(false)
-  const [query, setQuery] = useState('')
+  const [contextParams] = useSearchParams()
+  const [query, setQuery] = useState(contextParams.get('q') || '')
   const [rowPage, setRowPage] = useState(0)
   const [showAllQueries, setShowAllQueries] = useState(false)
   const scope = `${workspaceId}:${website?.id || ''}`

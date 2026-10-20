@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, CheckCircle2, Clock3, Loader2, PlayCircle, RotateCw, SendHorizontal, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -6,6 +6,7 @@ import { Notice, PageHeader, Void, ago } from '@/components/growth/grammar'
 import { activityApi } from '@/lib/api'
 import { timeAgo } from '@/lib/utils'
 import { cn } from '@/lib/utils'
+import { useWorkContext } from '@/lib/brandRegistry'
 
 type QueueStatus = 'all' | 'queued' | 'running' | 'delayed' | 'needs_attention' | 'completed' | 'failed'
 
@@ -46,6 +47,9 @@ const appearance: Record<Exclude<QueueStatus, 'all'>, { label: string; icon: typ
  * as an empty queue — an operator who sees "nothing queued" might resubmit.
  */
 export default function Queue() {
+  const ctx = useWorkContext()
+  const activeWorkspace = useRef(ctx.workspaceId)
+  activeWorkspace.current = ctx.workspaceId
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
   const [rows, setRows] = useState<QueueRow[]>([])
@@ -55,17 +59,21 @@ export default function Queue() {
   const filter = (filters.some((f) => f.key === params.get('status')) ? params.get('status') : 'all') as QueueStatus
 
   const load = useCallback(async () => {
+    if (!ctx.workspaceId || ctx.registry.status !== 'ready') return
+    const requested = ctx.workspaceId
     setRefreshing(true)
     try {
-      const { data } = await activityApi.publishingQueue()
+      const { data } = await activityApi.publishingQueue(ctx.workspaceId)
+      if (activeWorkspace.current !== requested) return
       setRows(data.rows || []); setState('ok'); setObservedAt(new Date().toISOString())
     } catch {
+      if (activeWorkspace.current !== requested) return
       // Keep the last good rows visible but mark them as possibly outdated.
       setState('error')
-    } finally { setRefreshing(false) }
-  }, [])
+    } finally { if (activeWorkspace.current === requested) setRefreshing(false) }
+  }, [ctx.workspaceId, ctx.registry.status])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { setRows([]); setState('loading'); if (ctx.registry.status === 'ready' && ctx.workspaceId) load() }, [load, ctx.registry.status, ctx.workspaceId])
 
   const visibleRows = useMemo(() => filter === 'all' ? rows : rows.filter((row) => row.status === filter), [filter, rows])
   const countFor = (key: QueueStatus) => key === 'all' ? rows.length : rows.filter((row) => row.status === key).length

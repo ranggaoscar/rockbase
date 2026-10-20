@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { EffectTag, Notice, PageHeader, SectionTitle, Void, ago } from '@/components/growth/grammar'
 import { activityApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { useWorkContext } from '@/lib/brandRegistry'
 
 interface OperationsSummary {
   accounts: { total: number; ready: number; unverified: number; attention: number; disconnected: number }
@@ -26,17 +27,22 @@ const tone = (status: string, action: string) => {
  * This page replaces the old social-operations dashboard as the home for it.
  */
 export default function PublishHub() {
+  const ctx = useWorkContext()
   const [summary, setSummary] = useState<OperationsSummary | null>(null)
   const [state, setState] = useState<'loading' | 'ok' | 'error'>('loading')
   const [observedAt, setObservedAt] = useState('')
   const [nonce, setNonce] = useState(0)
 
   useEffect(() => {
+    if (ctx.registry.status !== 'ready' || !ctx.workspaceId) return
+    let alive = true
+    setSummary(null)
     setState('loading')
-    activityApi.operationsSummary()
-      .then(({ data }) => { setSummary(data); setState('ok'); setObservedAt(new Date().toISOString()) })
-      .catch(() => setState('error'))
-  }, [nonce])
+    activityApi.operationsSummary(ctx.workspaceId)
+      .then(({ data }) => { if (alive) { setSummary(data); setState('ok'); setObservedAt(new Date().toISOString()) } })
+      .catch(() => { if (alive) setState('error') })
+    return () => { alive = false }
+  }, [nonce, ctx.workspaceId, ctx.registry.status])
 
   const noAccounts = state === 'ok' && summary?.accounts.total === 0
 
@@ -61,7 +67,8 @@ export default function PublishHub() {
         </section>
       ) : (
         <section aria-labelledby="pipeline" className="space-y-3">
-          <SectionTitle id="pipeline" aside={observedAt && <button onClick={() => setNonce((n) => n + 1)} className="inline-flex items-center gap-1 hover:text-foreground"><RotateCw className="h-3 w-3" />Observed {ago(observedAt)}</button>}>Pipeline right now</SectionTitle>
+          <SectionTitle id="pipeline" aside={observedAt && <button onClick={() => setNonce((n) => n + 1)} className="inline-flex items-center gap-1 hover:text-foreground"><RotateCw className="h-3 w-3" />Observed {ago(observedAt)}</button>}>Workspace pipeline</SectionTitle>
+          <p className="text-xs text-muted-foreground">{ctx.label}. Counts below are workspace Post database states, not live Redis job counts or marketing outcomes. Brand attribution is not inferred.</p>
           <div className="grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
             <Stat icon={MonitorSmartphone} label="Accounts ready" value={summary?.accounts.ready} detail={summary ? `of ${summary.accounts.total} · ${summary.accounts.unverified} unverified` : ''} loading={state === 'loading'} to="/accounts" />
             <Stat icon={AlertTriangle} label="Need recovery" value={summary?.accounts.attention} detail={summary?.accounts.attention ? 'Open Sessions to reconnect' : 'No sessions need you'} loading={state === 'loading'} to="/farm" warn={Boolean(summary?.accounts.attention)} />
