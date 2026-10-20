@@ -10,6 +10,8 @@ async function main() {
   const previous = process.env.ROCKBASE_MODE;
   process.env.ROCKBASE_MODE = 'local';
   let writes = 0; let brandReads = 0; let brandsDown = false;
+  const findingFixture: any = { competitor: { id: 7, workspace_id: 'w1', brand_key: 'Magrade' }, finding: { id: 'finding-1', category: 'verified_change', title: 'Copy should never be used', reason: 'private heading/body omitted from brief', next_action: 'uncurated task', source_urls: ['https://competitor.example/page'], observed_at: new Date().toISOString(), changes: { heading: { before: 'old heading', after: 'stolen heading' }, description: { before: 'old description', after: 'stolen description' } }, scan_id: '12', competitor_id: '7', brand_key: 'Magrade' } };
+  let findingCalls = 0; let findingAvailable = true; let findingOverride: any = null;
   const drafts = new Map<string, any>();
   // A Radar row in the same table: the Studio router must never list, read or edit it.
   const trendId = 'trend-' + 'a'.repeat(64);
@@ -23,6 +25,7 @@ async function main() {
   const deps: any = {
     workspaces: async (userId: string | null) => userId === null ? all : all.filter(w => members[userId]?.includes(w.id)),
     brands: async (workspace: string) => { brandReads++; if (brandsDown) throw new Error('down'); return workspace === 'w1' ? [{ key: 'Magrade' }] : [{ key: 'Other' }]; },
+    competitorFinding: async (workspace: string, brandKey: string, competitorId: string, scanId: string, findingId: string) => { findingCalls++; if (!findingAvailable) return null; const evidence = findingOverride || findingFixture; return workspace === 'w1' && brandKey === 'Magrade' && competitorId === '7' && scanId === '12' && findingId === 'finding-1' ? evidence : null; },
     drafts: {
       create: async ({ data }: any) => { if (drafts.has(data.id)) throw new Error('unique'); writes++; drafts.set(data.id, { ...data, createdAt: new Date(), updatedAt: new Date() }); return pick(drafts.get(data.id)); },
       upsert: async ({ where, create }: any) => { await new Promise(r => setTimeout(r, 5)); if (!drafts.has(where.id)) { writes++; drafts.set(where.id, { ...create, createdAt: new Date(), updatedAt: new Date() }); } return pick(drafts.get(where.id)); },
@@ -57,6 +60,22 @@ async function main() {
     const branded = await call('/drafts', { ...blank, format: 'reel', brand_key: 'Magrade' });
     const b = (await branded.json() as any).draft; assert.equal(branded.status, 200); assert.equal(b.brandKey, 'Magrade'); assert.equal(b.format, 'reel'); assert.equal(b.title, ''); assertions += 4;
     const second = (await (await call('/drafts', blank)).json() as any).draft; assert.notEqual(second.id, a.id); assertions++;
+    // ── Competitor evidence handoff is server-authored and idempotent ─────
+    const findingInput = { workspace_id: 'w1', format: 'article', brand_key: 'Magrade', title: 'forged title', body: 'forged competitor quote', source: { kind: 'competitor_finding', competitor_id: '7', finding_id: 'finding-1', scan_id: '12', brand_key: 'Magrade' } };
+    const findingWriteStart = writes;
+    const handed = await Promise.all([call('/drafts', findingInput), call('/drafts', findingInput)]);
+    const [handedA, handedB] = await Promise.all(handed.map(r => r.json() as Promise<any>));
+    assert(handed.every(r => r.status === 200)); assert.equal(handedA.draft.id, handedB.draft.id); assert.equal(writes, findingWriteStart + 1); assertions += 3;
+    assert.equal(handedA.draft.source.kind, 'competitor_finding'); assert.equal(handedA.draft.source.evidence.category, 'verified_change'); assertions += 2;
+    assert.doesNotMatch(handedA.draft.title + handedA.draft.body, /forged|stolen heading|stolen description|Copy should never|private heading|uncurated/); assert.match(handedA.draft.body, /https:\/\/competitor.example\/page/); assert.match(handedA.draft.body, /heading, description/); assertions += 3;
+    assert.equal(findingCalls, 2); assertions++;
+    findingOverride = { ...findingFixture, finding: { ...findingFixture.finding, category: 'baseline' } };
+    assert.equal((await call('/drafts', findingInput)).status, 422); findingOverride = null; assertions++;
+    findingOverride = { ...findingFixture, finding: { ...findingFixture.finding, observed_at: '2020-01-01T00:00:00.000Z' } };
+    assert.equal((await call('/drafts', findingInput)).status, 422); findingOverride = null; assertions++;
+    findingAvailable = false; assert.equal((await call('/drafts', findingInput)).status, 404); findingAvailable = true; assertions++;
+    assert.equal((await call('/drafts', { ...findingInput, brand_key: 'Other' })).status, 422); assertions++;
+    assert.equal((await call('/drafts', { ...findingInput, source: { ...findingInput.source, finding_id: 'forged-id' } })).status, 404); assertions++;
     // ── Validation (422) and workspace (404) ──────────────────────────────
     const before = writes;
     for (const bad of [
@@ -70,7 +89,7 @@ async function main() {
     assert.equal(writes, before); assertions++;
     // ── Library: own namespace, own workspace ─────────────────────────────
     const listed = (await (await call('/drafts?workspace_id=w1')).json() as any).drafts;
-    assert.equal(listed.length, 3); assert(listed.every((d: any) => d.id.startsWith('studio-'))); assert(listed.every((d: any) => !('body' in d) && !/Provenance/.test(d.excerpt))); assertions += 3;
+    assert.equal(listed.length, 4); assert(listed.every((d: any) => d.id.startsWith('studio-'))); assert(listed.every((d: any) => !('body' in d) && !/Provenance/.test(d.excerpt))); assertions += 3;
     assert.equal((await (await call('/drafts?workspace_id=w2')).json() as any).drafts.length, 0); assertions++;
     assert.equal((await call(`/drafts/${a.id}?workspace_id=w2`)).status, 404); assertions++;
     assert.equal((await call(`/drafts/${trendId}?workspace_id=w1`)).status, 404); assertions++;
@@ -148,9 +167,9 @@ async function main() {
     assert.equal(afterLink.draft.distribution.handoffs[0].count, 2); assert.equal(afterLink.draft.brandKey, 'Magrade'); assertions += 4;
     // Library summaries carry status and distribution, never the body.
     const summaries = (await (await call('/drafts?workspace_id=w1')).json() as any).drafts;
-    assert.equal(summaries.length, 4); assert(summaries.every((s: any) => typeof s.status === 'string' && !('body' in s)));
+    assert.equal(summaries.length, 5); assert(summaries.every((s: any) => typeof s.status === 'string' && !('body' in s)));
     assert.equal(summaries.find((s: any) => s.id === b.id).distribution.posts.length, 1);
-    assert.equal((await (await call('/drafts?workspace_id=w1&status=draft')).json() as any).drafts.length, 4); assertions += 4;
+    assert.equal((await (await call('/drafts?workspace_id=w1&status=draft')).json() as any).drafts.length, 5); assertions += 4;
     // Radar rows and foreign workspaces still answer the same way for the new routes.
     assert.equal((await call(`/drafts/${trendId}/handoff`, { workspace_id: 'w1', channel: 'compose' })).status, 404); assertions++;
     assert.equal((await call(`/drafts/${b.id}/handoff`, { workspace_id: 'w2', channel: 'compose' })).status, 404); assertions++;
@@ -163,7 +182,7 @@ async function main() {
     process.env.ROCKBASE_MODE = 'server';
     assert.equal((await call('/drafts?workspace_id=w1')).status, 401); assertions++;
     const memberList = await call('/drafts?workspace_id=w1', undefined, 'GET', as('op'));
-    assert.equal(memberList.status, 200); assert.equal((await memberList.json() as any).drafts.length, 4); assertions += 2;
+    assert.equal(memberList.status, 200); assert.equal((await memberList.json() as any).drafts.length, 5); assertions += 2;
     assert.equal((await call('/drafts', blank, 'POST', as('op'))).status, 200); assertions++;
     assert.equal((await call('/drafts?workspace_id=w1', undefined, 'GET', as('viewer'))).status, 200); assertions++;
     const serverWrites = writes;

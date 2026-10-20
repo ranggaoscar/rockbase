@@ -79,6 +79,7 @@ def extract_page(url, response, chain, site, *, html=None, render_mode="http", e
             "first_status_code": first_status, "final_status_code": response.status_code,
             "title": soup.title.get_text(" ", strip=True) if soup.title else "", "description": meta("description"),
             "h1": [x.get_text(" ", strip=True) for x in soup.find_all("h1")], "canonical": canonical,
+            "headings": [{"level": int(x.name[1]), "text": x.get_text(" ", strip=True)[:500]} for x in soup.find_all(re.compile(r"^h[1-6]$"), limit=100)],
             "canonical_invalid": canonical_invalid, "canonical_targets": list(dict.fromkeys(canonical_values[:MAX_LINK_EDGES])),
             "meta_robots": robots, "x_robots_tag": x_robots, "indexable": indexable,
             "content_type": content_type, "redirect_chain": chain, "internal_links": links,

@@ -176,6 +176,59 @@ failures or live Redis jobs. Ranking is a source snapshot until explicit re-read
 live SLA or due-date system. Legacy queue-summary/other social routes outside these destinations were
 not comprehensively re-authorized in this phase.
 
+## Phase 8 — competitor website evidence
+
+Native workspace under **Site & Search → Competitors**, also reachable as a focused Radar
+evidence view. No separate application, ranking service, crawler, microservice or scraping SaaS.
+
+- Relationships explicitly bind an existing workspace brand to a public competitor URL. A shared
+  URL can have distinct brand relationships with distinct IDs. The existing SEO SQLite stores
+  relationships beside website/scan/page data; competitors are excluded from owned-site/GSC lists.
+  Owned/competitor URL conflicts and competitor reassignment through owned-site controls are refused.
+- Operator-triggered HTTP-only scans reuse the existing SeoCrawler/PoliteClient, DNS pinning,
+  public-address checks, same-origin redirects, robots rules, rate gate, response limits and 429 halt.
+  No login/browser/CAPTCHA bypass. Limit 25 pages/scan, 20 relationships/workspace and five terminal
+  snapshots per competitor website. Retention never prunes owned-site snapshots. No periodic crawl.
+- Deterministic comparison requires successful HTML observations on both sides; tracked fields are
+  title, description, H1 and bounded H1–H6 headings, canonical, robots/indexability and set-normalized
+  internal links. Unknown historical fields do not imply changes. Times are immutable scan observation
+  times, not known edit dates. A first scan is a baseline; a newly observed URL is not newly published.
+- Failed scans, restricted/non-HTML/challenge pages, 403/404/timeouts and unobserved prior URLs are
+  unavailable/unverified, never deleted or automatically actionable content opportunities. No private
+  competitor traffic, rankings, GSC or inferred demand is claimed.
+- Coverage candidates compare competitor H1 lexical terms with successfully fetched pages from fresh
+  same-brand owned snapshots (30 days). They are low-confidence bounded hypotheses, not proof of a
+  whole-site content gap or demand. Missing/stale owned baselines do not produce gap claims.
+- Today consumes only stored actionable findings and keeps Phase 7 ranking/diversity rules; stale
+  evidence is demoted. Radar opens the same evidence view. Studio handoff explicitly resolves the
+  selected relationship/scan/finding server-side after membership, role, brand and freshness checks,
+  then idempotently prepares an original operator brief in the existing Phase 6 store. The source
+  URLs, observed time and changed field names are preserved in server-held provenance and visible
+  in the editor. Competitor copy is not used as draft text; no AI or publishing is invoked.
+- Server workspace membership is authoritative, including Admin. Writes require Admin/Operator;
+  Local Mode retains loopback owner/origin controls. Invalid brands, mismatched relationships and
+  foreign scans fail closed. Existing owner databases, sessions, credentials, Redis and Android are
+  outside the implementation and acceptance path.
+
+Acceptance uses an isolated real Express gateway, real FastAPI worker and real SeoCrawler with an
+explicit synthetic HTTP transport, isolated SEO/Prisma SQLite and fixture identity. Browser calls are
+not intercepted. Registration → explicit bounded scans → metadata comparison → verified finding →
+Today → focused Radar → original Studio brief/read-back/reload/idempotence was exercised at desktop
+and mobile widths. Robots-disallowed fixture pages were not fetched, and no Post or SocialAccount
+was created. This proves application integration, not a live competitor crawl.
+
+Public evidence is limited to this sanitized acceptance summary and synthetic regression tests.
+Raw databases, screenshots, browser state, scan reports, local QA scripts and owner-specific
+analytics are not part of the change. Focused gates passed: 53 Python tests, 27 competitor gateway
+assertions, 153 Studio assertions, 32 work-queue assertions, backend typecheck and frontend build.
+Separate isolated SQLite/real-route checks covered workspace membership and brand/role boundaries;
+these are not evidence of a live account session or production deployment.
+
+Limits: HTTP snapshots do not render JavaScript; lexical gap analysis is deliberately narrow. Crawl
+page limits are not complete-site coverage; shared competitor-site history serves its explicit brand
+relationships. Pruned evidence cannot create a new draft, while existing Studio provenance remains.
+There is no automatic monitor, CMS integration, ranking/traffic estimate or automatic publication.
+
 ## Incremental plan
 
 - **Done in shell/UI:** IA, tokens, grammars, Today, Radar, Site & Search, Studio, Results, Publish/Setup hubs, Queue trust, AI Writer neutrality, mobile.

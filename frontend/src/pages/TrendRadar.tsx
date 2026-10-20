@@ -13,6 +13,7 @@ import { isLocalMode } from '@/components/layout/nav'
 import { useAppStore } from '@/store/useAppStore'
 import { cn } from '@/lib/utils'
 import { useWorkContext } from '@/lib/brandRegistry'
+import CompetitorIntelligence from '@/components/seo/CompetitorIntelligence'
 
 type Classification = TrendCandidate['classification']
 const classificationLabels: Record<Classification, string> = {
@@ -32,6 +33,8 @@ const errorText = (error: unknown) => {
 }
 
 export default function TrendRadar() {
+  const [params] = useSearchParams()
+  if (params.has('competitor')) return <div className="space-y-5"><Link className="text-sm text-patina underline" to="/trends">← Public trends & search Radar</Link><CompetitorIntelligence /></div>
   if (!isLocalMode) return <ModeUnavailable />
   return <RadarWorkspace />
 }
@@ -234,6 +237,8 @@ function RadarWorkspace() {
           <EffectTag effect="network">Reads the public Trending Now feed</EffectTag>
         </div> : undefined}
       />
+
+      <Link className="inline-flex items-center gap-2 text-sm text-patina underline-offset-4 hover:underline" to="/seo?tab=competitors">Review competitor website evidence <ArrowLeft className="h-3 w-3 rotate-180" /></Link>
 
       {error && <Notice tone="error">{error}</Notice>}
       {notice && <Notice tone="ok">{notice}</Notice>}

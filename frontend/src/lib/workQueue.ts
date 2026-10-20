@@ -3,12 +3,13 @@ import type { IssueGroup } from '@/components/seo/api'
 import type { GscReport } from '@/components/seo/gscApi'
 import type { TrendRadar } from '@/components/trends/api'
 import type { StudioDraftSummary } from '@/lib/drafts'
+import type { CompetitorReport } from '@/lib/competitors'
 
 /** Pure, deterministic daily work queue. No network, AI, writes or completion state. */
 export interface WorkScope { workspaceId: string; brandKey: string; brandName: string; websiteId?: string; scanId?: string }
 export interface WorkItem {
   id: string; scope: WorkScope
-  kind: 'fix' | 'search' | 'radar' | 'studio' | 'operations'
+  kind: 'fix' | 'search' | 'radar' | 'studio' | 'operations' | 'competitor'
   category: string; grade: Grade; title: string; why: string; evidence: string[]
   observedAt: string | null; freshness: 'current' | 'stale' | 'unknown'; source: string
   topic?: string; dedupeKey: string
@@ -116,6 +117,23 @@ export function studioItems(drafts: StudioDraftSummary[], scope: WorkScope, now:
     })
   })
 }
+export function competitorItems(report: CompetitorReport, scope: WorkScope, now: number): WorkItem[] {
+  if (report.competitor.workspace_id !== scope.workspaceId || report.competitor.brand_key !== scope.brandKey) return []
+  return report.findings.filter(f => ['verified_change','newly_observed','coverage_gap'].includes(f.category) && f.brand_key === scope.brandKey && String(f.competitor_id) === String(report.competitor.id)).map(f => {
+    const state = freshness(f.observed_at, 30, now)
+    return item(scope, {
+      id: key(scope, `competitor:${f.id}`), dedupeKey: key(scope, `competitor:${f.id}`), kind: 'competitor',
+      category: f.category === 'verified_change' ? 'Verified competitor website change' : f.category === 'coverage_gap' ? 'Observed coverage gap hypothesis' : 'Newly observed competitor page',
+      grade: f.category === 'verified_change' ? 'measured' : 'observed', title: `${state === 'current' ? 'Review' : 'Re-verify'} ${report.competitor.name}: ${f.title}`,
+      why: `${f.reason} ${state !== 'current' ? 'Older or undated snapshot: re-verify before preparing a brief.' : 'Public crawl evidence only; no private rankings, traffic or demand claim.'}`,
+      evidence: [...f.source_urls.slice(0,2), `Observed ${f.observed_at || 'unknown'} · scan ${f.scan_id}${f.previous_scan_id ? ` vs ${f.previous_scan_id}` : ''}`],
+      observedAt: f.observed_at, freshness: state, source: 'Competitor / existing SEO snapshots',
+      factors: {severity:f.category === 'verified_change' ? 14 : 8, confidence:f.category === 'verified_change' ? 20 : 8, freshness:freshPoints(state),impact:10,urgency:5},
+      primary:{label:'Review competitor evidence',to:`/seo?tab=competitors&competitor=${report.competitor.id}&competitor_scan=${f.scan_id}&finding=${encodeURIComponent(f.id)}`},
+    })
+  })
+}
+
 export interface GrowthBlockers {
   checkedAt: string; truncated?: { accounts: boolean; posts: boolean }
   accounts: Array<{id: string; workspaceId: string; brandKey: string | null; status: string; sessionHealth: string; checkedAt: string | null}>

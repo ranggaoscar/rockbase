@@ -29,6 +29,9 @@ class Repository:
                     workspace_id TEXT NOT NULL, key TEXT NOT NULL COLLATE NOCASE,
                     name TEXT NOT NULL COLLATE NOCASE,
                     PRIMARY KEY(workspace_id, key), UNIQUE(workspace_id, name));
+                CREATE TABLE IF NOT EXISTS competitors (
+                    workspace_id TEXT NOT NULL, brand_key TEXT NOT NULL, website_id INTEGER NOT NULL REFERENCES websites(id),
+                    PRIMARY KEY(workspace_id, brand_key, website_id));
                 CREATE TABLE IF NOT EXISTS scans (
                     id INTEGER PRIMARY KEY, website_id INTEGER NOT NULL REFERENCES websites(id),
                     status TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT,
@@ -62,9 +65,55 @@ class Repository:
         finally:
             db.close()
 
-    def websites(self, workspace):
+    def websites(self, workspace, *, include_competitors=False):
         with self.connect() as db:
-            return [dict(x) for x in db.execute("SELECT * FROM websites WHERE workspace_id=? ORDER BY id", (workspace,))]
+            sql = "SELECT * FROM websites WHERE workspace_id=?"
+            if not include_competitors:
+                sql += " AND NOT EXISTS (SELECT 1 FROM competitors c WHERE c.workspace_id=websites.workspace_id AND c.website_id=websites.id)"
+            return [dict(x) for x in db.execute(sql + " ORDER BY id", (workspace,))]
+
+    def add_competitor(self, workspace, brand_key, name, base_url):
+        with self.connect() as db:
+            exists = db.execute("SELECT 1 FROM competitors c JOIN websites w ON w.id=c.website_id WHERE c.workspace_id=? AND c.brand_key=? AND w.base_url=?", (workspace, brand_key, base_url)).fetchone()
+            if not exists and db.execute("SELECT COUNT(*) FROM competitors WHERE workspace_id=?", (workspace,)).fetchone()[0] >= 20:
+                raise ValueError("Competitor relationship limit (20 per workspace) reached")
+            if not db.execute("SELECT 1 FROM website_brands WHERE workspace_id=? AND key=?", (workspace, brand_key)).fetchone():
+                raise ValueError("Brand not found in this workspace")
+            owned = db.execute("SELECT id FROM websites WHERE workspace_id=? AND base_url=? AND NOT EXISTS (SELECT 1 FROM competitors c WHERE c.website_id=websites.id AND c.workspace_id=websites.workspace_id)", (workspace, base_url)).fetchone()
+            if owned:
+                raise FileExistsError("An owned website cannot be registered as a competitor")
+            row = db.execute("SELECT id FROM websites WHERE workspace_id=? AND base_url=?", (workspace, base_url)).fetchone()
+            if row:
+                website_id = row[0]
+            else:
+                website_id = db.execute("INSERT INTO websites(workspace_id,brand_key,name,base_url) VALUES(?,?,?,?)", (workspace, "", name, base_url)).lastrowid
+            db.execute("INSERT OR IGNORE INTO competitors(workspace_id,brand_key,website_id) VALUES(?,?,?)", (workspace, brand_key, website_id))
+            return dict(db.execute("SELECT * FROM websites WHERE id=?", (website_id,)).fetchone())
+
+    def competitors(self, workspace, brand_key=None):
+        with self.connect() as db:
+            sql = "SELECT w.name,w.base_url,c.rowid AS id,c.website_id,c.workspace_id,c.brand_key FROM competitors c JOIN websites w ON w.id=c.website_id WHERE c.workspace_id=?"
+            params = [workspace]
+            if brand_key is not None:
+                sql += " AND c.brand_key=?"; params.append(brand_key)
+            rows = [dict(r) for r in db.execute(sql + " ORDER BY c.brand_key,w.id", params)]
+            return rows
+
+    def competitor(self, website_id, workspace):
+        return next((r for r in self.competitors(workspace) if r["id"] == website_id), None)
+
+    def prune_competitor_scans(self, website_id, keep=5):
+        with self.connect() as db:
+            if not db.execute("SELECT 1 FROM competitors WHERE website_id=?", (website_id,)).fetchone():
+                return
+            rows = db.execute("SELECT id,status FROM scans WHERE website_id=? ORDER BY id DESC", (website_id,)).fetchall()
+            terminal = [r["id"] for r in rows if r["status"] in {"completed", "failed", "interrupted"}]
+            doomed = terminal[keep:]
+            for scan_id in doomed:
+                db.execute("DELETE FROM pages WHERE scan_id=?", (scan_id,))
+                db.execute("DELETE FROM issues WHERE scan_id=?", (scan_id,))
+                db.execute("DELETE FROM scan_graphs WHERE scan_id=?", (scan_id,))
+                db.execute("DELETE FROM scans WHERE id=?", (scan_id,))
 
     def brands(self, workspace):
         with self.connect() as db:
@@ -85,11 +134,15 @@ class Repository:
 
     def add_website(self, workspace, name, base_url, brand_key=""):
         with self.connect() as db:
+            if db.execute("SELECT 1 FROM competitors c JOIN websites w ON w.id=c.website_id WHERE c.workspace_id=? AND w.base_url=?", (workspace, base_url)).fetchone():
+                raise FileExistsError("A competitor URL cannot be registered as an owned website")
             db.execute("INSERT INTO websites(workspace_id,name,base_url,brand_key) VALUES(?,?,?,?) ON CONFLICT(workspace_id,base_url) DO NOTHING", (workspace, name, base_url, brand_key))
             return dict(db.execute("SELECT * FROM websites WHERE workspace_id=? AND base_url=?", (workspace, base_url)).fetchone())
 
     def set_brand(self, website_id, workspace, brand_key):
         with self.connect() as db:
+            if db.execute("SELECT 1 FROM competitors WHERE website_id=? AND workspace_id=?", (website_id, workspace)).fetchone():
+                return None
             changed = db.execute("UPDATE websites SET brand_key=? WHERE id=? AND workspace_id=?", (brand_key, website_id, workspace)).rowcount
         if not changed:
             return None
@@ -114,10 +167,14 @@ class Repository:
                 result["summary"]["priority_counts"] = dict(Counter(issue["priority"] for issue in self.rows("issues", scan_id)))
             return result
 
-    def scans(self, website_id):
+    def scans(self, website_id, workspace=None):
         with self.connect() as db:
-            ids = [r[0] for r in db.execute("SELECT id FROM scans WHERE website_id=? ORDER BY id DESC", (website_id,))]
-        return [self.scan(i) for i in ids]
+            sql = "SELECT s.id FROM scans s JOIN websites w ON w.id=s.website_id WHERE s.website_id=?"
+            params = [website_id]
+            if workspace is not None:
+                sql += " AND w.workspace_id=?"; params.append(workspace)
+            ids = [r[0] for r in db.execute(sql + " ORDER BY s.id DESC", params)]
+        return [self.scan(i, workspace) for i in ids]
 
     def create_scan(self, website_id, max_urls, mode):
         with self.connect() as db:
@@ -131,6 +188,10 @@ class Repository:
             values["finished_at"] = now()
         with self.connect() as db:
             db.execute(f"UPDATE scans SET {','.join(k+'=?' for k in values)} WHERE id=?", [*values.values(), scan_id])
+        if status in {"completed", "failed", "interrupted"}:
+            current = self.scan(scan_id)
+            if current:
+                self.prune_competitor_scans(current["website_id"])
 
     def save_page(self, scan_id, page):
         with self.connect() as db:
