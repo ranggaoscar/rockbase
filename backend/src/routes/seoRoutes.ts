@@ -21,7 +21,7 @@ router.use((req, res, next) => {
 async function identities(req: AuthRequest) {
   const local = getRockBaseMode() === 'local';
   const workspaces = await prisma.workspace.findMany({
-    where: local || req.user?.role === 'Admin' ? {} : { users: { some: { userId: req.user!.id } } },
+    where: local ? {} : { users: { some: { userId: req.user!.id } } },
     select: { id: true, name: true, accounts: { select: { brandTag: true }, distinct: ['brandTag'] } },
     orderBy: { createdAt: 'asc' },
   });

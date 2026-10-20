@@ -3,6 +3,8 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { Queue } from 'bullmq';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { needsOperatorAttention } from '../services/OperatorAttention';
+import { createGrowthBlockersRouter } from './growthBlockersRoutes';
+import { getRockBaseMode } from '../middleware/runtimeMode';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -51,13 +53,27 @@ function categoryWhere(category?: string): Prisma.ActivityLogWhereInput {
 }
 
 router.use(authenticateToken);
+router.use(createGrowthBlockersRouter({ workspaceUser: prisma.workspaceUser, socialAccount: prisma.socialAccount, post: prisma.post }));
+
+async function activityWorkspace(req: AuthRequest): Promise<string | null> {
+  const requested = req.query.workspace_id ?? req.query.workspaceId;
+  if (req.query.workspace_id !== undefined && req.query.workspaceId !== undefined && req.query.workspace_id !== req.query.workspaceId) return null;
+  if (requested !== undefined && (typeof requested !== 'string' || !requested || requested.length > 200)) return null;
+  const row = await prisma.workspace.findFirst({
+    where: { ...(requested ? { id: requested as string } : {}), ...(getRockBaseMode() === 'local' ? {} : { users: { some: { userId: req.user!.id } } }) },
+    orderBy: { createdAt: 'asc' }, select: { id: true },
+  });
+  return row?.id || null;
+}
 
 router.get('/', async (req: AuthRequest, res: Response) => {
   try {
+    const workspaceId = await activityWorkspace(req);
+    if (!workspaceId) { res.status(404).json({ error: 'Workspace not found.' }); return; }
     const limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), MAX_LIMIT);
     const cursor = req.query.cursor ? String(req.query.cursor) : undefined;
     const filters: Prisma.ActivityLogWhereInput = {
-      ...(req.query.workspaceId ? { workspaceId: String(req.query.workspaceId) } : {}),
+      workspaceId,
       ...(req.query.type ? { type: String(req.query.type) } : {}),
       ...(req.query.status ? { status: String(req.query.status) } : {}),
       ...(req.query.accountId ? { accountId: String(req.query.accountId) } : {}),
@@ -93,9 +109,9 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     const groupIds = [...new Set(activity.map(row => row.groupId).filter(Boolean) as string[])];
     const campaignIds = [...new Set(activity.map(row => row.campaignId).filter(Boolean) as string[])];
     const [accounts, groups, campaigns] = await Promise.all([
-      accountIds.length ? prisma.socialAccount.findMany({ where: { id: { in: accountIds } }, select: { id: true, username: true } }) : [],
-      groupIds.length ? prisma.accountGroup.findMany({ where: { id: { in: groupIds } }, select: { id: true, name: true } }) : [],
-      campaignIds.length ? prisma.campaign.findMany({ where: { id: { in: campaignIds } }, select: { id: true, name: true } }) : [],
+      accountIds.length ? prisma.socialAccount.findMany({ where: { workspaceId, id: { in: accountIds } }, select: { id: true, username: true } }) : [],
+      groupIds.length ? prisma.accountGroup.findMany({ where: { workspaceId, id: { in: groupIds } }, select: { id: true, name: true } }) : [],
+      campaignIds.length ? prisma.campaign.findMany({ where: { workspaceId, id: { in: campaignIds } }, select: { id: true, name: true } }) : [],
     ]);
     const accountNameById = new Map(accounts.map(account => [account.id, account.username]));
     const groupNameById = new Map(groups.map(group => [group.id, group.name]));
@@ -168,14 +184,16 @@ router.get('/queue-summary', async (_req: AuthRequest, res: Response) => {
   }
 });
 
-router.get('/operations-summary', async (_req: AuthRequest, res: Response) => {
+router.get('/operations-summary', async (req: AuthRequest, res: Response) => {
   try {
+    const workspaceId = await activityWorkspace(req);
+    if (!workspaceId) { res.status(404).json({ error: 'Workspace not found.' }); return; }
     const [accounts, campaigns, queueSummary, recentActivity] = await Promise.all([
-      prisma.socialAccount.findMany({ select: { status: true, sessionHealth: true } }),
-      prisma.campaign.findMany({ where: { isArchived: false }, select: { status: true } }),
-      queue ? queue.getJobCounts('waiting', 'active', 'delayed') : Promise.resolve({ waiting: 0, active: 0, delayed: 0 }),
+      prisma.socialAccount.findMany({ where: { workspaceId }, select: { status: true, sessionHealth: true } }),
+      prisma.campaign.findMany({ where: { workspaceId, isArchived: false }, select: { status: true } }),
+      prisma.post.findMany({ where: { workspaceId }, select: { status: true } }).then(posts => ({ waiting: posts.filter(p => p.status === 'queued').length, active: posts.filter(p => p.status === 'pending_verify').length, delayed: posts.filter(p => p.status === 'scheduled').length })),
       prisma.activityLog.findMany({
-        where: { type: { in: ['campaign', 'posting', 'queue', 'session'] } },
+        where: { workspaceId, type: { in: ['campaign', 'posting', 'queue', 'session'] } },
         select: { id: true, type: true, entityType: true, entityId: true, accountId: true, campaignId: true, action: true, status: true, message: true, createdAt: true },
         orderBy: { createdAt: 'desc' },
         take: 8,
@@ -190,8 +208,8 @@ router.get('/operations-summary', async (_req: AuthRequest, res: Response) => {
     const accountIds = [...new Set(recentActivity.map((item) => item.accountId).filter(Boolean) as string[])];
     const campaignIds = [...new Set(recentActivity.map((item) => item.campaignId).filter(Boolean) as string[])];
     const [accountRows, campaignRows] = await Promise.all([
-      accountIds.length ? prisma.socialAccount.findMany({ where: { id: { in: accountIds } }, select: { id: true, username: true } }) : [],
-      campaignIds.length ? prisma.campaign.findMany({ where: { id: { in: campaignIds } }, select: { id: true, name: true } }) : [],
+      accountIds.length ? prisma.socialAccount.findMany({ where: { workspaceId, id: { in: accountIds } }, select: { id: true, username: true } }) : [],
+      campaignIds.length ? prisma.campaign.findMany({ where: { workspaceId, id: { in: campaignIds } }, select: { id: true, name: true } }) : [],
     ]);
     const accountNameById = new Map(accountRows.map((item) => [item.id, item.username]));
     const campaignNameById = new Map(campaignRows.map((item) => [item.id, item.name]));
@@ -202,6 +220,7 @@ router.get('/operations-summary', async (_req: AuthRequest, res: Response) => {
         active: campaigns.filter((campaign) => campaign.status === 'running').length,
         draft: campaigns.filter((campaign) => ['pending', 'draft'].includes(campaign.status)).length,
       },
+      publishingScope: 'Workspace Post database states; not live Redis job counts.',
       publishingQueue: {
         queued: queueSummary.waiting || 0,
         running: queueSummary.active || 0,
@@ -219,20 +238,24 @@ router.get('/operations-summary', async (_req: AuthRequest, res: Response) => {
   }
 });
 
-router.get('/publishing-queue', async (_req: AuthRequest, res: Response) => {
+router.get('/publishing-queue', async (req: AuthRequest, res: Response) => {
   try {
+    const workspaceId = await activityWorkspace(req);
+    if (!workspaceId) { res.status(404).json({ error: 'Workspace not found.' }); return; }
     const [posts, actions, accounts] = await Promise.all([
       prisma.post.findMany({
+        where: { workspaceId },
         select: { id: true, content: true, accountIds: true, status: true, results: true, scheduleAt: true, postedAt: true, updatedAt: true },
         orderBy: { updatedAt: 'desc' },
         take: 100,
       }),
       prisma.campaignAction.findMany({
+        where: { campaign: { workspaceId } },
         select: { id: true, accountId: true, actionType: true, status: true, result: true, scheduledAt: true, executedAt: true, campaign: { select: { id: true, name: true } } },
         orderBy: { scheduledAt: 'desc' },
         take: 100,
       }),
-      prisma.socialAccount.findMany({ select: { id: true, username: true, platform: true, sessionHealth: true, status: true } }),
+      prisma.socialAccount.findMany({ where: { workspaceId }, select: { id: true, username: true, platform: true, sessionHealth: true, status: true } }),
     ]);
     const accountById = new Map(accounts.map((account) => [account.id, account]));
 
@@ -245,6 +268,7 @@ router.get('/publishing-queue', async (_req: AuthRequest, res: Response) => {
       try { results = JSON.parse(post.results || '{}'); } catch {}
       for (const accountId of accountIds) {
         const account = accountById.get(accountId);
+        if (!account) continue; // Never dereference an account from another workspace.
         const result = results[accountId];
         const needsAttention = Boolean(account && needsOperatorAttention(account));
         const status = needsAttention ? 'needs_attention' : result?.status === 'success' ? 'completed' : result?.status === 'failed' ? 'failed' : post.status === 'published' ? 'completed' : post.status === 'pending_verify' ? 'running' : post.status === 'scheduled' ? 'delayed' : 'queued';
@@ -265,6 +289,7 @@ router.get('/publishing-queue', async (_req: AuthRequest, res: Response) => {
 
     for (const action of actions) {
       const account = accountById.get(action.accountId);
+      if (!account) continue;
       const needsAttention = Boolean(account && needsOperatorAttention(account));
       const status = needsAttention ? 'needs_attention' : action.status === 'completed' ? 'completed' : action.status === 'failed' ? 'failed' : ['running', 'in_progress'].includes(action.status) ? 'running' : action.status === 'delayed' ? 'delayed' : 'queued';
       rows.push({

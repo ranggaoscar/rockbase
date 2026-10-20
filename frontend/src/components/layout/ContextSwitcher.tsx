@@ -5,6 +5,7 @@ import {
 import { useWorkContext } from '@/lib/brandRegistry'
 import { useAppStore } from '@/store/useAppStore'
 import { cn } from '@/lib/utils'
+import { useSearchParams } from 'react-router-dom'
 
 function Monogram({ name, active }: { name: string; active?: boolean }) {
   const letters = name.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase() || '·'
@@ -23,6 +24,15 @@ function Monogram({ name, active }: { name: string; active?: boolean }) {
 export default function ContextSwitcher({ variant = 'rail' }: { variant?: 'rail' | 'chip' }) {
   const ctx = useWorkContext()
   const setContext = useAppStore((s) => s.setContext)
+  const [params, setParams] = useSearchParams()
+  const choose = (workspaceId: string, brandKey: string) => {
+    if (params.get('from') === 'today') {
+      const next = new URLSearchParams(params)
+      for (const key of ['from', 'workspace_id', 'brand_key', 'site', 'focus', 'q']) next.delete(key)
+      setParams(next, { replace: true, flushSync: true })
+    }
+    setContext({ workspaceId, brandKey })
+  }
   const { registry } = ctx
   const shown = registry.status === 'error' ? '?' : registry.status === 'loading' ? '·' : ctx.label
 
@@ -61,7 +71,7 @@ export default function ContextSwitcher({ variant = 'rail' }: { variant?: 'rail'
             <DropdownMenuLabel className="flex items-center gap-1.5 px-2 pb-1 pt-1.5 text-[11px] font-medium text-muted-foreground">
               <Layers className="h-3 w-3" />{workspace.name}
             </DropdownMenuLabel>
-            <DropdownMenuItem className="gap-2.5 py-2" onSelect={() => setContext({ workspaceId: workspace.id, brandKey: '' })}>
+            <DropdownMenuItem className="gap-2.5 py-2" onSelect={() => choose(workspace.id, '')}>
               <Monogram name={workspace.name} active={ctx.workspaceId === workspace.id && !ctx.brandKey} />
               <span className="min-w-0 flex-1"><span className="block truncate text-sm">Whole workspace</span><span className="block text-[11px] text-muted-foreground">All brands and sites</span></span>
               {ctx.workspaceId === workspace.id && !ctx.brandKey && <Check className="h-4 w-4 text-patina" />}
@@ -69,7 +79,7 @@ export default function ContextSwitcher({ variant = 'rail' }: { variant?: 'rail'
             {workspace.brands.map((brand) => {
               const selected = ctx.workspaceId === workspace.id && ctx.brandKey === brand.key
               return (
-                <DropdownMenuItem key={`${workspace.id}:${brand.key}`} className="gap-2.5 py-2" onSelect={() => setContext({ workspaceId: workspace.id, brandKey: brand.key })}>
+                <DropdownMenuItem key={`${workspace.id}:${brand.key}`} className="gap-2.5 py-2" onSelect={() => choose(workspace.id, brand.key)}>
                   <Monogram name={brand.name} active={selected} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm">{brand.name}</span>

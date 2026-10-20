@@ -82,7 +82,7 @@ export default function SeoIntelligence() {
 
   // Workspace follows the brand context. Changing it clears everything scoped to the old one.
   useEffect(() => {
-    if (ctx.registry.status === 'loading') return
+    if (ctx.registry.status !== 'ready' || !workspaceId) return
     let cancelled = false
     setSeoWorkspace(workspaceId)
     setLoading(true); setLoadError('')
@@ -96,7 +96,7 @@ export default function SeoIntelligence() {
     let cancelled = false
     setScansLoaded(false)
     if (!websiteId) { setScans([]); setScanId(''); return }
-    seoApi.scans(websiteId).then(({ data }) => { if (!cancelled) { setScans(data); setScanId((old) => data.some((item) => item.id === old) ? old : data[0]?.id ?? ''); setScansLoaded(true) } })
+    seoApi.scans(websiteId).then(({ data }) => { if (!cancelled) { setScans(data); setScanId((old) => data.some((item) => item.id === params.get('scan')) ? params.get('scan')! : data.some((item) => item.id === old) ? old : data[0]?.id ?? ''); setScansLoaded(true) } })
       .catch(() => { if (!cancelled) toast.error('Scan history could not be loaded') })
     return () => { cancelled = true }
   }, [websiteId])

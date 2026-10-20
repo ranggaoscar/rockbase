@@ -125,6 +125,57 @@ Limitations, stated plainly:
 - No delete endpoint and no multi-user review: `in_review` means "someone is reviewing it" in a single-operator Local Mode; Server Mode still gates writes by membership and role, not by a reviewer assignment.
 - Post status stored on a reference is a snapshot from the moment of linking; RockBase does not refresh it or derive engagement/ reach/ conversion from it.
 
+## Phase 7 — actionable daily priorities
+
+Today and its existing pure `workQueue.ts` now rank up to five actions, not a second dashboard,
+store or recommendation service. Each action shows brand, evidence class, reason, supporting
+observations, timestamp/freshness and a direct workflow destination. No task is marked complete
+by navigation, draft creation, handoff or queue state.
+
+- Inputs: latest completed crawl issue groups (existing SEO action queue), cached 28-day GSC
+  opportunities and comparable click declines, cached Radar observations/watchlist ideas, server
+  Studio statuses and distribution references, and workspace social account/Post blockers.
+- Explainable score: severity 0–30 + confidence 0–20 + freshness −30–15 + actionable impact 0–15
+  + urgency 0–20. This is ordering, not estimated growth. Fixed thresholds, stable-id tie-breaks,
+  no paid AI. Same-topic suggestions deduplicate within a brand/workspace; no input mutation.
+  At most two per source and, when multiple brands have eligible actions, three per brand.
+  Diversity caps can produce fewer than five rather than pad missing evidence.
+- Crawl freshness: 30 days; GSC cache: 7 days and returned period end: 10 days; public feed:
+  2 days; editorial update: 30 days. Missing/invalid/future dates are unknown. Older evidence
+  is demoted and asks for verification, not a claim about today's demand.
+- Whole-workspace mode reads authorized brands; brand mode excludes other brands. Browser-only
+  drafts are excluded because they lack verified workspace ownership. Unassigned posts stay
+  workspace-unassigned, never attributed from account lists or editorial guesses.
+- `GET /activity/growth-blockers` is a bounded read of existing Prisma data (200+1 per category,
+  truncation disclosed). It reads no content, cookies, credentials or Redis. Server membership
+  is mandatory even for Admin; Local Mode requires owner and trusted loopback Host/Origin.
+  Existing Activity list, Publish summary/Queue reads are now workspace-scoped too; summary counts are Post
+  database states, not installation-wide live Redis counts. SEO registry no longer bypasses
+  membership for Server Admin.
+- Today links carry workspace/brand/site/scan/topic or draft/candidate identity. Context resolves
+  only against the authorized registry; invalid/missing linked brands fail closed, and explicit brand switching clears Today link overrides. Explicit site ids must match the scoped fetched website list.
+  Ready drafts open the Phase 6 editor; existing Post references ask for inspection before another
+  submission. References still do not prove content equality, reach, engagement or conversion.
+
+Verification: pure queue tests (28 assertions), growth-blocker HTTP tests, SEO route tests
+(40 assertions), Studio regression (139 assertions), backend typecheck and frontend build passed.
+An isolated acceptance host used real Express routers, Prisma SQLite, GSC cache and TrendStore;
+only SEO IPC and identity/provider boundaries were synthetic. No browser API interception or mock
+UI. Desktop 1440 and mobile 390 exercised evidence → five priorities → explanation → SEO/Publish,
+then stale/missing cases → Studio with a verified Post reference and focused Radar mobile detail.
+Explicit brand switching and a mobile CTA hit-test passed; no page errors, business writes or
+external Google/feed/AI/publisher calls. Separate SQLite-backed tests exercised owned, foreign and
+nonmember reads (Admin no bypass) with 22 assertions, including the legacy Activity list. Invalid
+brand/missing-brand/foreign-workspace deep links and unmatched site ids were browser-tested too.
+Raw evidence/fixtures remain outside Git.
+
+Unverified/limits: no live Google/feed sync, crawl, account recovery or publication was performed;
+fixture metrics are not owner growth results. GSC/Radar remain Local Mode only. Studio is bounded
+to the existing latest 200 rows; blockers inspect stored attention states rather than all campaign
+failures or live Redis jobs. Ranking is a source snapshot until explicit re-read/navigation, not a
+live SLA or due-date system. Legacy queue-summary/other social routes outside these destinations were
+not comprehensively re-authorized in this phase.
+
 ## Incremental plan
 
 - **Done in shell/UI:** IA, tokens, grammars, Today, Radar, Site & Search, Studio, Results, Publish/Setup hubs, Queue trust, AI Writer neutrality, mobile.

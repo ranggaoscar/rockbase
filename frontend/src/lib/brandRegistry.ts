@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { seoApi, type Brand } from '@/components/seo/api'
 import { useAppStore, type WorkContext } from '@/store/useAppStore'
 
@@ -54,6 +55,7 @@ export interface ResolvedContext extends WorkContext {
   brand?: Brand
   /** Display name: brand if chosen, otherwise workspace. */
   label: string
+  scopeError?: boolean
 }
 
 /**
@@ -63,35 +65,45 @@ export interface ResolvedContext extends WorkContext {
  */
 export function useWorkContext(): ResolvedContext & { registry: RegistryState & { retry: () => void } } {
   const registry = useBrandRegistry()
+  const location = useLocation()
+  const navigate = useNavigate()
   const context = useAppStore((s) => s.context)
   const setContext = useAppStore((s) => s.setContext)
 
   const resolved = useMemo<ResolvedContext>(() => {
     if (registry.status !== 'ready') return { ...context, label: 'Loading brand…' }
-    const workspace = registry.workspaces.find((w) => w.id === context.workspaceId) ?? registry.workspaces[0]
-    const brand = workspace?.brands.find((b) => b.key === context.brandKey)
+    // Today links survive reload/new tabs, but only if the live authorized registry agrees.
+    const params = new URLSearchParams(location.search)
+    const linked = params.get('from') === 'today' ? registry.workspaces.find(w => w.id === params.get('workspace_id')) : undefined
+    if (params.get('from') === 'today' && (!linked || !params.has('brand_key') || (params.get('brand_key') !== '' && !linked.brands.some(b => b.key === params.get('brand_key'))))) {
+      return { workspaceId: '', brandKey: '', websiteId: '', label: 'Invalid Today context', scopeError: true }
+    }
+    const workspace = linked ?? registry.workspaces.find((w) => w.id === context.workspaceId) ?? registry.workspaces[0]
+    const brand = workspace?.brands.find((b) => b.key === (linked ? params.get('brand_key') : context.brandKey))
     return {
       workspaceId: workspace?.id ?? '',
       brandKey: brand?.key ?? '',
-      websiteId: context.websiteId,
+      websiteId: linked ? params.get('site') || '' : context.websiteId,
       workspace,
       brand,
       label: brand?.name ?? workspace?.name ?? 'No workspace',
     }
-  }, [registry, context])
+  }, [registry, context, location.search])
 
   useEffect(() => {
     if (registry.status !== 'ready') return
-    if (resolved.workspaceId !== context.workspaceId || resolved.brandKey !== context.brandKey) {
-      setContext({ workspaceId: resolved.workspaceId, brandKey: resolved.brandKey })
+    if (resolved.scopeError) return
+    if (resolved.workspaceId !== context.workspaceId || resolved.brandKey !== context.brandKey || resolved.websiteId !== context.websiteId) {
+      setContext({ workspaceId: resolved.workspaceId, brandKey: resolved.brandKey, websiteId: resolved.websiteId })
     }
-  }, [registry.status, resolved.workspaceId, resolved.brandKey, context.workspaceId, context.brandKey, setContext])
+  }, [registry.status, resolved.workspaceId, resolved.brandKey, resolved.websiteId, context.workspaceId, context.brandKey, context.websiteId, setContext])
 
-  return { ...resolved, registry }
+  return { ...resolved, registry: resolved.scopeError ? { status: 'error', message: 'Invalid Today workspace or brand. Return to your saved context; no broader scope was selected.', retry: () => navigate(location.pathname, { replace: true }) } : registry }
 }
 
 /** The website a page should show for the current brand, honouring an explicit choice. */
 export function pickSite<T extends { id: string; brand_key?: string | null }>(sites: T[], brandKey: string, preferred: string): T | undefined {
   const scoped = brandKey ? sites.filter((s) => s.brand_key === brandKey) : sites
-  return scoped.find((s) => s.id === preferred) ?? scoped[0]
+  // A supplied site id must match this authorized brand's fetched site list.
+  return preferred ? scoped.find((s) => s.id === preferred) : scoped[0]
 }
