@@ -229,6 +229,38 @@ page limits are not complete-site coverage; shared competitor-site history serve
 relationships. Pruned evidence cannot create a new draft, while existing Studio provenance remains.
 There is no automatic monitor, CMS integration, ranking/traffic estimate or automatic publication.
 
+## Phase 8.2 — inspectable competitor snapshots
+
+The existing competitor findings read endpoint now returns an allowlisted `pages` projection and
+separate deterministic `observations`, using stored SEO snapshots only. The native competitor
+screen exposes search/filter, successful/unavailable outcomes, metadata, recorded H1–H6 headings,
+canonical/indexability heuristics and searchable internal-link lists. Historical fields absent from
+older records remain unknown; access failures are not missing metadata or deleted pages.
+
+Baseline observations show coverage, URL-path structure, duplicate/missing metadata and limitations
+without becoming Today priorities or eligible Studio findings. Stored snapshot limit is separate
+from the next-scan input; observation time is localized with the exact timestamp available.
+Historical internal-link changes display set-normalized added/removed/unchanged counts with
+expandable searchable URLs, not full JSON arrays. No history means no invented diff.
+
+Competitor worker scans opt into deterministic representative scheduling in the same crawler.
+One candidate from each known URL-path family (root, about, catalog, projects, contact, blog and
+other) precedes repeated families. Recognized language query/prefix variants are deferred behind
+one representative per language-URL family, not merged or discarded. Non-language content query
+parameters retain separate identities; deferred versions may be fetched when the budget permits.
+The existing robots/public-address/rate/URL budget checks still apply; owned-site scan order is
+unchanged. Sampling metadata records policy, admitted/fetched/robots-denied/omitted counts and
+the heuristic's limitations. It does not claim language/content equivalence or exhaustive coverage.
+
+Verification reuses an isolated copy of the accepted pilot snapshot through real gateway/worker
+routes. Synthetic historical and partial/403/legacy snapshots are separate test competitors, not
+claimed as live changes. No repeat live crawl, owner database migration, GSC/feed sync, paid AI,
+social publication or autonomous monitoring is part of this phase. Raw evidence remains outside Git.
+The new representative sampling policy has not been validated by a live crawl; its validation is
+limited to deterministic crawler fixtures and an offline replay of persisted pilot sitemap URLs.
+Discovered URLs are candidate coverage, not successfully crawled pages. Synthetic snapshots exist
+only in isolated QA data and are not inserted into owner databases.
+
 ## Incremental plan
 
 - **Done in shell/UI:** IA, tokens, grammars, Today, Radar, Site & Search, Studio, Results, Publish/Setup hubs, Queue trust, AI Writer neutrality, mobile.

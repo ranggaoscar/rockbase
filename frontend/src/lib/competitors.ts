@@ -6,6 +6,7 @@ export interface Competitor {
 }
 export interface CompetitorScan {
   id: string | number; status: string; started_at: string; finished_at?: string | null; max_urls: number; pages_count: number; error?: string
+  summary?: { discovered_count?: number; limit_reached?: boolean; skipped_robots?: number; warnings?: string[]; sampling?: Record<string, unknown> }
 }
 export interface CompetitorFinding {
   id: string; category: 'verified_change' | 'newly_observed' | 'coverage_gap' | 'unavailable' | 'baseline' | 'unverified'
@@ -18,6 +19,14 @@ export interface CompetitorFinding {
 export interface CompetitorReport {
   competitor: Competitor; scan: CompetitorScan | null; previous_scan: CompetitorScan | null
   findings: CompetitorFinding[]; coverage: Record<string, unknown>; limits: unknown
+  pages?: CompetitorPage[]; observations?: Record<string, unknown> | null
+}
+export interface CompetitorPage {
+  url: string; final_url?: string | null; status_code?: number | null; content_type?: string | null
+  title?: string | null; description?: string | null; h1?: string[] | null
+  headings?: Array<{level: number; text: string}> | null; canonical?: string | null; indexable?: boolean | null
+  meta_robots?: string | null; x_robots_tag?: string | null; internal_links?: string[] | null
+  error?: string | null; render_mode?: string | null; observed_at?: string | null; successful_html?: boolean
 }
 const root = '/seo/competitors'
 const scope = (workspace: string, brand?: string) => ({ workspace_id: workspace, ...(brand ? { brand_key: brand } : {}) })
