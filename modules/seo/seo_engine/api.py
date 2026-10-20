@@ -19,7 +19,7 @@ from .repository import Repository, now
 from .triage import action_rows
 
 
-def create_app(repo=None, *, token=None, validate=validate_public):
+def create_app(repo=None, *, token=None, validate=validate_public, scan_runner=None):
     repo = repo or Repository(os.environ["ROCKBASE_SEO_DB"])
     secret = token or os.environ["ROCKBASE_SEO_TOKEN"]
     workers = {}
@@ -54,6 +54,23 @@ def create_app(repo=None, *, token=None, validate=validate_public):
         if not (scan := repo.scan(scan_id, workspace)):
             raise HTTPException(404, "Scan not found in this workspace")
         return scan
+
+    async def launch_scan(scan, *, competitor=False):
+        if scan_runner:
+            await scan_runner(scan["id"])
+            return
+        try:
+            worker_env = {key: value for key, value in os.environ.items() if key != 'ROCKBASE_SEO_TOKEN'}
+            worker_env['ROCKBASE_SEO_DB'] = str(repo.path)
+            worker_env['ROCKBASE_SEO_COMPETITOR'] = '1' if competitor else '0'
+            process = await asyncio.create_subprocess_exec(sys.executable, "-m", "seo_engine.scan_worker", str(scan["id"]), cwd=str(Path(__file__).resolve().parents[1]), env=worker_env, creationflags=0x08000000 if os.name == "nt" else 0)
+            workers[scan["id"]] = process
+            task = asyncio.create_task(monitor(scan["id"], process))
+            monitors.add(task)
+            task.add_done_callback(monitors.discard)
+        except Exception as exc:
+            repo.update_scan(scan["id"], status="failed", error=f"Could not start worker: {exc}")
+            raise HTTPException(503, "SEO worker could not start") from exc
 
     class WebsiteInput(BaseModel):
         name: str = Field(min_length=1, max_length=160)
@@ -118,21 +135,83 @@ def create_app(repo=None, *, token=None, validate=validate_public):
         if not repo.website(website_id, x_workspace_id):
             raise HTTPException(404, "Website not found")
         try:
-            scan = repo.create_scan(website_id, body.max_urls, body.mode)
+            is_competitor = any(c["website_id"] == website_id for c in repo.competitors(x_workspace_id))
+            if is_competitor:
+                raise HTTPException(409, "Use the bounded competitor scan endpoint.")
+            scan = repo.create_scan(website_id, body.max_urls, "http" if is_competitor else body.mode)
         except sqlite3.IntegrityError as exc:
             raise HTTPException(409, "An SEO scan is already active. Wait for completion.") from exc
-        try:
-            worker_env = {key: value for key, value in os.environ.items() if key != 'ROCKBASE_SEO_TOKEN'}
-            worker_env['ROCKBASE_SEO_DB'] = str(repo.path)
-            process = await asyncio.create_subprocess_exec(sys.executable, "-m", "seo_engine.scan_worker", str(scan["id"]), cwd=str(Path(__file__).resolve().parents[1]), env=worker_env, creationflags=0x08000000 if os.name == "nt" else 0)
-            workers[scan["id"]] = process
-            task = asyncio.create_task(monitor(scan["id"], process))
-            monitors.add(task)
-            task.add_done_callback(monitors.discard)
-        except Exception as exc:
-            repo.update_scan(scan["id"], status="failed", error=f"Could not start worker: {exc}")
-            raise HTTPException(503, "SEO worker could not start") from exc
+        await launch_scan(scan)
         return repo.scan(scan["id"])
+
+    class CompetitorInput(BaseModel):
+        brand_key: str = Field(min_length=1, max_length=160)
+        name: str = Field(min_length=1, max_length=160)
+        base_url: str = Field(max_length=2048)
+
+    class CompetitorScanInput(BaseModel):
+        max_urls: int = Field(default=10, ge=1, le=25)
+
+    @app.get("/api/competitors")
+    def competitors(x_workspace_id: str = Header(), brand_key: str = ""):
+        return repo.competitors(x_workspace_id, brand_key.strip() or None)
+
+    @app.post("/api/competitors", status_code=201)
+    async def add_competitor(body: CompetitorInput, x_workspace_id: str = Header()):
+        brand_key, name = body.brand_key.strip(), body.name.strip()
+        if not brand_key or not name:
+            raise HTTPException(422, "Brand key and name are required")
+        try:
+            url = normalize_url(body.base_url)
+            await validate(url)
+            website = repo.add_competitor(x_workspace_id, brand_key, name, url)
+        except FileExistsError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return next(row for row in repo.competitors(x_workspace_id, brand_key) if row["website_id"] == website["id"])
+
+    def require_competitor(competitor_id, workspace):
+        if not (competitor := repo.competitor(competitor_id, workspace)):
+            raise HTTPException(404, "Competitor not found in this workspace")
+        return competitor
+
+    @app.get("/api/competitors/{competitor_id}")
+    def competitor_detail(competitor_id: int, x_workspace_id: str = Header()):
+        from .competitors import analyze
+        competitor = require_competitor(competitor_id, x_workspace_id)
+        scans = repo.scans(competitor["website_id"], x_workspace_id)
+        recent = next((s for s in scans if s["status"] in {"completed", "failed"}), None)
+        if not recent:
+            return {"competitor": competitor, "relationship": {"brand_key": competitor["brand_key"]}, "scan": None, "previous_scan": None, "findings": [], "coverage": {}, "limits": ["HTTP-only public-page snapshots."]}
+        result = analyze(repo, competitor, recent["id"])
+        result["relationship"] = {"brand_key": competitor["brand_key"]}
+        result["scans"] = scans
+        return result
+
+    @app.get("/api/competitors/{competitor_id}/findings")
+    def competitor_findings(competitor_id: int, x_workspace_id: str = Header(), scan_id: int | None = None):
+        from .competitors import analyze
+        competitor = require_competitor(competitor_id, x_workspace_id)
+        try:
+            return analyze(repo, competitor, scan_id)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.get("/api/competitors/{competitor_id}/scans")
+    def competitor_scans(competitor_id: int, x_workspace_id: str = Header()):
+        competitor = require_competitor(competitor_id, x_workspace_id)
+        return repo.scans(competitor["website_id"], x_workspace_id)
+
+    @app.post("/api/competitors/{competitor_id}/scans", status_code=202)
+    async def start_competitor_scan(competitor_id: int, body: CompetitorScanInput, x_workspace_id: str = Header()):
+        competitor = require_competitor(competitor_id, x_workspace_id)
+        try:
+            scan = repo.create_scan(competitor["website_id"], body.max_urls, "http")
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(409, "An SEO scan is already active. Wait for completion.") from exc
+        await launch_scan(scan, competitor=True)
+        return repo.scan(scan["id"], x_workspace_id)
 
     @app.get("/api/scans/{scan_id}")
     def scan(scan_id: int, x_workspace_id: str = Header()):

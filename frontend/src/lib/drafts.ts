@@ -87,6 +87,7 @@ export type StudioFormat = Exclude<DraftFormat, 'caption'>
 export type StudioSource =
   | { kind: 'blank' }
   | { kind: 'caption_copy' }
+  | { kind: 'competitor_finding'; competitor_id: string; scan_id: string; finding_id: string }
   | { kind: 'browser_import'; browser_id: string; browser_created_at?: string }
 /** A navigation fact recorded by the server: the draft was opened in Compose. */
 export interface StudioHandoff { channel: string; at: string; count: number }
@@ -97,7 +98,7 @@ export interface StudioDraft {
   status: StudioStatus
   statusChangedAt: string | null
   /** Written by the server, never by the client. */
-  source: { kind: string; label?: string; browserId?: string; browserCreatedAt?: string; movedAt?: string }
+  source: { kind: string; label?: string; browserId?: string; browserCreatedAt?: string; movedAt?: string; competitorId?: string; scanId?: string; findingId?: string; evidence?: {category: string; observedAt: string; sourceUrls: string[]; fields: string[]} }
   distribution: { handoffs: StudioHandoff[]; posts: StudioPostRef[] }
   createdAt: string; updatedAt: string
 }
@@ -107,7 +108,7 @@ export const studioApi = {
   list: (workspaceId: string, signal?: AbortSignal) => api.get<{ drafts: StudioDraftSummary[] }>('/studio/drafts', { params: { workspace_id: workspaceId }, signal }),
   get: (id: string, workspaceId: string) => api.get<{ draft: StudioDraft }>(`/studio/drafts/${encodeURIComponent(id)}`, { params: { workspace_id: workspaceId } }),
   create: (input: { workspaceId: string; format: StudioFormat; brandKey?: string | null; title?: string; body?: string; source: StudioSource }) =>
-    api.post<{ draft: StudioDraft }>('/studio/drafts', { workspace_id: input.workspaceId, format: input.format, brand_key: input.brandKey || null, title: input.title, body: input.body, source: input.source }),
+    api.post<{ draft: StudioDraft }>('/studio/drafts', { workspace_id: input.workspaceId, format: input.format, brand_key: input.brandKey || null, title: input.title, body: input.body, source: input.source.kind === 'competitor_finding' ? {...input.source,brand_key:input.brandKey} : input.source }),
   /** Title, body and review status; the server keeps format, brand, source and distribution. */
   update: (id: string, workspaceId: string, body: { title?: string; body?: string; status?: StudioStatus }) =>
     api.patch<{ draft: StudioDraft }>(`/studio/drafts/${encodeURIComponent(id)}`, { workspace_id: workspaceId, ...body }),

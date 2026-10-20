@@ -24,6 +24,7 @@ export interface StudioDependencies {
   /** Workspaces the caller may use. `null` = the Local Mode owner, who owns every workspace. */
   workspaces(userId: string | null): Promise<Array<{ id: string; name: string }>>;
   brands(workspace: string): Promise<Array<{ key: string }>>;
+  competitorFinding?(workspace: string, brandKey: string, competitorId: string, scanId: string, findingId: string): Promise<any | null>;
   drafts: { create(args: any): Promise<any>; upsert(args: any): Promise<any>; findFirst(args: any): Promise<any>; findMany(args: any): Promise<any[]>; update(args: any): Promise<any> };
   /** Read-only existence check for distribution references. Nothing is written here. */
   posts: { findMany(args: any): Promise<Array<{ id: string; status: string }>> };
@@ -124,6 +125,11 @@ function source(value: any): { id: (workspace: string) => string; record: Record
   const kind = value?.kind;
   if (kind === 'blank') return { id: fresh, record: { kind, label: 'Written in RockBase Studio' } };
   if (kind === 'caption_copy') return { id: fresh, record: { kind, label: 'Copied from a Caption assistant draft kept in a browser' } };
+  if (kind === 'competitor_finding') {
+    if (typeof value.competitor_id !== 'string' || ! /^[0-9]+$/.test(value.competitor_id) || typeof value.finding_id !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(value.finding_id) || typeof value.scan_id !== 'string' || !/^[0-9]+$/.test(value.scan_id)) throw new StudioRouteError(422, 'Competitor finding reference is invalid.');
+    return { id: workspace => 'studio-' + createHash('sha256').update(JSON.stringify([workspace, value.brand_key, value.competitor_id, value.scan_id, value.finding_id])).digest('hex').slice(0, 32),
+      record: { kind, competitorId: value.competitor_id, findingId: value.finding_id, scanId: value.scan_id, label: 'Competitor finding evidence' } };
+  }
   if (kind === 'browser_import') {
     if (typeof value.browser_id !== 'string' || !BROWSER_ID.test(value.browser_id)) throw new StudioRouteError(422, 'Browser draft id is invalid.');
     const created = typeof value.browser_created_at === 'string' && !Number.isNaN(Date.parse(value.browser_created_at)) ? new Date(value.browser_created_at).toISOString() : null;
@@ -195,10 +201,37 @@ export function createStudioRouter(deps: StudioDependencies): Router {
       if (!brands.some(b => b.key === req.body.brand_key)) throw new StudioRouteError(422, 'Brand not found in this workspace.');
       brandKey = req.body.brand_key;
     }
+    let draftTitle = title;
+    let draftBody = body;
+    let sourceRecord: Record<string, any> = origin.record;
+    if (origin.record.kind === 'competitor_finding') {
+      if (!brandKey || req.body?.source?.brand_key !== brandKey) throw new StudioRouteError(422, 'Competitor finding drafts require the matching authorized workspace brand.');
+      if (!deps.competitorFinding) throw new StudioRouteError(503, 'Competitor evidence is unavailable; the draft was not saved.');
+      const evidence = await deps.competitorFinding(workspace, brandKey, origin.record.competitorId, origin.record.scanId, origin.record.findingId);
+      const finding = evidence?.finding || evidence;
+      if (!evidence || evidence.competitor?.workspace_id && evidence.competitor.workspace_id !== workspace || evidence.competitor?.brand_key && evidence.competitor.brand_key !== brandKey) throw new StudioRouteError(404, 'Competitor finding not found in this workspace and brand.');
+      if (!['verified_change', 'newly_observed', 'coverage_gap'].includes(finding?.category)) throw new StudioRouteError(422, 'Only verified changes, newly observed findings or coverage gaps can become drafts.');
+      const observedAt = Date.parse(finding.observed_at || '');
+      if (!Number.isFinite(observedAt) || observedAt > Date.now() + 60_000 || Date.now() - observedAt > 30 * 24 * 60 * 60 * 1000) throw new StudioRouteError(422, 'Competitor evidence is stale or has an invalid observation date.');
+      const safeUrls = Array.isArray(finding.source_urls) ? finding.source_urls.filter((url: unknown): url is string => typeof url === 'string' && /^https?:\/\//i.test(url)).slice(0, 10) : [];
+      const changes = finding.changes && typeof finding.changes === 'object' ? finding.changes : {};
+      const fields = Object.keys(changes).filter(key => /^[a-zA-Z0-9 _-]{1,80}$/.test(key)).slice(0, 10);
+      const action = finding.category === 'coverage_gap' ? 'Check your own inventory and validate whether this bounded lexical coverage hypothesis is relevant. Demand is not established.' : 'Review the observed topic and create an original perspective for your audience. No demand or ranking gain is established.';
+      draftTitle = `Original brief: ${finding.category === 'coverage_gap' ? 'address a content gap' : fields[0] ? `explore ${fields[0]}` : 'review an observed change'}`;
+      draftBody = [
+        '## Operator brief',
+        'Create original content for this brand. Do not reproduce or paraphrase competitor copy.',
+        `Finding type: ${finding.category}.`,
+        `Observed page: ${safeUrls[0] || 'Source URL unavailable'}.`,
+        fields.length ? `Observed fields: ${fields.join(', ')}.` : 'Observed fields: no named field changes supplied.',
+        `Next step: ${action}`,
+      ].join('\n');
+      sourceRecord = { ...origin.record, label: 'Server-verified competitor finding evidence', evidence: { category: finding.category, observedAt: finding.observed_at, sourceUrls: safeUrls, fields } };
+    }
     const id = origin.id(workspace);
-    const content = joinContent(body, { store: 'RockBase Studio', format, brandKey, status: 'draft', source: origin.record, distribution: { handoffs: [], posts: [] } });
-    const data = { id, workspaceId: workspace, title: title || null, content, mediaUrls: '[]', platforms: '[]', hashtags: '[]' };
-    const row = origin.record.kind === 'browser_import'
+    const content = joinContent(draftBody, { store: 'RockBase Studio', format, brandKey, status: 'draft', source: sourceRecord, distribution: { handoffs: [], posts: [] } });
+    const data = { id, workspaceId: workspace, title: draftTitle || null, content, mediaUrls: '[]', platforms: '[]', hashtags: '[]' };
+    const row = ['browser_import', 'competitor_finding'].includes(origin.record.kind)
       ? await deps.drafts.upsert({ where: { id }, update: {}, create: data, select: COLUMNS })
       : await deps.drafts.create({ data, select: COLUMNS });
     if (row.workspaceId !== workspace) throw new StudioRouteError(409, 'Draft id conflict; nothing was changed.');

@@ -10,7 +10,8 @@ import { gscApi } from '@/components/seo/gscApi'
 import { trendsApi } from '@/components/trends/api'
 import api from '@/lib/api'
 import { studioApi, type StudioDraftSummary } from '@/lib/drafts'
-import { destination, fixItems, freshness, operationItems, radarItems, rankWorkItems, searchItems, studioItems, type GrowthBlockers, type WorkItem, type WorkScope } from '@/lib/workQueue'
+import { competitorItems, destination, fixItems, freshness, operationItems, radarItems, rankWorkItems, searchItems, studioItems, type GrowthBlockers, type WorkItem, type WorkScope } from '@/lib/workQueue'
+import { competitorApi } from '@/lib/competitors'
 import { useAppStore } from '@/store/useAppStore'
 import type { StoneLayer } from '@/components/growth/StoneMonolith'
 
@@ -89,6 +90,20 @@ export default function Today() {
         drafts = data.drafts.filter(d => d.workspaceId === workspaceId && d.status !== 'archived' && (!ctx.brandKey || d.brandKey === ctx.brandKey))
         for (const scope of scopes) items.push(...studioItems(drafts, scope, now))
         sources.push({ name: 'Studio', status: 'ok', detail: 'Server-side statuses & distribution references. Latest 200 drafts; browser-only notes excluded.' })
+      }),
+      read('Competitors', async () => {
+        const {data: competitors} = await competitorApi.list(workspaceId, ctx.brandKey, signal)
+        for (const competitor of competitors) {
+          if (signal.aborted) return
+          const scope = scopes.find(s => s.brandKey === competitor.brand_key)
+          if (!scope || competitor.workspace_id !== workspaceId) continue
+          await read(`${scope.brandName} / competitor`, async () => {
+            const {data} = await competitorApi.findings(workspaceId, competitor.id, undefined, signal)
+            const found = competitorItems(data, scope, now); items.push(...found)
+            sources.push({name:`${scope.brandName} / ${competitor.name}`,status:!data.scan?'empty':found.some(i=>i.freshness!=='current')?'stale':'ok',detail:`${found.length} actionable snapshot findings; no crawl started.`})
+          })
+        }
+        if (!competitors.length) sources.push({name:'Competitors',status:'empty',detail:'No registered competitor in scope. No external request or claim.'})
       }),
       read('Social blockers', async () => {
         const { data } = await api.get<GrowthBlockers>('/activity/growth-blockers', { params: query, signal })

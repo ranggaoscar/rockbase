@@ -15,6 +15,7 @@ import SeoGraph from '@/components/seo/SeoGraph'
 import SeoActions from '@/components/seo/SeoActions'
 import { EffectTag, GradeTag, Notice, PageHeader, SectionTitle, Void, ago } from '@/components/growth/grammar'
 import { pickSite, useWorkContext } from '@/lib/brandRegistry'
+import CompetitorIntelligence from '@/components/seo/CompetitorIntelligence'
 import { useAppStore } from '@/store/useAppStore'
 import { cn } from '@/lib/utils'
 
@@ -27,6 +28,12 @@ type Tab = 'fixes' | 'search' | 'urls' | 'issues' | 'links' | 'history'
 const tabs: Array<[Tab, string]> = [['fixes', 'Fixes'], ['search', 'Search performance'], ['urls', 'Pages'], ['issues', 'All issues'], ['links', 'Links'], ['history', 'Crawl history']]
 
 export default function SeoIntelligence() {
+  const [params, setParams] = useSearchParams()
+  const competitors = params.get('tab') === 'competitors'
+  return <div className="space-y-6"><nav aria-label="SEO intelligence scope" className="flex flex-wrap gap-2">{[['fixes','Our websites'],['competitors','Competitors']].map(([key,label]) => <Button key={key} variant={(competitors ? key === 'competitors' : key === 'fixes') ? 'default' : 'outline'} size="sm" onClick={() => { const next = new URLSearchParams(params); next.set('tab',key); setParams(next) }}>{label}</Button>)}</nav>{competitors ? <CompetitorIntelligence /> : <OwnedSeoIntelligence />}</div>
+}
+
+function OwnedSeoIntelligence() {
   const ctx = useWorkContext()
   const setContext = useAppStore((s) => s.setContext)
   const [params, setParams] = useSearchParams()

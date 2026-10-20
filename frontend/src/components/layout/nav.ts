@@ -27,6 +27,7 @@ export const places: NavPlace[] = [
   {
     id: 'search', label: 'Site & Search', verb: 'Analyze', path: '/seo', icon: Globe2, match: ['/seo'],
     hint: 'Technical health and Google performance', keywords: 'seo crawl scan gsc search console keywords',
+    children: [{ label: 'Competitors', path: '/seo?tab=competitors', icon: Compass, hint: 'Public website evidence' }],
   },
   {
     id: 'studio', label: 'Studio', verb: 'Create', path: '/studio', icon: PenLine, match: ['/studio', '/ai-writer'],
